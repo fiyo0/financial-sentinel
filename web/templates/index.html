@@ -704,7 +704,10 @@
                             <div class="flex items-center space-x-2.5">
                                 <span id="st-result-icon" class="text-xl">🔬</span>
                                 <div>
-                                    <h4 id="st-result-title" class="text-base font-bold text-white">Stock Analysis Result</h4>
+                                    <div class="flex items-center space-x-2.5">
+                                        <h4 id="st-result-title" class="text-base font-bold text-white">Stock Analysis Result</h4>
+                                        <div id="st-provenance-badge" class="hidden"></div>
+                                    </div>
                                     <div id="st-result-meta" class="text-[11px] font-mono text-cyan-400">Live Quote & Momentum</div>
                                 </div>
                             </div>
@@ -713,6 +716,9 @@
 
                         <!-- Technical & Sentiment Indicator Badges -->
                         <div id="st-indicators-row" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3"></div>
+
+                        <!-- Structured Executive KPI Badges (Phase 2) -->
+                        <div id="st-kpi-row" class="hidden grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3"></div>
 
                         <!-- CIO Analysis Text Body -->
                         <div id="st-analysis-body" class="p-4 bg-dark-950/80 border border-slate-800 rounded-xl text-xs text-slate-200 leading-relaxed font-sans space-y-3 briefing-html-content">

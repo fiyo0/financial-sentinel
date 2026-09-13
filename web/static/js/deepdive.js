@@ -135,38 +135,77 @@ function renderDeepDiveResult(data) {
         resultCard.classList.remove('hidden');
     }
     if (title) title.textContent = `Stock Analysis: ${data.ticker} (${data.quote?.name || data.ticker})`;
-    if (meta) meta.textContent = `Price: $${data.quote?.current_price || 0} | Sector: ${data.quote?.sector || 'N/A'}`;
+    if (meta) meta.textContent = `Price: $${data.quote?.current_price || data.current_price || 0} | Sector: ${data.quote?.sector || 'N/A'}`;
 
     const t = data.technicals;
     const s = data.sentiment;
+
+    // Render Data Provenance Badge (Phase 2)
+    const prov = t?.provenance;
+    const provBadge = document.getElementById('st-provenance-badge');
+    if (provBadge) {
+        if (prov && prov.source) {
+            const srcName = prov.source === 'robinhood' ? 'Robinhood' : (prov.source === 'yahoo' ? 'Yahoo Finance' : prov.source);
+            const barsText = prov.bar_count ? `${prov.bar_count} daily bars` : 'live';
+            provBadge.innerHTML = `
+                <span class="inline-flex items-center space-x-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono bg-emerald-950/70 text-emerald-300 border border-emerald-800/60" title="Ground truth data source: ${srcName} (${barsText})">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <span class="uppercase tracking-wider font-semibold">${srcName}</span>
+                    <span class="text-emerald-500">·</span>
+                    <span>${barsText}</span>
+                    <span class="text-emerald-500">·</span>
+                    <span>Verified</span>
+                </span>
+            `;
+            provBadge.classList.remove('hidden');
+        } else {
+            provBadge.innerHTML = '';
+            provBadge.classList.add('hidden');
+        }
+    }
+
     let indHtml = '';
 
-    // Render Technical Momentum Cards
+    // Render Technical Momentum Cards with Null-Safe Missing Data Guards
     if (t && t.is_live) {
-        const rsiColor = t.rsi_14 >= 70 ? 'text-rose-400' : (t.rsi_14 <= 30 ? 'text-emerald-400' : 'text-slate-200');
+        const hasRsi = t.rsi_14 !== null && t.rsi_14 !== undefined;
+        const rsiVal = hasRsi ? Number(t.rsi_14).toFixed(1) : '—';
+        const rsiColor = hasRsi ? (t.rsi_14 >= 70 ? 'text-rose-400' : (t.rsi_14 <= 30 ? 'text-emerald-400' : 'text-slate-200')) : 'text-slate-500';
+        const rsiLabel = hasRsi ? (t.rsi_status || '').replace(/_/g, ' ') : 'Insufficient Bars (<14)';
+
+        const hasMacdHist = t.macd_hist !== null && t.macd_hist !== undefined;
         const macdColor = (t.macd_status || '').includes('BULLISH') ? 'text-emerald-400' : ((t.macd_status || '').includes('BEARISH') ? 'text-rose-400' : 'text-slate-200');
+        const macdHistStr = hasMacdHist ? `Hist: ${t.macd_hist > 0 ? '+' : ''}${Number(t.macd_hist).toFixed(2)}` : 'Hist: —';
+        const macdLabel = (t.macd_status || '').replace(/_/g, ' ') || '— (<35 bars)';
+
+        const has50 = t.dist_from_50_dma_pct !== null && t.dist_from_50_dma_pct !== undefined;
+        const has200 = t.dist_from_200_dma_pct !== null && t.dist_from_200_dma_pct !== undefined;
+        const dma50Str = has50 ? `50 DMA: ${t.dist_from_50_dma_pct > 0 ? '+' : ''}${Number(t.dist_from_50_dma_pct).toFixed(1)}%` : '50 DMA: —';
+        const dma200Str = has200 ? `200 DMA: ${t.dist_from_200_dma_pct > 0 ? '+' : ''}${Number(t.dist_from_200_dma_pct).toFixed(1)}%` : '200 DMA: — (<200 bars)';
+
         indHtml += `
             <div class="p-3 bg-dark-950 border border-slate-800 rounded-xl space-y-1">
                 <div class="text-[10px] text-slate-400 uppercase font-semibold">RSI (14-Day)</div>
-                <div class="text-base font-bold ${rsiColor}">${t.rsi_14}</div>
-                <div class="text-[10px] text-slate-400">${(t.rsi_status || '').replace('_', ' ')}</div>
+                <div class="text-base font-bold ${rsiColor}">${rsiVal}</div>
+                <div class="text-[10px] text-slate-400 truncate">${rsiLabel}</div>
             </div>
             <div class="p-3 bg-dark-950 border border-slate-800 rounded-xl space-y-1">
                 <div class="text-[10px] text-slate-400 uppercase font-semibold">MACD Momentum</div>
-                <div class="text-xs font-bold ${macdColor} truncate">${(t.macd_status || '').replace('_', ' ')}</div>
-                <div class="text-[10px] text-slate-400">Hist: ${t.macd_hist > 0 ? '+' : ''}${t.macd_hist}</div>
+                <div class="text-xs font-bold ${macdColor} truncate">${macdLabel}</div>
+                <div class="text-[10px] text-slate-400 font-mono">${macdHistStr}</div>
             </div>
             <div class="p-3 bg-dark-950 border border-slate-800 rounded-xl space-y-1">
                 <div class="text-[10px] text-slate-400 uppercase font-semibold">Moving Averages</div>
-                <div class="text-xs font-bold text-cyan-300">50 DMA: ${t.dist_from_50_dma_pct > 0 ? '+' : ''}${t.dist_from_50_dma_pct}%</div>
-                <div class="text-[10px] text-slate-400">200 DMA: ${t.dist_from_200_dma_pct > 0 ? '+' : ''}${t.dist_from_200_dma_pct}%</div>
+                <div class="text-xs font-bold text-cyan-300 font-mono">${dma50Str}</div>
+                <div class="text-[10px] text-slate-400 font-mono">${dma200Str}</div>
             </div>
         `;
     }
 
     // Render Retail Social Sentiment Stream Cards
     if (s && s.is_live) {
-        const sentColor = s.composite_sentiment_score >= 65 ? 'text-emerald-400' : (s.composite_sentiment_score <= 35 ? 'text-rose-400' : 'text-slate-200');
+        const sentScore = s.composite_sentiment_score || s.retail_bull_pct || 50;
+        const sentColor = sentScore >= 65 ? 'text-emerald-400' : (sentScore <= 35 ? 'text-rose-400' : 'text-slate-200');
         const rvolColor = s.relative_volume >= 1.2 ? 'text-emerald-400' : (s.relative_volume <= 0.85 ? 'text-amber-400' : 'text-slate-200');
         
         let recencyStr = '';
@@ -180,19 +219,74 @@ function renderDeepDiveResult(data) {
         indHtml += `
             <div class="p-3 bg-dark-950 border border-slate-800 rounded-xl space-y-1">
                 <div class="text-[10px] text-slate-400 uppercase font-semibold">Retail Sentiment</div>
-                <div class="text-base font-bold ${sentColor}">${s.retail_bull_pct}% Bullish</div>
-                <div class="text-[10px] text-slate-400 truncate">${(s.sentiment_verdict || '').replace(/_/g, ' ')} · ${s.social_velocity} ${rateVal}</div>
+                <div class="text-base font-bold ${sentColor}">${s.retail_bull_pct || 50}% Bullish</div>
+                <div class="text-[10px] text-slate-400 truncate">${(s.sentiment_verdict || '').replace(/_/g, ' ')} · ${s.social_velocity || 'MODERATE'} ${rateVal}</div>
                 <div class="text-[9px] text-slate-500 truncate">(${metaLine})</div>
             </div>
             <div class="p-3 bg-dark-950 border border-slate-800 rounded-xl space-y-1">
                 <div class="text-[10px] text-slate-400 uppercase font-semibold">Relative Volume (RVOL)</div>
-                <div class="text-base font-bold ${rvolColor}">${Number(s.relative_volume).toFixed(2)}x</div>
+                <div class="text-base font-bold ${rvolColor}">${s.relative_volume ? Number(s.relative_volume).toFixed(2) : '1.00'}x</div>
                 <div class="text-[10px] text-slate-400">${s.relative_volume >= 1.2 ? 'Above 20D Avg' : (s.relative_volume <= 0.85 ? 'Below 20D Avg' : 'Normal Volume')}</div>
             </div>
         `;
     }
 
     if (indRow) indRow.innerHTML = indHtml || '<div class="col-span-full text-xs text-slate-400">Indicators loaded into report text.</div>';
+
+    // Render Structured Executive KPI Cards (Phase 2)
+    const kpiRow = document.getElementById('st-kpi-row');
+    if (kpiRow) {
+        if (data.verdict || data.target_price || data.suggested_allocation_usd !== undefined) {
+            const isBullish = (data.verdict || '').toUpperCase().includes('BUY') || (data.verdict || '').toUpperCase().includes('BULLISH');
+            const isHold = (data.verdict || '').toUpperCase().includes('HOLD');
+            const isPass = (data.verdict || '').toUpperCase().includes('PASS') || (data.verdict || '').toUpperCase().includes('AVOID');
+            
+            const verdictBg = isBullish ? 'border-emerald-500/40 bg-emerald-950/20' : (isHold ? 'border-amber-500/40 bg-amber-950/20' : (isPass ? 'border-rose-500/40 bg-rose-950/20' : 'border-slate-800 bg-dark-950'));
+            const verdictColor = isBullish ? 'text-emerald-400' : (isHold ? 'text-amber-400' : (isPass ? 'text-rose-400' : 'text-slate-200'));
+            const verdictEmoji = isBullish ? '🟢' : (isHold ? '🟡' : (isPass ? '🔴' : '⚖️'));
+
+            const curPrice = Number(data.quote?.current_price || data.current_price || 0);
+            let targetUpsideStr = '';
+            if (data.target_price && curPrice > 0) {
+                const upPct = (((Number(data.target_price) - curPrice) / curPrice) * 100).toFixed(1);
+                targetUpsideStr = `${upPct > 0 ? '+' : ''}${upPct}% Upside`;
+            }
+
+            kpiRow.innerHTML = `
+                <div class="p-3 rounded-xl border ${verdictBg} space-y-1">
+                    <div class="text-[10px] uppercase font-semibold tracking-wider text-slate-400">Institutional Verdict</div>
+                    <div class="text-sm font-extrabold ${verdictColor} flex items-center space-x-1 truncate">
+                        <span>${verdictEmoji}</span>
+                        <span>${data.verdict || 'ANALYZED'}</span>
+                    </div>
+                    <div class="text-[10px] text-slate-400 font-mono">Conviction: ${data.conviction_score ? data.conviction_score + '%' : '—'}</div>
+                </div>
+                <div class="p-3 bg-dark-950 border border-slate-800 rounded-xl space-y-1">
+                    <div class="text-[10px] uppercase font-semibold tracking-wider text-slate-400">12M Target Price</div>
+                    <div class="text-base font-bold text-cyan-300 font-mono">$${data.target_price ? Number(data.target_price).toFixed(2) : '—'}</div>
+                    <div class="text-[10px] text-emerald-400 font-mono font-medium truncate">${targetUpsideStr || 'Consensus Target'}</div>
+                </div>
+                <div class="p-3 bg-dark-950 border border-slate-800 rounded-xl space-y-1">
+                    <div class="text-[10px] uppercase font-semibold tracking-wider text-slate-400">Dynamic ATR Stop</div>
+                    <div class="text-base font-bold text-rose-300 font-mono">$${data.stop_floor ? Number(data.stop_floor).toFixed(2) : '—'}</div>
+                    <div class="text-[10px] text-slate-400 font-mono">Volatility Trailing Band</div>
+                </div>
+                <div class="p-3 bg-dark-950 border border-slate-800 rounded-xl space-y-1">
+                    <div class="text-[10px] uppercase font-semibold tracking-wider text-slate-400">Suggested Sizing</div>
+                    <div class="text-base font-bold text-white font-mono">$${data.suggested_allocation_usd !== undefined ? Number(data.suggested_allocation_usd).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '0.00'}</div>
+                    <div class="text-[10px] text-slate-400 font-mono">From Cash Reserves</div>
+                </div>
+                <div class="p-3 bg-dark-950 border border-slate-800 rounded-xl space-y-1">
+                    <div class="text-[10px] uppercase font-semibold tracking-wider text-slate-400">Core Thesis</div>
+                    <div class="text-xs text-slate-200 line-clamp-2 leading-tight font-sans" title="${(data.thesis || '').replace(/"/g, '&quot;')}">${data.thesis || 'Structured model synthesis'}</div>
+                </div>
+            `;
+            kpiRow.classList.remove('hidden');
+        } else {
+            kpiRow.innerHTML = '';
+            kpiRow.classList.add('hidden');
+        }
+    }
     
     // Format analysis report
     if (body) {
@@ -290,7 +384,7 @@ function renderDeepDivesList(items) {
                 <div class="space-y-0.5">
                     <div class="flex items-center space-x-2">
                         <span class="font-bold font-mono text-sm text-white group-hover:text-cyan-300 transition">${d.ticker}</span>
-                        <span class="px-1.5 py-0.5 rounded text-[9px] font-bold border ${badgeColor}">${d.verdict || 'NEUTRAL'}</span>
+                        <span class="px-1.5 py-0.5 rounded text-[9px] font-bold border ${badgeColor}">${d.verdict || 'NEUTRAL'}${d.conviction_score ? ` · ${d.conviction_score}%` : ''}</span>
                     </div>
                     <div class="text-[11px] text-slate-400 truncate max-w-[150px]">${d.company_name || d.ticker}</div>
                     <div class="text-[10px] font-mono text-slate-500">${dateStr}</div>
@@ -330,13 +424,21 @@ async function selectArchivedDeepDive(deepdiveId, scrollIntoView = true) {
         const data = await res.json();
         if (data.status === 'success' && data.deepdive) {
             const dd = data.deepdive;
-            const fullPayload = dd.payload || {
+            const fullPayload = dd.payload ? {
+                ...dd.payload,
+                verdict: dd.payload.verdict || dd.verdict,
+                conviction_score: dd.payload.conviction_score || dd.conviction_score
+            } : {
                 status: 'success',
                 ticker: dd.ticker,
+                company_name: dd.company_name,
+                current_price: dd.current_price,
                 quote: { name: dd.company_name, current_price: dd.current_price },
                 technicals: dd.technicals,
                 sentiment: dd.sentiment,
-                analysis: dd.analysis_text
+                analysis: dd.analysis_text,
+                verdict: dd.verdict,
+                conviction_score: dd.conviction_score
             };
             renderDeepDiveResult(fullPayload);
             if (scrollIntoView) {
