@@ -221,6 +221,8 @@ class PortfolioStressMetric(BaseModel):
 
 class BriefingReport(BaseModel):
     report_id: str
+    user_id: Optional[str] = None
+    slot: Optional[str] = "general"
     generated_at: datetime = Field(default_factory=datetime.utcnow)
     executive_summary: str
     total_holdings_monitored: int

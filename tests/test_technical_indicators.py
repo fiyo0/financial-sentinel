@@ -34,11 +34,14 @@ def generate_bars(n: int = 60, start_price: float = 100.0, trend: float = 1.0):
 def test_calc_ema():
     values = [10.0, 11.0, 12.0, 13.0, 14.0]
     ema = _calc_ema(values, 3)
-    assert len(ema) == 5
-    assert ema[0] == 10.0
+    # With SMA seed (H-10), starts at period with SMA(10, 11, 12) = 11.0
+    assert len(ema) == 3
+    assert ema[0] == 11.0
     # k = 2 / (3 + 1) = 0.5
-    # ema[1] = 11.0 * 0.5 + 10.0 * 0.5 = 10.5
-    assert abs(ema[1] - 10.5) < 1e-4
+    # ema[1] = 13.0 * 0.5 + 11.0 * 0.5 = 12.0
+    assert abs(ema[1] - 12.0) < 1e-4
+    # ema[2] = 14.0 * 0.5 + 12.0 * 0.5 = 13.0
+    assert abs(ema[2] - 13.0) < 1e-4
 
 
 def test_insufficient_bars():
@@ -61,7 +64,15 @@ def test_bullish_momentum_math():
     assert snap.rsi_14 > 70.0  # Steady gains produce overbought RSI
     assert snap.rsi_status in ["OVERBOUGHT", "EXTREME_OVERBOUGHT"]
     assert snap.dist_from_50_dma_pct > 0
-    assert snap.dist_from_200_dma_pct > 0
+    # With 60 bars (<200), sma_200 must be None (H-9)
+    assert snap.sma_200 is None
+    assert snap.dist_from_200_dma_pct is None
+
+    # Test >= 200 bars gives valid sma_200
+    long_bars = generate_bars(n=220, start_price=100.0, trend=1.0)
+    snap_long = compute_technical_snapshot("NVDA", custom_bars=long_bars)
+    assert snap_long.sma_200 is not None
+    assert snap_long.dist_from_200_dma_pct > 0
     assert snap.trend_alignment in ["STRONG_BULLISH", "MODERATE_BULLISH"]
     assert snap.bollinger_upper > snap.bollinger_lower
     assert snap.suggested_stop_loss < snap.current_price

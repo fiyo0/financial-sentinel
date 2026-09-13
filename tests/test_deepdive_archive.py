@@ -13,6 +13,12 @@ def client():
 def test_statestore_deepdive_crud():
     store = orchestrator.state_store
     user_id = 'usr_test_dd'
+    with store._get_connection() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO users (id, username, email, password_hash, role) VALUES (?, ?, ?, ?, ?)",
+            (user_id, "test_dd", "test_dd@example.com", "hash", "user")
+        )
+        conn.commit()
     
     # 1. Save deep dive
     dd_id = store.save_deepdive(

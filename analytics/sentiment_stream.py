@@ -149,20 +149,32 @@ def _fetch_stocktwits_stream(ticker: str) -> Dict[str, Any]:
             acceleration_factor = 1.0
             if len(messages) >= 2:
                 try:
-                    t_first = datetime.strptime(messages[0]["created_at"][:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
-                    t_last = datetime.strptime(messages[-1]["created_at"][:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
-                    diff_sec = (t_first - t_last).total_seconds()
-                    span_hours = max(0.05, diff_sec / 3600.0)
-                    rate_per_hour = round(len(messages) / span_hours, 1)
+                    parsed_msgs = []
+                    for m in messages:
+                        ts_str = str(m.get("created_at", ""))[:19]
+                        if ts_str:
+                            try:
+                                dt = datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+                                parsed_msgs.append((dt, m))
+                            except Exception:
+                                pass
+                    # Sort newest first
+                    parsed_msgs.sort(key=lambda x: x[0], reverse=True)
+                    if len(parsed_msgs) >= 2:
+                        t_newest = parsed_msgs[0][0]
+                        t_oldest = parsed_msgs[-1][0]
+                        diff_sec = max(1.0, (t_newest - t_oldest).total_seconds())
+                        span_hours = max(0.05, diff_sec / 3600.0)
+                        rate_per_hour = round(len(parsed_msgs) / span_hours, 1)
 
-                    if len(messages) >= 8:
-                        k = max(3, len(messages) // 3)
-                        t_k = datetime.strptime(messages[k]["created_at"][:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
-                        span_recent = max(0.01, (t_first - t_k).total_seconds() / 3600.0)
-                        rate_recent = k / span_recent
-                        span_baseline = max(0.02, (t_k - t_last).total_seconds() / 3600.0)
-                        rate_baseline = (len(messages) - k) / span_baseline
-                        acceleration_factor = round(rate_recent / max(0.05, rate_baseline), 2)
+                        if len(parsed_msgs) >= 8:
+                            k = max(3, len(parsed_msgs) // 3)
+                            t_k = parsed_msgs[k][0]
+                            span_recent = max(0.01, (t_newest - t_k).total_seconds() / 3600.0)
+                            rate_recent = k / span_recent
+                            span_baseline = max(0.02, (t_k - t_oldest).total_seconds() / 3600.0)
+                            rate_baseline = (len(parsed_msgs) - k) / span_baseline
+                            acceleration_factor = round(rate_recent / max(0.05, rate_baseline), 2)
                 except Exception as e:
                     logger.debug(f"Timestamp parse error for {ticker}: {e}")
 
@@ -281,7 +293,7 @@ def fetch_social_sentiment_snapshot(
             from analytics.technical_indicators import _fetch_historical_bars
             h_bars = _fetch_historical_bars(clean_ticker)
             valid_vols = [b["volume"] for b in h_bars if b.get("volume", 0) > 0]
-            if len(valid_vols) >= 20:
+            if len(valid_vols) >= 21:
                 last_vol = valid_vols[-1]
                 avg_vol = sum(valid_vols[-21:-1]) / 20.0
                 if avg_vol > 0:
@@ -338,7 +350,10 @@ def fetch_social_sentiment_snapshot(
     elif computed_rvol >= 1.3 and bull_pct <= 38.0:
         composite = max(0.0, composite - 6.0)  # Institutional heavy volume confirming sell-off
 
-    if composite >= 82.0:
+    # Divergence Trap Check (H-13): Evaluated before standard bullish accumulation ladder
+    if computed_rvol < 0.85 and bull_pct >= 72.0:
+        sentiment_verdict = "RETAIL_DIVERGENCE_TRAP"
+    elif composite >= 82.0:
         sentiment_verdict = "EXTREME_EUPHORIA"
     elif composite >= 62.0:
         sentiment_verdict = "BULLISH_ACCUMULATION"
@@ -346,8 +361,6 @@ def fetch_social_sentiment_snapshot(
         sentiment_verdict = "EXTREME_CAPITULATION"
     elif composite <= 40.0:
         sentiment_verdict = "BEARISH_DISTRUST"
-    elif computed_rvol < 0.85 and bull_pct >= 72.0:
-        sentiment_verdict = "RETAIL_DIVERGENCE_TRAP"
     else:
         sentiment_verdict = "NEUTRAL_BALANCED"
 

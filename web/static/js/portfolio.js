@@ -165,16 +165,20 @@ function renderHoldingsTable(p) {
         const pnl = (curPrice - h.avg_price) * h.shares;
         const pnlPct = h.avg_price > 0 ? ((curPrice - h.avg_price) / h.avg_price) * 100 : 0;
         const isPos = pnl >= 0;
+        const safeTicker = escapeHtml(h.ticker);
+        const safeName = escapeHtml(h.name || h.ticker);
+        const safeSector = escapeHtml(h.sector || 'Technology');
+        const jsSafeTicker = encodeURIComponent(h.ticker || '');
 
         return `
-            <tr class="hover:bg-slate-800/60 transition cursor-pointer group" onclick="analyzeHoldingTicker('${h.ticker}')" title="Click to select ${h.ticker} in Ticker Deep Dive">
+            <tr class="hover:bg-slate-800/60 transition cursor-pointer group" onclick="analyzeHoldingTicker('${jsSafeTicker}')" title="Click to select ${safeTicker} in Ticker Deep Dive">
                 <td class="py-3 font-bold">
                     <div class="flex items-center space-x-2">
-                        <span class="text-cyan-400 group-hover:text-cyan-300 font-bold tracking-wide">${h.ticker}</span>
-                        <span class="px-1.5 py-0.5 bg-slate-800 text-slate-300 rounded text-[10px] font-sans font-normal border border-slate-700/50">${h.sector || 'Technology'}</span>
+                        <span class="text-cyan-400 group-hover:text-cyan-300 font-bold tracking-wide">${safeTicker}</span>
+                        <span class="px-1.5 py-0.5 bg-slate-800 text-slate-300 rounded text-[10px] font-sans font-normal border border-slate-700/50">${safeSector}</span>
                         <span class="text-[10px] text-cyan-400 opacity-0 group-hover:opacity-100 transition font-sans font-medium">🔬 Deep Dive →</span>
                     </div>
-                    <div class="text-[10px] text-slate-400 font-normal font-sans truncate max-w-[200px] mt-0.5">${h.name || h.ticker}</div>
+                    <div class="text-[10px] text-slate-400 font-normal font-sans truncate max-w-[200px] mt-0.5">${safeName}</div>
                 </td>
                 <td class="py-3 text-right">
                     <div class="text-slate-200 font-bold font-mono">${h.shares.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 4 })}</div>
@@ -430,10 +434,10 @@ function addHoldingRow(h = {}) {
     tr.className = 'hover:bg-slate-800/40 transition';
     tr.innerHTML = `
         <td class="py-2 pr-2">
-            <input type="text" oninput="debounceFetchQuote(this)" onblur="autoFetchQuote(this)" class="input-ticker w-20 px-2 py-1 bg-dark-950 border border-slate-700 rounded text-cyan-400 font-bold text-xs uppercase" value="${h.ticker || ''}" placeholder="NVDA">
+            <input type="text" oninput="debounceFetchQuote(this)" onblur="autoFetchQuote(this)" class="input-ticker w-20 px-2 py-1 bg-dark-950 border border-slate-700 rounded text-cyan-400 font-bold text-xs uppercase" value="${escapeHtml(h.ticker || '')}" placeholder="NVDA">
         </td>
         <td class="py-2 pr-2">
-            <input type="text" class="input-name w-36 px-2 py-1 bg-dark-950 border border-slate-700 rounded text-slate-200 text-xs" value="${h.name || ''}" placeholder="NVIDIA Corp">
+            <input type="text" class="input-name w-36 px-2 py-1 bg-dark-950 border border-slate-700 rounded text-slate-200 text-xs" value="${escapeHtml(h.name || '')}" placeholder="NVIDIA Corp">
         </td>
         <td class="py-2 pr-2">
             <select class="input-sector px-2 py-1 bg-dark-950 border border-slate-700 rounded text-slate-200 text-xs">

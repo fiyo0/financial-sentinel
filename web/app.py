@@ -1,6 +1,6 @@
 """
 FastAPI Web Dashboard Backend for the Financial Multi-Agent System.
-Supports Multi-User Authentication, Isolated Portfolios, and Bring-Your-Own-Key (BYOK) AES-256 Encrypted Gemini API Keys.
+Supports Multi-User Authentication, Isolated Portfolios, and Bring-Your-Own-Key (BYOK) Fernet Encrypted Gemini API Keys with HKDF-SHA256.
 """
 import sys
 import os
@@ -8,6 +8,9 @@ import json
 import csv
 import io
 import time
+import hashlib
+import secrets
+import re
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 
@@ -39,6 +42,7 @@ from auth.crypto import (
 )
 from channels.telegram_bot import FinancialSentinelTelegramBot
 from scheduler import DailyMarketScheduler
+from analytics.market_data import update_portfolio_live_prices, fetch_live_quote
 
 logger = logging.getLogger("WebApp")
 
@@ -202,16 +206,18 @@ class VerifyKeyRequest(BaseModel):
 async def security_and_auth_middleware(request: Request, call_next):
     path = request.url.path
     
-    # Layer 2 API Authentication Guard
+    # Layer 2 API Authentication Guard (Exact Path Matching)
     if config.dashboard_auth_enabled:
-        exempt_paths = [
+        exempt_paths = {
             "/api/auth/login",
             "/api/auth/register",
             "/api/telegram/webhook",
-            "/api/schedule/trigger",
-            "/api/schedule/status"
-        ]
-        if path.startswith("/api/") and not any(path.startswith(p) for p in exempt_paths):
+            "/api/schedule/status",
+            "/healthz"
+        }
+        cron_hdr = request.headers.get("X-Cron-Secret", "")
+        has_valid_cron = bool(config.cron_secret and cron_hdr and secrets.compare_digest(cron_hdr, config.cron_secret))
+        if path.startswith("/api/") and path not in exempt_paths and not has_valid_cron:
             user = get_current_user(request)
             if not user:
                 return JSONResponse(status_code=401, content={"detail": "Unauthorized: Session expired or login required"})
@@ -225,6 +231,16 @@ async def security_and_auth_middleware(request: Request, call_next):
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
     response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data: https:; "
+        "connect-src 'self' https:; "
+        "frame-ancestors 'none'; "
+        "base-uri 'self';"
+    )
     if path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
     
@@ -265,16 +281,19 @@ async def api_register(payload: UserRegisterRequest, request: Request, response:
             role="user"
         )
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Registration failed: {e}")
+        logger.warning(f"Registration attempt failed: {e}")
+        raise HTTPException(status_code=400, detail="Registration failed: An account with this username or email already exists.")
 
     # Create session token
+    is_https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https" or bool(os.getenv("K_SERVICE"))
     token = create_session_token(user["id"], user["username"], role="user")
     response.set_cookie(
         key="sentinel_token",
         value=token,
         httponly=True,
+        secure=is_https,
         samesite="lax",
-        max_age=60 * 60 * 24 * 30
+        max_age=60 * 60 * 24 * 7
     )
     return {
         "status": "success",
@@ -292,6 +311,14 @@ async def api_register(payload: UserRegisterRequest, request: Request, response:
 async def api_login(payload: UserLoginRequest, request: Request, response: Response):
     client_ip = request.client.host if request.client else "unknown"
     now = time.time()
+    
+    # Bounded cache pruning for login attempts (H-7)
+    if len(login_attempts) > 500:
+        stale_cutoff = now - 180
+        stale_ips = [ip for ip, timestamps in login_attempts.items() if not timestamps or timestamps[-1] < stale_cutoff]
+        for ip in stale_ips:
+            login_attempts.pop(ip, None)
+
     recent = [t for t in login_attempts.get(client_ip, []) if now - t < 60]
     if len(recent) >= 8:
         raise HTTPException(status_code=429, detail="Too many login attempts. Please wait 60 seconds.")
@@ -307,13 +334,15 @@ async def api_login(payload: UserLoginRequest, request: Request, response: Respo
 
     if user:
         login_attempts.pop(client_ip, None)
+        is_https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https" or bool(os.getenv("K_SERVICE"))
         token = create_session_token(user["id"], user["username"], role=user.get("role", "user"))
         response.set_cookie(
             key="sentinel_token",
             value=token,
             httponly=True,
+            secure=is_https,
             samesite="lax",
-            max_age=60 * 60 * 24 * 30
+            max_age=60 * 60 * 24 * 7
         )
         return {
             "status": "success",
@@ -386,7 +415,7 @@ async def api_update_user_settings(payload: UserSettingsUpdateRequest, request: 
 
     return {
         "status": "success",
-        "message": "Settings updated successfully (Gemini key AES-256 encrypted)",
+        "message": "Settings updated successfully (Gemini key Fernet encrypted at rest with HKDF-SHA256)",
         "user": {
             "username": updated_user["username"],
             "email": updated_user["email"],
@@ -398,8 +427,11 @@ async def api_update_user_settings(payload: UserSettingsUpdateRequest, request: 
 
 
 @app.post("/api/user/verify-key")
-async def api_verify_gemini_key(payload: VerifyKeyRequest):
-    result = validate_gemini_api_key(payload.api_key)
+async def api_verify_gemini_key(payload: VerifyKeyRequest, request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required to verify API key.")
+    result = await asyncio.to_thread(validate_gemini_api_key, payload.api_key)
     return result
 
 
@@ -855,7 +887,7 @@ async def api_get_live_news(request: Request):
     user_id = user["id"] if user else None
     portfolio = orchestrator.get_active_portfolio(user_id=user_id)
     portfolio_tickers = [h.ticker for h in portfolio.holdings]
-    news_items = orchestrator.news_agent.ingest_all_feeds(live=True, portfolio_tickers=portfolio_tickers)
+    news_items = await asyncio.to_thread(orchestrator.news_agent.ingest_all_feeds, live=True, portfolio_tickers=portfolio_tickers)
     return {
         "status": "success",
         "count": len(news_items),
@@ -864,20 +896,23 @@ async def api_get_live_news(request: Request):
 
 
 @app.get("/api/quote/{ticker}")
-async def api_get_quote(ticker: str):
-    from analytics.market_data import fetch_live_quote
-    quote = fetch_live_quote(ticker)
+async def api_get_quote(ticker: str, request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    clean_ticker = ticker.strip().upper()
+    if not re.match(r"^[A-Z0-9.\-]{1,10}$", clean_ticker):
+        raise HTTPException(status_code=400, detail="Invalid ticker symbol format")
+    quote = await asyncio.to_thread(fetch_live_quote, clean_ticker)
     return quote
 
 
 @app.get("/api/quotes/refresh")
 async def api_refresh_quotes(request: Request):
-
     user = get_current_user(request)
     user_id = user["id"] if user else None
-    from analytics.market_data import update_portfolio_live_prices
     portfolio = orchestrator.get_active_portfolio(user_id=user_id)
-    portfolio, quotes = update_portfolio_live_prices(portfolio)
+    portfolio, quotes = await asyncio.to_thread(update_portfolio_live_prices, portfolio)
     dumped = orchestrator.persist_active_portfolio(portfolio, user_id=user_id)
     stress = orchestrator.quant_engine.analyze_portfolio(portfolio)
     return {
@@ -1065,11 +1100,21 @@ async def api_delete_deepdive(deepdive_id: str, request: Request):
 
 
 @app.post("/api/feedback")
-async def api_submit_feedback(req: FeedbackRequest):
+async def api_submit_feedback(req: FeedbackRequest, request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required to submit feedback.")
+    clean_notes = (req.user_notes or "").strip()
+    if len(clean_notes) > 2000:
+        raise HTTPException(status_code=400, detail="Feedback notes exceed maximum allowed length (2,000 characters).")
+    clean_type = req.feedback_type.strip().lower()
+    allowed_types = {"accurate", "noise", "helpful", "unhelpful", "flag"}
+    if clean_type not in allowed_types:
+        raise HTTPException(status_code=400, detail=f"Invalid feedback type '{clean_type}'.")
     orchestrator.state_store.record_feedback(
-        target_id=req.target_id,
-        feedback_type=req.feedback_type,
-        user_notes=req.user_notes
+        target_id=req.target_id.strip()[:100],
+        feedback_type=clean_type,
+        user_notes=clean_notes
     )
     return {"status": "success", "message": "Feedback recorded"}
 
@@ -1212,13 +1257,25 @@ async def api_discover_moonshots(request: Request, count: int = 4):
 
 
 @app.post("/api/telegram/webhook")
-
 async def api_telegram_webhook(request: Request):
+    expected_secret = config.telegram_webhook_secret
+    if not expected_secret:
+        app_sec = os.getenv("APP_SECRET_KEY", "")
+        if app_sec:
+            expected_secret = hashlib.sha256(f"tg_webhook_{app_sec}".encode("utf-8")).hexdigest()
+
+    if expected_secret:
+        received_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+        if not secrets.compare_digest(received_secret, expected_secret):
+            logger.warning("Rejected unauthenticated Telegram webhook update (missing or invalid secret token).")
+            return JSONResponse(status_code=401, content={"detail": "Unauthorized: Invalid Telegram webhook secret token"})
+
     try:
         data = await request.json()
-        return telegram_bot.process_webhook_update(data)
+        return await asyncio.to_thread(telegram_bot.process_webhook_update, data)
     except Exception as e:
-        return {"status": "error", "detail": str(e)}
+        logger.error(f"Error processing Telegram webhook: {e}")
+        return JSONResponse(status_code=400, content={"status": "error", "detail": "Invalid payload"})
 
 
 @app.get("/api/schedule/status")
@@ -1233,7 +1290,8 @@ async def api_get_schedule_status():
         "weekday_schedule": {
             "06:30 PST": "Pre-Market Intelligence & Opening Catalysts",
             "10:00 PST": "Mid-Market Macro & Momentum Pulse",
-            "15:00 PST": "Post-Market Wrap, Earnings & Hot Movers"
+            "13:30 PST": "Post-Market Wrap & Day-End Recap",
+            "17:00 PST": "Daily Earnings Wrap & Guidance Breakdown"
         },
         "weekend_schedule": {
             "21:00 PST": "Weekend Macro & Week-Ahead Preview"
@@ -1243,11 +1301,20 @@ async def api_get_schedule_status():
 
 
 @app.post("/api/schedule/trigger/{slot}")
-async def api_trigger_scheduled_briefing(slot: str, force: bool = False):
+async def api_trigger_scheduled_briefing(slot: str, request: Request, force: bool = False):
     if slot not in ("premarket", "midmarket", "postmarket", "weekend", "earnings"):
         raise HTTPException(status_code=400, detail="Invalid slot. Choose premarket, midmarket, postmarket, weekend, or earnings.")
-    import asyncio
-    msg = await asyncio.to_thread(daily_scheduler.execute_briefing, slot, None, None, True, force)
+
+    user = get_current_user(request)
+    is_admin = bool(user and user.get("role") == "admin")
+    cron_hdr = request.headers.get("X-Cron-Secret", "")
+    is_cron = bool(config.cron_secret and secrets.compare_digest(cron_hdr, config.cron_secret))
+
+    if not (is_admin or is_cron):
+        return JSONResponse(status_code=403, content={"detail": "Forbidden: Admin privileges or valid X-Cron-Secret required to trigger briefing."})
+
+    target_user_id = user["id"] if user else None
+    msg = await asyncio.to_thread(daily_scheduler.execute_briefing, slot, None, target_user_id, True, force)
     return {
         "status": "success",
         "slot": slot,
@@ -1298,12 +1365,16 @@ class GenerateBriefingPayload(BaseModel):
 @app.get("/api/briefings")
 async def api_get_market_briefings(request: Request, slot: Optional[str] = None, limit: int = 20):
     user = get_current_user(request)
-    user_id = user["id"] if user else None
-    if not user_id:
-        admin = orchestrator.state_store.get_or_create_default_admin()
-        if admin:
-            user_id = admin["id"]
-    briefings = orchestrator.state_store.get_market_briefings(user_id=user_id, slot=slot, limit=limit)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required to view market briefings.")
+    user_id = user["id"]
+    is_admin = bool(user.get("role") == "admin")
+    # Non-admin users strictly only see their own briefings
+    briefings = orchestrator.state_store.get_market_briefings(
+        user_id=user_id if not is_admin else None,
+        slot=slot,
+        limit=min(limit, 100)
+    )
     enriched = []
     for b in briefings:
         s = b.get("slot") or "general"
@@ -1328,8 +1399,11 @@ async def api_get_market_briefing_detail(report_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Briefing report not found.")
 
     user = get_current_user(request)
-    user_id = user["id"] if user else None
-    is_admin = bool(user and user.get("role") == "admin")
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required to view briefing details.")
+
+    user_id = user["id"]
+    is_admin = bool(user.get("role") == "admin")
 
     # Strict tenant isolation: private user-scoped briefings can only be viewed by their owner or an admin
     b_user = b.get("user_id")
@@ -1444,7 +1518,10 @@ class TelegramConfigPayload(BaseModel):
 
 
 @app.post("/api/telegram/configure")
-async def api_configure_telegram(payload: TelegramConfigPayload):
+async def api_configure_telegram(payload: TelegramConfigPayload, request: Request):
+    user = get_current_user(request)
+    if not user or user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden: Administrator access required to reconfigure Telegram bot.")
     config.telegram_bot_token = payload.bot_token
     if payload.chat_id:
         config.telegram_chat_id = payload.chat_id
@@ -1459,8 +1536,8 @@ async def api_configure_telegram(payload: TelegramConfigPayload):
 async def api_cache_clear(request: Request):
     """Admin endpoint to invalidate in-memory quote, bars, and general caches."""
     user = get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    if not user or user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden: Administrator access required.")
     from analytics.market_data import PRICE_CACHE
     from analytics.technical_indicators import BARS_CACHE
     from storage.cache_manager import cache_manager
@@ -1483,8 +1560,8 @@ async def api_cache_clear(request: Request):
 async def api_cache_stats(request: Request):
     """Admin endpoint to monitor cache telemetry."""
     user = get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    if not user or user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden: Administrator access required.")
     from analytics.market_data import PRICE_CACHE
     from analytics.technical_indicators import BARS_CACHE
     from storage.cache_manager import cache_manager
@@ -1493,6 +1570,29 @@ async def api_cache_stats(request: Request):
         "bars_cache_entries": len(BARS_CACHE),
         "manager_stats": cache_manager.stats()
     }
+
+
+@app.get("/healthz")
+async def healthz():
+    """Healthcheck endpoint for Cloud Run and monitoring probes."""
+    db_ok = False
+    try:
+        with orchestrator.state_store._get_connection() as conn:
+            conn.execute("SELECT 1;").fetchone()
+        db_ok = True
+    except Exception as e:
+        logger.error(f"Healthcheck database probe failed: {e}")
+    
+    status_code = 200 if db_ok else 503
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "status": "healthy" if db_ok else "unhealthy",
+            "database": "connected" if db_ok else "unavailable",
+            "scheduler": "running" if daily_scheduler.is_running else "stopped",
+            "version": config.version
+        }
+    )
 
 
 if __name__ == "__main__":

@@ -1795,7 +1795,7 @@
 
     <!-- Application Bootstrap & Lifecycle Initialization -->
     <script>
-        window.INITIAL_BRIEFING = {% if latest_briefing_json and latest_briefing_json != "null" %}{{ latest_briefing_json | safe }}{% else %}null{% endif %};
+        window.INITIAL_BRIEFING = {% if latest_briefing_json and latest_briefing_json != "null" %}JSON.parse({{ latest_briefing_json | tojson }}){% else %}null{% endif %};
 
         window.addEventListener('DOMContentLoaded', () => {
             // 1. Initialize PST Clock

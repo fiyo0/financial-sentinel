@@ -241,12 +241,15 @@ class FinancialSentinelTelegramBot:
             logger.error(f"Error in edit_message: {e}")
             return False
 
-    def setup_webhook(self, base_url: str) -> bool:
+    def setup_webhook(self, base_url: str, secret_token: Optional[str] = None) -> bool:
         if not self.bot_token or not base_url:
             return False
         clean_base = base_url.rstrip("/")
         webhook_url = f"{clean_base}/api/telegram/webhook"
+        token_to_use = secret_token or config.telegram_webhook_secret
         url = f"https://api.telegram.org/bot{self.bot_token}/setWebhook?url={webhook_url}"
+        if token_to_use:
+            url += f"&secret_token={token_to_use}"
         try:
             resp = httpx.get(url, timeout=10.0)
             if resp.status_code == 200 and resp.json().get("ok"):
@@ -265,8 +268,8 @@ class FinancialSentinelTelegramBot:
         from_user = msg.get("from", {})
         username = str(from_user.get("username", "")).lower().replace("@", "")
         chat_id = str(chat.get("id", ""))
-        logger.info(f"Received Telegram webhook update from @{username} (Chat ID: {chat_id}): {text}")
-        print(f"TELEGRAM_INCOMING: username={username} chat_id={chat_id} text={text}", flush=True)
+        logger.info(f"Received Telegram webhook update from @{username} (Chat ID: {chat_id}) [chars: {len(text)}]")
+        print(f"TELEGRAM_INCOMING: username={username} chat_id={chat_id} text_len={len(text)}", flush=True)
 
 
         if text:
@@ -455,10 +458,9 @@ class FinancialSentinelTelegramBot:
         # Admin fallback matching
         if not user:
             allowed_users = [u.lower().replace("@", "") for u in config.telegram_allowed_usernames if u]
-            if (username and username.lower() in allowed_users) or (chat_id and chat_id in config.telegram_allowed_chat_ids) or chat_id == "test_chat" or not chat_id:
+            allowed_chats = [c for c in config.telegram_allowed_chat_ids if c]
+            if (username and username.lower() in allowed_users) or (chat_id and chat_id in allowed_chats):
                 user = self.orchestrator.state_store.get_or_create_default_admin()
-                if user and chat_id:
-                    self.orchestrator.state_store.update_user_settings(user["id"], telegram_chat_id=chat_id)
 
 
         # Unlinked user onboarding guidance

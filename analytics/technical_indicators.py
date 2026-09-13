@@ -39,13 +39,13 @@ class TechnicalSnapshot:
     # Moving Averages
     sma_20: float
     sma_50: float
-    sma_200: float
-    dist_from_50_dma_pct: float
-    dist_from_200_dma_pct: float
-    trend_alignment: str  # STRONG_BULLISH, MODERATE_BULLISH, BEARISH_CORRECTION, DEATH_CROSS, GOLDEN_CROSS
+    sma_200: Optional[float] = None
+    dist_from_50_dma_pct: float = 0.0
+    dist_from_200_dma_pct: Optional[float] = None
+    trend_alignment: str = "MIXED_CONSOLIDATION"  # STRONG_BULLISH, MODERATE_BULLISH, BEARISH_CORRECTION, DEATH_CROSS, GOLDEN_CROSS
     # Volatility / Trailing Stop
-    atr_14: float
-    suggested_stop_loss: float
+    atr_14: float = 0.0
+    suggested_stop_loss: float = 0.0
     rvol: float = 1.0
     avg_volume_20: int = 0
     is_live: bool = True
@@ -57,10 +57,11 @@ class TechnicalSnapshot:
             return "Technical Indicators: Unavailable"
         
         cross_str = f" | {self.trend_alignment}" if "CROSS" in self.trend_alignment else ""
+        dma_200_part = f" | 200 DMA: {self.dist_from_200_dma_pct:+.1f}%" if self.dist_from_200_dma_pct is not None else ""
         return (
             f"RSI-14: {self.rsi_14:.1f} ({self.rsi_status}) | "
             f"MACD: {self.macd_status} | "
-            f"50 DMA: {self.dist_from_50_dma_pct:+.1f}% | "
+            f"50 DMA: {self.dist_from_50_dma_pct:+.1f}%{dma_200_part} | "
             f"BB %B: {self.bollinger_pct_b:.2f}{cross_str}"
         )
 
@@ -73,7 +74,11 @@ class TechnicalSnapshot:
         macd_emoji = "🟢" if "BULLISH" in self.macd_status else ("🔴" if "BEARISH" in self.macd_status else "⚪")
         
         dma_50_sign = "+" if self.dist_from_50_dma_pct >= 0 else ""
-        dma_200_sign = "+" if self.dist_from_200_dma_pct >= 0 else ""
+        if self.sma_200 is not None and self.dist_from_200_dma_pct is not None:
+            dma_200_sign = "+" if self.dist_from_200_dma_pct >= 0 else ""
+            dma_200_str = f"200 DMA: <code>${self.sma_200:.2f}</code> ({dma_200_sign}{self.dist_from_200_dma_pct:.1f}%)"
+        else:
+            dma_200_str = "200 DMA: <code>N/A (&lt;200 bars)</code>"
         
         squeeze_alert = " ⚠️ <i>[Volatility Squeeze in Progress]</i>" if self.bollinger_status == "VOLATILITY_SQUEEZE" else ""
 
@@ -82,21 +87,22 @@ class TechnicalSnapshot:
             f"• <b>RSI (14-Day):</b> {rsi_emoji} <code>{self.rsi_14:.1f}</code> ({self.rsi_status.replace('_', ' ')})\n"
             f"• <b>MACD (12, 26, 9):</b> {macd_emoji} <code>{self.macd_status.replace('_', ' ')}</code> (Hist: {self.macd_hist:+.2f})\n"
             f"• <b>Moving Averages:</b> 50 DMA: <code>${self.sma_50:.2f}</code> ({dma_50_sign}{self.dist_from_50_dma_pct:.1f}%) | "
-            f"200 DMA: <code>${self.sma_200:.2f}</code> ({dma_200_sign}{self.dist_from_200_dma_pct:.1f}%)\n"
+            f"{dma_200_str}\n"
             f"• <b>Bollinger Bands:</b> <code>${self.bollinger_lower:.2f}</code> – <code>${self.bollinger_upper:.2f}</code> "
             f"(%B: {self.bollinger_pct_b:.2f}){squeeze_alert}\n"
-            f"• <b>Dynamic ATR Trailing Floor:</b> <code>${self.suggested_stop_loss:.2f}</code> (ATR-14: ${self.atr_14:.2f})"
+            f"• <b>Dynamic ATR Volatility Stop Band:</b> <code>${self.suggested_stop_loss:.2f}</code> (ATR-14: ${self.atr_14:.2f})"
         )
 
 
 def _calc_ema(values: List[float], period: int) -> List[float]:
-    """Calculates Exponential Moving Average across a series."""
-    if not values:
+    """Calculates Exponential Moving Average across a series, seeded with initial SMA."""
+    if not values or len(values) < period:
         return []
     k = 2.0 / (period + 1.0)
-    ema = values[0]
-    res = [ema]
-    for v in values[1:]:
+    sma = sum(values[:period]) / float(period)
+    res = [sma]
+    ema = sma
+    for v in values[period:]:
         ema = v * k + ema * (1.0 - k)
         res.append(ema)
     return res
@@ -234,92 +240,126 @@ def compute_technical_snapshot(ticker: str, custom_bars: Optional[List[Dict[str,
         avg_gain = (avg_gain * (period - 1) + gains[i]) / float(period)
         avg_loss = (avg_loss * (period - 1) + losses[i]) / float(period)
 
-    rs = avg_gain / (avg_loss if avg_loss > 0 else 1e-9)
-    rsi_14 = round(100.0 - (100.0 / (1.0 + rs)), 2)
-
-    if rsi_14 >= 75.0:
-        rsi_status = "EXTREME_OVERBOUGHT"
-    elif rsi_14 >= 70.0:
-        rsi_status = "OVERBOUGHT"
-    elif rsi_14 <= 25.0:
-        rsi_status = "EXTREME_OVERSOLD"
-    elif rsi_14 <= 30.0:
-        rsi_status = "OVERSOLD"
-    elif rsi_14 >= 55.0:
-        rsi_status = "NEUTRAL_BULLISH"
-    elif rsi_14 <= 45.0:
-        rsi_status = "NEUTRAL_BEARISH"
-    else:
+    if avg_gain == 0.0 and avg_loss == 0.0:
+        rsi_14 = 50.0
         rsi_status = "NEUTRAL"
+    else:
+        rs = avg_gain / (avg_loss if avg_loss > 0 else 1e-9)
+        rsi_14 = round(100.0 - (100.0 / (1.0 + rs)), 2)
+
+        if rsi_14 >= 75.0:
+            rsi_status = "EXTREME_OVERBOUGHT"
+        elif rsi_14 >= 70.0:
+            rsi_status = "OVERBOUGHT"
+        elif rsi_14 <= 25.0:
+            rsi_status = "EXTREME_OVERSOLD"
+        elif rsi_14 <= 30.0:
+            rsi_status = "OVERSOLD"
+        elif rsi_14 >= 55.0:
+            rsi_status = "NEUTRAL_BULLISH"
+        elif rsi_14 <= 45.0:
+            rsi_status = "NEUTRAL_BEARISH"
+        else:
+            rsi_status = "NEUTRAL"
 
     # 2. Moving Averages: SMA 20, SMA 50, SMA 200
     sma_20 = sum(closes[-20:]) / 20.0
     sma_50 = sum(closes[-min(50, n_bars):]) / float(min(50, n_bars))
-    sma_200 = sum(closes[-min(200, n_bars):]) / float(min(200, n_bars))
-
     dist_from_50 = round(((current_price - sma_50) / sma_50) * 100.0, 2)
-    dist_from_200 = round(((current_price - sma_200) / sma_200) * 100.0, 2)
 
-    if current_price > sma_50 > sma_200:
-        trend_alignment = "STRONG_BULLISH"
-    elif current_price > sma_50:
-        trend_alignment = "MODERATE_BULLISH"
-    elif current_price < sma_50 < sma_200:
-        trend_alignment = "STRONG_BEARISH"
-    elif current_price < sma_50:
-        trend_alignment = "BEARISH_CORRECTION"
+    if n_bars >= 200:
+        sma_200 = sum(closes[-200:]) / 200.0
+        dist_from_200 = round(((current_price - sma_200) / sma_200) * 100.0, 2)
+        sma_200_val = round(sma_200, 2)
     else:
-        trend_alignment = "MIXED_CONSOLIDATION"
+        sma_200 = None
+        dist_from_200 = None
+        sma_200_val = None
+
+    if sma_200 is not None:
+        if current_price > sma_50 > sma_200:
+            trend_alignment = "STRONG_BULLISH"
+        elif current_price < sma_50 < sma_200:
+            trend_alignment = "STRONG_BEARISH"
+        elif current_price > sma_50:
+            trend_alignment = "MODERATE_BULLISH"
+        elif current_price < sma_50:
+            trend_alignment = "BEARISH_CORRECTION"
+        else:
+            trend_alignment = "MIXED_CONSOLIDATION"
+    else:
+        if current_price > sma_50:
+            trend_alignment = "MODERATE_BULLISH"
+        elif current_price < sma_50:
+            trend_alignment = "BEARISH_CORRECTION"
+        else:
+            trend_alignment = "MIXED_CONSOLIDATION"
 
     # 3. Bollinger Bands (20-day SMA ± 2 standard deviations)
     lookback_20 = closes[-20:]
     mean_20 = sum(lookback_20) / 20.0
     var_20 = sum((x - mean_20) ** 2 for x in lookback_20) / 20.0
     std_20 = math.sqrt(var_20)
-    bollinger_upper = round(mean_20 + 2.0 * std_20, 2)
-    bollinger_lower = round(mean_20 - 2.0 * std_20, 2)
+
+    # Compute unrounded values first to prevent penny stock precision collapse
+    raw_upper = mean_20 + 2.0 * std_20
+    raw_lower = mean_20 - 2.0 * std_20
+    raw_range = raw_upper - raw_lower
+    raw_pct_b = (current_price - raw_lower) / raw_range if raw_range > 1e-9 else 0.5
+    raw_bandwidth = (raw_range / mean_20) * 100.0 if mean_20 > 1e-9 else 0.0
+
+    bollinger_upper = round(raw_upper, 2)
+    bollinger_lower = round(raw_lower, 2)
     bollinger_middle = round(mean_20, 2)
+    bollinger_pct_b = round(raw_pct_b, 2)
+    bollinger_bandwidth = round(raw_bandwidth, 2)
 
-    band_range = bollinger_upper - bollinger_lower
-    bollinger_pct_b = round((current_price - bollinger_lower) / band_range, 2) if band_range > 0 else 0.5
-    bollinger_bandwidth = round((band_range / bollinger_middle) * 100.0, 2) if bollinger_middle > 0 else 0.0
-
-    if bollinger_bandwidth < 4.5:
-        bollinger_status = "VOLATILITY_SQUEEZE"
-    elif current_price >= bollinger_upper:
+    # Extension checks precede squeeze check so breakouts are not masked
+    if current_price >= raw_upper:
         bollinger_status = "UPPER_BAND_EXTENDED"
-    elif current_price <= bollinger_lower:
+    elif current_price <= raw_lower:
         bollinger_status = "LOWER_BAND_EXTENDED"
+    elif raw_bandwidth < 4.5:
+        bollinger_status = "VOLATILITY_SQUEEZE"
     else:
         bollinger_status = "NORMAL"
 
     # 4. MACD (12 EMA, 26 EMA, 9 Signal EMA)
-    ema_12 = _calc_ema(closes, 12)
-    ema_26 = _calc_ema(closes, 26)
-    macd_series = [e12 - e26 for e12, e26 in zip(ema_12, ema_26)]
-    signal_series = _calc_ema(macd_series, 9)
+    if n_bars >= 35:
+        ema_12 = _calc_ema(closes, 12)
+        ema_26 = _calc_ema(closes, 26)
+        offset = len(ema_12) - len(ema_26)
+        macd_series = [e12 - e26 for e12, e26 in zip(ema_12[offset:], ema_26)]
+        signal_series = _calc_ema(macd_series, 9)
 
-    macd_line = round(macd_series[-1], 3)
-    macd_signal = round(signal_series[-1], 3)
-    macd_hist = round(macd_line - macd_signal, 3)
+        if len(signal_series) >= 2:
+            macd_line = round(macd_series[-1], 3)
+            macd_signal = round(signal_series[-1], 3)
+            macd_hist = round(macd_line - macd_signal, 3)
 
-    prev_macd = macd_series[-2] if len(macd_series) >= 2 else macd_line
-    prev_signal = signal_series[-2] if len(signal_series) >= 2 else macd_signal
+            prev_macd = macd_series[-2]
+            prev_signal = signal_series[-2]
 
-    if prev_macd <= prev_signal and macd_line > macd_signal:
-        macd_status = "BULLISH_CROSSOVER"
-    elif prev_macd >= prev_signal and macd_line < macd_signal:
-        macd_status = "BEARISH_DIVERGENCE"
-    elif macd_hist > 0 and macd_hist > (macd_series[-2] - signal_series[-2] if len(macd_series) >= 2 else 0):
-        macd_status = "BULLISH_ACCELERATING"
-    elif macd_hist < 0 and macd_hist < (macd_series[-2] - signal_series[-2] if len(macd_series) >= 2 else 0):
-        macd_status = "BEARISH_ACCELERATING"
-    elif macd_line > 0:
-        macd_status = "BULLISH_TERRITORY"
+            if prev_macd <= prev_signal and macd_line > macd_signal:
+                macd_status = "BULLISH_CROSSOVER"
+            elif prev_macd >= prev_signal and macd_line < macd_signal:
+                macd_status = "BEARISH_DIVERGENCE"
+            elif macd_hist > 0 and macd_hist > (prev_macd - prev_signal):
+                macd_status = "BULLISH_ACCELERATING"
+            elif macd_hist < 0 and macd_hist < (prev_macd - prev_signal):
+                macd_status = "BEARISH_ACCELERATING"
+            elif macd_line > 0:
+                macd_status = "BULLISH_TERRITORY"
+            else:
+                macd_status = "BEARISH_TERRITORY"
+        else:
+            macd_line, macd_signal, macd_hist = 0.0, 0.0, 0.0
+            macd_status = "NEUTRAL"
     else:
-        macd_status = "BEARISH_TERRITORY"
+        macd_line, macd_signal, macd_hist = 0.0, 0.0, 0.0
+        macd_status = "NEUTRAL"
 
-    # 5. ATR-14 (Average True Range)
+    # 5. ATR-14 with true Wilder's Smoothing: ATR_t = (ATR_{t-1} * 13 + TR_t) / 14
     tr_values = []
     for i in range(1, n_bars):
         h = highs[i]
@@ -328,19 +368,31 @@ def compute_technical_snapshot(ticker: str, custom_bars: Optional[List[Dict[str,
         tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
         tr_values.append(tr)
 
-    atr_period = min(14, len(tr_values))
-    atr_14 = round(sum(tr_values[-atr_period:]) / float(atr_period), 2) if atr_period > 0 else round(current_price * 0.02, 2)
-    
-    # Suggested Trailing Stop-Loss Floor (Current Price - 2 * ATR)
+    if len(tr_values) >= 14:
+        atr_val = sum(tr_values[:14]) / 14.0
+        for tr in tr_values[14:]:
+            atr_val = (atr_val * 13.0 + tr) / 14.0
+        atr_14 = round(atr_val, 2)
+    elif tr_values:
+        atr_14 = round(sum(tr_values) / float(len(tr_values)), 2)
+    else:
+        atr_14 = round(current_price * 0.02, 2)
+
+    # Volatility Risk Stop Band (Current Price - 2 * ATR)
     suggested_stop_loss = round(max(0.0, current_price - (2.0 * atr_14)), 2)
 
     # 6. Relative Volume (RVOL) & 20-Day Average Volume
     valid_vol_bars = [b for b in bars if (b.get("volume") or 0) > 0]
     rvol = 1.0
     avg_volume_20 = 0
-    if len(valid_vol_bars) >= 20:
+    if len(valid_vol_bars) >= 21:
         latest_vol = valid_vol_bars[-1]["volume"]
         avg_volume_20 = int(sum(b["volume"] for b in valid_vol_bars[-21:-1]) / 20.0)
+        rvol = round(float(latest_vol) / float(avg_volume_20), 2) if avg_volume_20 > 0 else 1.0
+    elif len(valid_vol_bars) > 1:
+        latest_vol = valid_vol_bars[-1]["volume"]
+        prev_bars = valid_vol_bars[:-1]
+        avg_volume_20 = int(sum(b["volume"] for b in prev_bars) / float(len(prev_bars)))
         rvol = round(float(latest_vol) / float(avg_volume_20), 2) if avg_volume_20 > 0 else 1.0
 
     return TechnicalSnapshot(
@@ -360,7 +412,7 @@ def compute_technical_snapshot(ticker: str, custom_bars: Optional[List[Dict[str,
         bollinger_status=bollinger_status,
         sma_20=round(sma_20, 2),
         sma_50=round(sma_50, 2),
-        sma_200=round(sma_200, 2),
+        sma_200=sma_200_val,
         dist_from_50_dma_pct=dist_from_50,
         dist_from_200_dma_pct=dist_from_200,
         trend_alignment=trend_alignment,

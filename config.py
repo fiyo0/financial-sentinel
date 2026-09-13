@@ -62,8 +62,10 @@ class SystemConfig(BaseModel):
     # Server & Auth Settings
     web_host: str = "0.0.0.0"
     web_port: int = 8000
-    dashboard_auth_enabled: bool = Field(default_factory=lambda: os.getenv("DASHBOARD_AUTH_ENABLED", "false").lower() in ("true", "1", "yes"))
+    dashboard_auth_enabled: bool = Field(default_factory=lambda: os.getenv("DASHBOARD_AUTH_ENABLED", "true").lower() in ("true", "1", "yes"))
     dashboard_password: str = Field(default_factory=lambda: os.getenv("DASHBOARD_PASSWORD", ""))
+    telegram_webhook_secret: str = Field(default_factory=lambda: os.getenv("TELEGRAM_WEBHOOK_SECRET", ""))
+    cron_secret: str = Field(default_factory=lambda: os.getenv("CRON_SECRET", ""))
 
 
 config = SystemConfig()

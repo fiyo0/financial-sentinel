@@ -89,22 +89,33 @@ class StateStore:
             return False
 
         def _do_upload():
+            import tempfile
+            tmp_fd, tmp_path = tempfile.mkstemp(suffix=".db")
+            os.close(tmp_fd)
             try:
-                # Flush WAL journal into main DB file before uploading
-                with self._get_connection() as conn:
-                    conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
-            except Exception as e:
-                logger.warning(f"Failed to checkpoint WAL before GCS backup: {e}")
+                # 1. Take a consistent, atomic snapshot using SQLite Online Backup API
+                src = sqlite3.connect(self.db_path)
+                dst = sqlite3.connect(tmp_path)
+                with dst:
+                    src.backup(dst)
+                dst.close()
+                src.close()
 
-            try:
+                # 2. Upload the consistent point-in-time snapshot to GCS
                 from google.cloud import storage
                 client = storage.Client()
                 bucket = client.bucket(bucket_name)
                 blob = bucket.blob("state.db")
-                blob.upload_from_filename(self.db_path)
-                logger.info("Successfully backed up state.db to GCS.")
+                blob.upload_from_filename(tmp_path)
+                logger.info("Successfully backed up consistent state.db snapshot to GCS.")
             except Exception as e:
-                logger.warning(f"Failed to upload state.db to GCS: {e}")
+                logger.warning(f"Failed to snapshot and upload state.db to GCS: {e}")
+            finally:
+                if os.path.exists(tmp_path):
+                    try:
+                        os.remove(tmp_path)
+                    except Exception:
+                        pass
 
         if blocking:
             _do_upload()
@@ -121,6 +132,7 @@ class StateStore:
         try:
             conn.execute("PRAGMA journal_mode=WAL;")
             conn.execute("PRAGMA synchronous=NORMAL;")
+            conn.execute("PRAGMA foreign_keys=ON;")
         except Exception:
             pass
         return conn
@@ -331,15 +343,19 @@ class StateStore:
             except sqlite3.IntegrityError:
                 return False
 
-    def save_briefing(self, briefing: BriefingReport):
+    def save_briefing(self, briefing: BriefingReport, user_id: Optional[str] = None):
+        target_user = user_id or briefing.user_id
+        target_slot = briefing.slot or "general"
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT OR REPLACE INTO briefing_history (
-                    report_id, generated_at, executive_summary, raw_news_count, payload_json, dispatched_channels
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    report_id, user_id, slot, generated_at, executive_summary, raw_news_count, payload_json, dispatched_channels
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 briefing.report_id,
+                target_user,
+                target_slot,
                 briefing.generated_at.isoformat(),
                 briefing.executive_summary,
                 briefing.raw_news_count,
@@ -347,9 +363,10 @@ class StateStore:
                 json.dumps(briefing.dispatched_channels)
             ))
             conn.commit()
-        # Also cache in kv_store so scans never disappear on portfolio changes
+        # Also cache in kv_store namespaced by user so scans never leak or collide across tenants
         try:
-            self.set_kv("latest_scan_briefing", briefing.model_dump(mode="json"))
+            kv_key = f"latest_scan_briefing:{target_user}" if target_user else "latest_scan_briefing"
+            self.set_kv(kv_key, briefing.model_dump(mode="json"))
         except Exception:
             pass
 
@@ -453,7 +470,7 @@ class StateStore:
             params = []
             conditions = []
             if user_id:
-                conditions.append("(user_id = ? OR user_id IS NULL)")
+                conditions.append("user_id = ?")
                 params.append(user_id)
             if slot:
                 conditions.append("slot = ?")
@@ -509,13 +526,13 @@ class StateStore:
         with self._get_connection() as conn:
             cursor = conn.cursor()
 
-            # 1. Deduplicate: remove redundant duplicate rows, preserving the oldest canonical entry per slot/hour/summary
+            # 1. Deduplicate: remove redundant duplicate rows, preserving the oldest canonical entry per user/slot/hour/summary
             cursor.execute("""
                 DELETE FROM briefing_history
                 WHERE rowid NOT IN (
                     SELECT MIN(rowid)
                     FROM briefing_history
-                    GROUP BY slot, substr(generated_at, 1, 13), substr(executive_summary, 1, 60)
+                    GROUP BY user_id, slot, substr(generated_at, 1, 13), substr(executive_summary, 1, 60)
                 )
             """)
             total_deleted += cursor.rowcount
@@ -534,7 +551,7 @@ class StateStore:
 
         return total_deleted
 
-    def get_market_briefing_by_id(self, report_id: str) -> Optional[Dict[str, Any]]:
+    def get_market_briefing_by_id(self, report_id: str, user_id: Optional[str] = None, is_admin: bool = False) -> Optional[Dict[str, Any]]:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -544,6 +561,8 @@ class StateStore:
             """, (report_id,))
             r = cursor.fetchone()
             if not r:
+                return None
+            if not is_admin and user_id and r["user_id"] != user_id:
                 return None
             p = {}
             if r["payload_json"]:
@@ -678,15 +697,27 @@ class StateStore:
         from auth.crypto import hash_password, encrypt_api_key
         from config import config
 
-        admin = self.get_user_by_username("forello0") or self.get_user_by_username("admin")
+        tg_user = (config.telegram_allowed_usernames[0] if config.telegram_allowed_usernames else "forello0").lower().replace("@", "")
+        tg_chat = config.telegram_chat_id or self.get_kv("telegram_active_chat_id") or ""
+
+        admin = None
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM users WHERE role = 'admin' LIMIT 1")
+            row = cursor.fetchone()
+            if row:
+                admin = dict(row)
+
         if not admin:
-            admin = self.get_user_by_telegram("forello0")
+            admin = self.get_user_by_username("forello0") or self.get_user_by_username("admin")
+            if not admin and tg_user:
+                admin = self.get_user_by_username(tg_user) or self.get_user_by_telegram(tg_user)
+            if not admin:
+                admin = self.get_user_by_telegram("forello0")
             
         admin_pass = config.dashboard_password or "sentinel_admin"
         pw_hash = hash_password(admin_pass)
         enc_key = encrypt_api_key(config.gemini_api_key) if config.gemini_api_key else ""
-        tg_user = (config.telegram_allowed_usernames[0] if config.telegram_allowed_usernames else "forello0").lower().replace("@", "")
-        tg_chat = config.telegram_chat_id or self.get_kv("telegram_active_chat_id") or ""
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -696,7 +727,7 @@ class StateStore:
                 cursor.execute("""
                     INSERT INTO users (id, username, email, password_hash, telegram_username, telegram_chat_id, encrypted_gemini_key, role)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (user_id, tg_user or "forello0", f"{tg_user or 'admin'}@sentinel.internal", pw_hash, tg_user or "forello0", tg_chat, enc_key, "admin"))
+                """, (user_id, "forello0", "admin@sentinel.internal", pw_hash, tg_user or "forello0", tg_chat, enc_key, "admin"))
                 conn.commit()
                 admin = self.get_user_by_id(user_id)
 

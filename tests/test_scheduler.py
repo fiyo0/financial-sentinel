@@ -194,7 +194,7 @@ def test_briefing_deduplication_and_pruning(sample_portfolio):
         briefing_id="dup_test_2",
         slot="midmarket",
         message="☀️ <b>MID-MARKET DUPLICATE TEST</b>",
-        user_id=None
+        user_id="usr_test"
     )
 
     # get_market_briefings should return deduplicated list (only 1)
