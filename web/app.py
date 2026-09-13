@@ -213,7 +213,9 @@ async def security_and_auth_middleware(request: Request, call_next):
             "/api/auth/register",
             "/api/telegram/webhook",
             "/api/schedule/status",
-            "/healthz"
+            "/healthz",
+            "/health",
+            "/api/health"
         }
         cron_hdr = request.headers.get("X-Cron-Secret", "")
         has_valid_cron = bool(config.cron_secret and cron_hdr and secrets.compare_digest(cron_hdr, config.cron_secret))
@@ -1573,6 +1575,8 @@ async def api_cache_stats(request: Request):
 
 
 @app.get("/healthz")
+@app.get("/health")
+@app.get("/api/health")
 async def healthz():
     """Healthcheck endpoint for Cloud Run and monitoring probes."""
     db_ok = False
