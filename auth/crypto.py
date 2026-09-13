@@ -14,7 +14,7 @@ import secrets
 import logging
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import Fernet
 import httpx
 
 logger = logging.getLogger("AuthCrypto")
@@ -73,7 +73,7 @@ def decrypt_api_key(encrypted_key: str) -> str:
     if not encrypted_key or not encrypted_key.strip():
         return ""
     clean_enc = encrypted_key.strip().encode("utf-8")
-    
+
     # 1. Primary: HKDF-derived BYOK Fernet
     try:
         f = _get_fernet_for_context(b"financial-sentinel-byok-encryption")

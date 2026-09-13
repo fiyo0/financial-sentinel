@@ -260,7 +260,7 @@ class MarketBriefingAgent(BaseAgent):
             if gainers:
                 movers_str += "🟢 Top Gainers: " + ", ".join([f"{g['ticker']} ({g['change_pct']:+.1f}%)" for g in gainers[:3]]) + "\n"
             if losers:
-                movers_str += "🔴 Top Losers: " + ", ".join([f"{l['ticker']} ({l['change_pct']:+.1f}%)" for l in losers[:3]]) + "\n"
+                movers_str += "🔴 Top Losers: " + ", ".join([f"{lsr['ticker']} ({lsr['change_pct']:+.1f}%)" for lsr in losers[:3]]) + "\n"
         else:
             movers_str += "Cross-exchange volume leaders and earnings movers."
 
@@ -394,11 +394,11 @@ class MarketBriefingAgent(BaseAgent):
         from datetime import datetime, timedelta
         from zoneinfo import ZoneInfo
         from analytics.earnings_calendar import fetch_7day_earnings_schedule
-        
+
         now_pst = datetime.now(ZoneInfo("America/Los_Angeles"))
         end_date = now_pst + timedelta(days=7)
         portfolio_tickers = [h.ticker for h in portfolio.holdings]
-        
+
         # Fetch 100% verified live scheduled earnings from official Nasdaq feed
         earnings_schedule = fetch_7day_earnings_schedule(portfolio_tickers=portfolio_tickers)
 

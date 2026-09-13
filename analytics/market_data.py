@@ -6,7 +6,7 @@ If a live price cannot be fetched, it explicitly reports failure instead of fall
 import time
 from typing import Dict, Any, Optional, List, Tuple
 import httpx
-from models import Portfolio, PortfolioHolding
+from models import Portfolio
 
 # In-memory short-term TTL cache: ticker -> (timestamp, data_dict)
 PRICE_CACHE: Dict[str, tuple[float, Dict[str, Any]]] = {}
@@ -145,7 +145,7 @@ def update_portfolio_live_prices(portfolio: Portfolio, override_all: bool = True
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     failed_tickers: List[str] = []
-    
+
     with ThreadPoolExecutor(max_workers=min(12, len(portfolio.holdings) or 1)) as executor:
         future_to_holding = {
             executor.submit(fetch_live_quote, holding.ticker): holding

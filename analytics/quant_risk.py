@@ -2,8 +2,8 @@
 Quantitative Risk & Portfolio Concentration Matrix.
 Computes quantitative stress scenarios, sector weight distributions, and estimated beta exposures.
 """
-from typing import Dict, List
-from models import Portfolio, PortfolioHolding, PortfolioStressMetric
+from typing import Dict
+from models import Portfolio, PortfolioStressMetric
 
 
 # Sector sensitivity mappings to macro factors (approximate beta & interest rate sensitivity)
@@ -28,7 +28,7 @@ class QuantRiskEngine:
     def analyze_portfolio(self, portfolio: Portfolio) -> PortfolioStressMetric:
         portfolio.recalculate_weights()
         total_equity = portfolio.total_equity()
-        
+
         if not portfolio.holdings or total_equity <= 0:
             return PortfolioStressMetric(
                 sector_concentrations={},
@@ -43,7 +43,7 @@ class QuantRiskEngine:
         for h in portfolio.holdings:
             sector = h.sector or "Unclassified"
             sector_totals[sector] = sector_totals.get(sector, 0.0) + h.market_value
-            
+
         sector_concentrations = {
             sector: round((val / total_equity) * 100.0, 2)
             for sector, val in sector_totals.items()
@@ -52,9 +52,9 @@ class QuantRiskEngine:
         # 2. Top-3 Concentration
         sorted_weights = sorted([h.weight_pct for h in portfolio.holdings], reverse=True)
         top_3_concentration = round(sum(sorted_weights[:3]), 2)
-        
+
         has_high_concentration = any(
-            weight >= self.max_sector_threshold_pct 
+            weight >= self.max_sector_threshold_pct
             for weight in sector_concentrations.values()
         ) or top_3_concentration >= 60.0
 
@@ -62,7 +62,7 @@ class QuantRiskEngine:
         weighted_beta = 0.0
         weighted_rate_sensitivity = 0.0
         weighted_oil_sensitivity = 0.0
-        
+
         for h in portfolio.holdings:
             w = h.weight_pct / 100.0
             sens = SECTOR_MACRO_SENSITIVITIES.get(h.sector, {"rate_sensitivity": -0.5, "oil_sensitivity": 0.0, "growth_beta": 1.0})
@@ -75,7 +75,7 @@ class QuantRiskEngine:
         daily_vol = (ann_vol / 100.0) / (252 ** 0.5)
         var_95_pct = round(1.645 * daily_vol * 100.0, 2)
         var_95_usd = round((var_95_pct / 100.0) * total_equity, 2)
-        
+
         # Sharpe Ratio (Assumes 4.5% Risk-Free Rate, 6.0% Equity Risk Premium * Beta)
         est_excess_return = weighted_beta * 6.5
         sharpe = round(est_excess_return / ann_vol, 2) if ann_vol > 0 else 1.0
@@ -84,7 +84,7 @@ class QuantRiskEngine:
         cash_pct = round((portfolio.cash / total_portfolio_wealth) * 100.0, 2) if total_portfolio_wealth > 0 else 0.0
 
         tech_semi_pct = sector_concentrations.get("Technology", 0) + sector_concentrations.get("Semiconductors", 0)
-        
+
         # 5. Institutional Macro Shock & Stress Testing Scenarios
         macro_scenarios = {
             "+50 bps Fed Rate Spike": round(weighted_rate_sensitivity * 0.5 * 2.5, 2), # % portfolio impact

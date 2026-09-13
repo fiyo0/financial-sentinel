@@ -4,7 +4,6 @@ using dynamic entity and sector reasoning.
 """
 import json
 import re
-import hashlib
 import time
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -89,7 +88,7 @@ class NewsIngestionAgent(BaseAgent):
             return NewsCategory.EARNINGS
         if "war" in text or "sanctions" in text or "tariff" in text or "geopolitical" in text:
             return NewsCategory.GEOPOLITICAL
-        
+
         try:
             return NewsCategory[feed_category]
         except (KeyError, ValueError):
@@ -123,10 +122,10 @@ class NewsIngestionAgent(BaseAgent):
                 link = entry.get("link", "").strip()
                 summary = entry.get("summary", "") or entry.get("description", "")
                 clean_summary = re.sub(r'<[^>]+>', '', summary).strip()
-                
+
                 if not title:
                     continue
-                
+
                 raw_hash = self.state_store.compute_hash(title, name)
                 entities = self.extract_entities(f"{title} {clean_summary}")
                 category = self.infer_category(title, clean_summary, default_cat)
@@ -231,7 +230,7 @@ class NewsIngestionAgent(BaseAgent):
                     return cached_items
 
         new_items: List[NewsItem] = []
-        
+
         # 1. If custom / fixture items are passed
         if custom_items:
             for raw in custom_items:
@@ -239,7 +238,7 @@ class NewsIngestionAgent(BaseAgent):
                 entities = self.extract_entities(f"{raw['title']} {raw.get('summary', '')}")
                 cat = self.infer_category(raw["title"], raw.get("summary", ""), raw.get("category", "BREAKING"))
                 rel = self.get_source_reliability(raw.get("url", raw["source"]))
-                
+
                 item = NewsItem(
                     id=raw.get("id", f"news_{raw_hash[:12]}"),
                     title=raw["title"],

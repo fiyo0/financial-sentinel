@@ -7,7 +7,6 @@ to compute mathematically and empirically grounded retail sentiment velocity.
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
-import urllib.parse
 import re
 import html
 import logging
@@ -84,7 +83,7 @@ class SentimentSnapshot:
             return "💬 <i>Social sentiment stream currently unavailable.</i>"
 
         emoji = "🟢" if self.composite_sentiment_score >= 65 else ("🔴" if self.composite_sentiment_score <= 35 else "⚪")
-        
+
         recency = self.format_recency_window()
         accel_str = f" · {self.acceleration_factor:.1f}x accel" if self.acceleration_factor > 0 else ""
         velocity_detail = f"{self.messages_per_hour:.1f} msgs/hr · {self.total_messages_analyzed} in {recency}{accel_str}" if self.messages_per_hour > 0 else f"{self.total_messages_analyzed} posts"
@@ -120,7 +119,7 @@ def _fetch_stocktwits_stream(ticker: str) -> Dict[str, Any]:
                 body = m.get("body", "")
                 entities = m.get("entities") or {}
                 sent_obj = entities.get("sentiment")
-                
+
                 # Check manual tags
                 if isinstance(sent_obj, dict):
                     basic = sent_obj.get("basic")
@@ -277,7 +276,7 @@ def fetch_social_sentiment_snapshot(
 
     # 1. Query StockTwits
     st_data = _fetch_stocktwits_stream(clean_ticker)
-    
+
     # 2. Query Reddit
     rd_data = _fetch_reddit_discussion(clean_ticker)
 

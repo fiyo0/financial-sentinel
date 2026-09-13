@@ -19,7 +19,7 @@ def test_statestore_deepdive_crud():
             (user_id, "test_dd", "test_dd@example.com", "hash", "user")
         )
         conn.commit()
-    
+
     # 1. Save deep dive
     dd_id = store.save_deepdive(
         user_id=user_id,
@@ -33,7 +33,7 @@ def test_statestore_deepdive_crud():
         analysis_text='Institutional deep dive report content for NVDA.'
     )
     assert dd_id.startswith('dd_')
-    
+
     # 2. Get user deepdives list
     dds = store.get_user_deepdives(user_id=user_id)
     assert len(dds) >= 1
@@ -41,7 +41,7 @@ def test_statestore_deepdive_crud():
     assert nvda_item['ticker'] == 'NVDA'
     assert nvda_item['verdict'] == 'BULLISH'
     assert nvda_item['current_price'] == 125.50
-    
+
     # 3. Get full detail by id
     detail = store.get_deepdive_by_id(dd_id, user_id=user_id)
     assert detail is not None
@@ -49,7 +49,7 @@ def test_statestore_deepdive_crud():
     assert detail['payload'] is not None
     assert detail['payload']['ticker'] == 'NVDA'
     assert detail['technicals']['rsi_14'] == 45.0
-    
+
     # 4. Delete deep dive
     del_ok = store.delete_deepdive(dd_id, user_id=user_id)
     assert del_ok is True

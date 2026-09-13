@@ -5,7 +5,7 @@ Sends formatted HTML alerts and digests to Telegram chats with automatic error r
 import re
 import logging
 import httpx
-from typing import Optional, Dict, Any, List
+from typing import Optional, List
 from config import config
 
 logger = logging.getLogger("TelegramChannel")
@@ -21,7 +21,7 @@ class TelegramChannel:
             return self.chat_id
         if config.telegram_chat_id:
             return config.telegram_chat_id
-        
+
         import os
         chat_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "telegram_chat_id.txt")
         if os.path.exists(chat_file):

@@ -2,10 +2,8 @@
 Comprehensive regression test suite verifying all 9 Critical and 14 High
 architecture, security, and quantitative remediations from the technical audit.
 """
-import os
 import time
 import json
-import sqlite3
 import pytest
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
@@ -15,16 +13,13 @@ from auth.crypto import (
     verify_session_token,
     hash_password,
     verify_password,
-    encrypt_api_key,
-    decrypt_api_key,
 )
 from config import config
 from web.app import app, orchestrator
-from models import Portfolio, PortfolioHolding, BriefingReport
+from models import Portfolio, PortfolioHolding
 from analytics.technical_indicators import (
     compute_technical_snapshot,
     _calc_ema,
-    TechnicalSnapshot,
 )
 from analytics.sentiment_stream import (
     fetch_social_sentiment_snapshot,

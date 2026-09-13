@@ -2,12 +2,10 @@
 Unit tests for analytics/sentiment_stream.py.
 Verifies StockTwits ingestion, Reddit RSS search parsing, RVOL calculations, and sentiment scoring.
 """
-import pytest
 from unittest.mock import patch, MagicMock
 from analytics.sentiment_stream import (
     fetch_social_sentiment_snapshot,
     _fetch_stocktwits_stream,
-    _fetch_reddit_discussion,
     SentimentSnapshot,
 )
 

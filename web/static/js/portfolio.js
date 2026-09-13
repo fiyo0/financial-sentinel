@@ -165,20 +165,20 @@ function renderHoldingsTable(p) {
         const pnl = (curPrice - h.avg_price) * h.shares;
         const pnlPct = h.avg_price > 0 ? ((curPrice - h.avg_price) / h.avg_price) * 100 : 0;
         const isPos = pnl >= 0;
-        const safeTicker = escapeHtml(h.ticker);
-        const safeName = escapeHtml(h.name || h.ticker);
-        const safeSector = escapeHtml(h.sector || 'Technology');
         const jsSafeTicker = encodeURIComponent(h.ticker || '');
+        const priceDisplay = curPrice > 0
+            ? raw(`$${curPrice.toFixed(2)}`)
+            : raw('<span class="text-amber-400 text-xs">Fetching...</span>');
 
-        return `
-            <tr class="hover:bg-slate-800/60 transition cursor-pointer group" onclick="analyzeHoldingTicker('${jsSafeTicker}')" title="Click to select ${safeTicker} in Ticker Deep Dive">
+        return html`
+            <tr class="hover:bg-slate-800/60 transition cursor-pointer group" onclick="analyzeHoldingTicker('${jsSafeTicker}')" title="Click to select ${h.ticker} in Ticker Deep Dive">
                 <td class="py-3 font-bold">
                     <div class="flex items-center space-x-2">
-                        <span class="text-cyan-400 group-hover:text-cyan-300 font-bold tracking-wide">${safeTicker}</span>
-                        <span class="px-1.5 py-0.5 bg-slate-800 text-slate-300 rounded text-[10px] font-sans font-normal border border-slate-700/50">${safeSector}</span>
+                        <span class="text-cyan-400 group-hover:text-cyan-300 font-bold tracking-wide">${h.ticker}</span>
+                        <span class="px-1.5 py-0.5 bg-slate-800 text-slate-300 rounded text-[10px] font-sans font-normal border border-slate-700/50">${h.sector || 'Technology'}</span>
                         <span class="text-[10px] text-cyan-400 opacity-0 group-hover:opacity-100 transition font-sans font-medium">🔬 Deep Dive →</span>
                     </div>
-                    <div class="text-[10px] text-slate-400 font-normal font-sans truncate max-w-[200px] mt-0.5">${safeName}</div>
+                    <div class="text-[10px] text-slate-400 font-normal font-sans truncate max-w-[200px] mt-0.5">${h.name || h.ticker}</div>
                 </td>
                 <td class="py-3 text-right">
                     <div class="text-slate-200 font-bold font-mono">${h.shares.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 4 })}</div>
@@ -186,7 +186,7 @@ function renderHoldingsTable(p) {
                 </td>
                 <td class="py-3 text-right">
                     <div class="font-bold text-slate-100 font-mono">
-                        ${curPrice > 0 ? '$' + curPrice.toFixed(2) : '<span class="text-amber-400 text-xs">Fetching...</span>'}
+                        ${priceDisplay}
                     </div>
                     <div class="text-[10px] ${isPos ? 'text-emerald-400' : 'text-rose-400'} font-mono">
                         ${curPrice > 0 ? (isPos ? '+' : '') + pnlPct.toFixed(1) + '%' : 'Live'}

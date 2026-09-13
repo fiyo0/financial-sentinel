@@ -1,4 +1,3 @@
-import os
 import pytest
 from fastapi.testclient import TestClient
 
@@ -8,7 +7,7 @@ from auth.crypto import (
 )
 from storage.state_store import StateStore
 from orchestrator import FinancialSentinelOrchestrator
-from models import Portfolio, PortfolioHolding
+from models import PortfolioHolding
 from web.app import app
 
 

@@ -13,26 +13,26 @@ class SystemConfig(BaseModel):
     # App Metadata
     app_name: str = "Financial Sentinel & Alpha Multi-Agent System"
     version: str = "2.3.0"
-    
+
     # LLM Settings
     gemini_api_key: str = Field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
     model_name: str = Field(default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-3.8-flash"))
 
     use_llm: bool = Field(default_factory=lambda: bool(os.getenv("GEMINI_API_KEY", "")))
-    
+
     # Storage
     db_path: str = Field(default_factory=lambda: os.getenv("STATE_DB_PATH", "storage/state.db"))
-    
+
     # Noise & Risk Thresholds
     p0_impact_threshold_pct: float = 3.5  # Expected price movement >= 3.5% triggers P0 instant alert
     critic_min_confidence_pct: float = 60.0  # Critic threshold to approve
     max_sector_concentration_pct: float = 35.0  # Alert if a single sector > 35%
-    
+
     # Token Budget & Cost Constraints
     daily_token_limit: int = Field(default_factory=lambda: int(os.getenv("DAILY_TOKEN_LIMIT", "500000")))
     max_tokens_per_cycle: int = Field(default_factory=lambda: int(os.getenv("MAX_TOKENS_PER_CYCLE", "50000")))
     enable_token_governance: bool = True
-    
+
     # Notification Channels & Security
     telegram_bot_token: str = Field(default_factory=lambda: os.getenv("TELEGRAM_BOT_TOKEN", ""))
     telegram_chat_id: str = Field(default_factory=lambda: os.getenv("TELEGRAM_CHAT_ID", ""))
@@ -47,7 +47,7 @@ class SystemConfig(BaseModel):
     generic_webhook_url: str = Field(default_factory=lambda: os.getenv("GENERIC_WEBHOOK_URL", ""))
     email_smtp_host: str = Field(default_factory=lambda: os.getenv("SMTP_HOST", ""))
     email_recipient: str = Field(default_factory=lambda: os.getenv("EMAIL_RECIPIENT", ""))
-    
+
     # Default RSS Feeds
     rss_feeds: List[Dict[str, str]] = Field(
         default_factory=lambda: [

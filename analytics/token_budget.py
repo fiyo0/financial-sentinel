@@ -3,8 +3,7 @@ Token Budget & Cost Management Engine.
 Monitors token consumption, enforces daily/cycle quotas, estimates USD costs,
 and handles graceful fallback to deterministic heuristics when budgets are reached.
 """
-from datetime import datetime, date
-from typing import Dict, Any, Optional
+from datetime import datetime
 from pydantic import BaseModel, Field
 from storage.state_store import StateStore
 from config import config
@@ -67,7 +66,7 @@ class TokenBudgetManager:
     ) -> TokenUsageRecord:
         total = prompt_tokens + completion_tokens
         cost = self.calculate_cost(prompt_tokens, completion_tokens, model_name)
-        
+
         record = TokenUsageRecord(
             agent_name=agent_name,
             prompt_tokens=prompt_tokens,
@@ -75,7 +74,7 @@ class TokenBudgetManager:
             total_tokens=total,
             estimated_cost_usd=cost
         )
-        
+
         # Persist in state database
         self.state_store.record_token_usage(
             agent_name=agent_name,
@@ -90,7 +89,7 @@ class TokenBudgetManager:
         stats = self.state_store.get_today_token_usage()
         used = stats.get("total_tokens", 0)
         cost = stats.get("total_cost_usd", 0.0)
-        
+
         exhausted = used >= self.daily_token_limit
         remaining = max(0, self.daily_token_limit - used)
 

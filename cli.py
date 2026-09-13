@@ -8,11 +8,10 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
-from rich import print as rprint
 
 from orchestrator import FinancialSentinelOrchestrator
 from scheduler import MonitoringScheduler
-from models import Portfolio, PortfolioHolding, AlertPriority, DirectionalImpact, CriticVerdict
+from models import Portfolio, CriticVerdict
 
 
 console = Console()

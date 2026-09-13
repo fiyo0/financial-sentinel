@@ -5,11 +5,10 @@ and dispatches them across all configured channels (Telegram, Discord, Slack, Em
 import uuid
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
-from typing import List, Dict, Any, Optional
+from typing import List, Any, Optional
 from models import (
     BriefingReport, HoldingExposureAnalysis, OpportunityAnalysis,
-    CriticReview, CriticVerdict, AlertPriority, DirectionalImpact,
-    PortfolioStressMetric
+    CriticReview, CriticVerdict, AlertPriority, PortfolioStressMetric
 )
 from agents.base_agent import BaseAgent
 from channels.telegram import TelegramChannel
@@ -52,7 +51,7 @@ class NotificationAgent(BaseAgent):
     ) -> BriefingReport:
         # 1. Filter items approved by Critic Agent
         approved_target_ids = {
-            r.target_id for r in critic_reviews 
+            r.target_id for r in critic_reviews
             if r.verdict in (CriticVerdict.APPROVED, CriticVerdict.APPROVED_WITH_CAVEATS)
         }
 
@@ -166,7 +165,7 @@ class NotificationAgent(BaseAgent):
 
     def format_telegram_message(self, report: BriefingReport) -> str:
         lines = [
-            f"<b>🛡️ FINANCIAL SENTINEL BRIEFING</b>",
+            "<b>🛡️ FINANCIAL SENTINEL BRIEFING</b>",
             f"<i>{_format_pst_timestamp(report.generated_at, '%Y-%m-%d %I:%M %p %Z')}</i>\n",
             f"<b>Executive Summary:</b>\n{report.executive_summary}\n"
         ]

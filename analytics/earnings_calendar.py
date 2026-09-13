@@ -78,7 +78,7 @@ def fetch_7day_earnings_schedule(portfolio_tickers: Optional[List[str]] = None) 
     def _fetch_single_day(day_date: datetime) -> Optional[Dict[str, Any]]:
         date_str = day_date.strftime("%Y-%m-%d")
         day_name = day_date.strftime("%A, %B %d")
-        
+
         day_rows = fetch_earnings_for_date(date_str)
         if not day_rows:
             return None

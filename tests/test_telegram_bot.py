@@ -4,7 +4,7 @@ specifically testing the /<ticker> shorthand feature and auto-archiving.
 """
 import os
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from orchestrator import FinancialSentinelOrchestrator
 from channels.telegram_bot import FinancialSentinelTelegramBot, RESERVED_COMMANDS
 
@@ -26,14 +26,14 @@ def telegram_test_setup(temp_orchestrator, sample_portfolio_obj):
     temp_orchestrator.persist_active_portfolio(sample_portfolio_obj)
     admin = temp_orchestrator.state_store.get_or_create_default_admin()
     bot = FinancialSentinelTelegramBot(orchestrator=temp_orchestrator)
-    
+
     sent_messages = []
     edited_messages = []
-    
+
     bot.send_message = lambda msg, chat_id=None: sent_messages.append({"text": msg, "chat_id": chat_id})
     bot.send_message_returning_id = lambda msg, chat_id=None: 999
     bot.edit_message = lambda msg, chat_id=None, msg_id=None: edited_messages.append({"text": msg, "chat_id": chat_id, "id": msg_id})
-    
+
     return bot, temp_orchestrator, admin, sent_messages, edited_messages
 
 
@@ -52,13 +52,13 @@ def test_ticker_shorthand_execution(telegram_test_setup):
     bot, orch, admin, sent, edited = telegram_test_setup
 
     mock_analysis = "🔬 <b>STOCK ANALYSIS: NVDA</b>\n<b>Verdict:</b> 🟢 <b>BUY (ACCUMULATE)</b>"
-    
+
     with patch("analytics.market_data.fetch_live_quote", return_value={"name": "NVIDIA Corporation", "current_price": 130.0, "sector": "Technology"}), \
          patch.object(orch.analysis_agent, "analyze_single_ticker", return_value=mock_analysis) as mock_agent_call:
-        
+
         # Test uppercase /NVDA
         bot._handle_incoming_message("/NVDA", "test_chat", "Investor")
-        
+
         assert mock_agent_call.called
         assert mock_agent_call.call_args[1]["ticker"] == "NVDA"
         assert any("BUY" in m["text"] for m in edited)
@@ -79,7 +79,7 @@ def test_ticker_shorthand_lowercase_and_cashtag(telegram_test_setup):
 
     with patch("analytics.market_data.fetch_live_quote", return_value={"name": "Apple Inc.", "current_price": 230.0, "sector": "Technology"}), \
          patch.object(orch.analysis_agent, "analyze_single_ticker", return_value=mock_analysis) as mock_agent_call:
-        
+
         # Lowercase /aapl
         bot._handle_incoming_message("/aapl", "test_chat", "Investor")
         assert mock_agent_call.call_args[1]["ticker"] == "AAPL"
@@ -98,7 +98,7 @@ def test_analysis_command_aliases(telegram_test_setup):
 
     with patch("analytics.market_data.fetch_live_quote", return_value={"name": "Microsoft", "current_price": 420.0, "sector": "Technology"}), \
          patch.object(orch.analysis_agent, "analyze_single_ticker", return_value=mock_analysis) as mock_agent_call:
-        
+
         bot._handle_incoming_message("/analysis MSFT", "test_chat", "Investor")
         assert mock_agent_call.call_args[1]["ticker"] == "MSFT"
 
@@ -177,7 +177,7 @@ def test_unrecognized_ticker_aborts_without_llm(telegram_test_setup):
 
     with patch("analytics.market_data.fetch_live_quote", return_value={"name": "FOOBAR", "current_price": 0.0}), \
          patch.object(orch.analysis_agent, "analyze_single_ticker") as mock_analysis:
-        
+
         bot._handle_incoming_message("/foobar", "test_chat", "Investor")
         assert not mock_analysis.called
         assert any("Ticker 'FOOBAR' Not Recognized" in m["text"] for m in sent)

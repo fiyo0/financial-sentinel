@@ -11,7 +11,6 @@ import re
 from typing import Optional, Dict, Any, List
 import httpx
 from config import config
-from models import Portfolio
 from analytics.market_data import update_portfolio_live_prices
 
 logger = logging.getLogger("TelegramBot")
@@ -151,7 +150,7 @@ class FinancialSentinelTelegramBot:
         target_chat = chat_id or self.chat_id
         if not target_chat or not self.bot_token:
             return False
-        
+
         chunks = self._split_message(text)
         success = True
 
@@ -366,7 +365,7 @@ class FinancialSentinelTelegramBot:
             if status_id:
                 self.edit_message(f"🔬 <b>Analyzing {clean_sym}... [80%]</b>\n<i>🧠 Gemini 3.8 deep thinking: evaluating fundamental moats & portfolio synergy...</i>", chat_id, status_id)
 
-            analysis_msg = self.orchestrator.analysis_agent.analyze_single_ticker(
+            analysis_obj = self.orchestrator.analysis_agent.analyze_single_ticker_structured(
                 ticker=clean_sym,
                 portfolio=portfolio,
                 news_items=news_items,
@@ -375,26 +374,13 @@ class FinancialSentinelTelegramBot:
                 sentiment_snapshot=sent_snap,
                 api_key=user_gemini_key
             )
+            analysis_msg = analysis_obj.telegram_html
 
             # Auto-archive in user's deepdive repository so it's instantly accessible in the Web UI
             try:
                 from dataclasses import asdict
-                upper_analysis = analysis_msg.upper()
-                verdict = "NEUTRAL"
-                if "BUY" in upper_analysis or "BULLISH" in upper_analysis:
-                    verdict = "BULLISH"
-                elif "PASS" in upper_analysis or "AVOID" in upper_analysis or "BEARISH" in upper_analysis:
-                    verdict = "BEARISH"
-                elif "CAUTION" in upper_analysis or "HIGH RISK" in upper_analysis:
-                    verdict = "CAUTION"
-                elif "HOLD" in upper_analysis:
-                    verdict = "HOLD"
-
-                conviction_score = 85.0
-                if tech_snap and tech_snap.is_live:
-                    if (tech_snap.rsi_14 <= 35 and verdict == "BULLISH") or (tech_snap.rsi_14 >= 75 and verdict == "BEARISH"):
-                        conviction_score = 92.0
-
+                verdict = analysis_obj.verdict
+                conviction_score = analysis_obj.conviction_score
                 company_name = quote.get("name") or clean_sym
                 current_price = float(quote.get("current_price", 0.0) or 0.0)
 
@@ -406,7 +392,13 @@ class FinancialSentinelTelegramBot:
                     "sentiment": asdict(sent_snap) if sent_snap else None,
                     "analysis": analysis_msg,
                     "verdict": verdict,
-                    "conviction_score": conviction_score
+                    "conviction_score": conviction_score,
+                    "thesis": analysis_obj.thesis,
+                    "catalysts": analysis_obj.catalysts,
+                    "risks": analysis_obj.risks,
+                    "target_price": analysis_obj.target_price,
+                    "stop_floor": analysis_obj.stop_floor,
+                    "suggested_allocation_usd": analysis_obj.suggested_allocation_usd
                 }
 
                 self.orchestrator.state_store.save_deepdive(
@@ -625,7 +617,7 @@ class FinancialSentinelTelegramBot:
                 portfolio = self.orchestrator.get_active_portfolio(user_id=user_id)
                 news_items = self.orchestrator.news_agent.ingest_all_feeds()
                 opps = self.orchestrator.opportunity_agent.scan_opportunities(news_items, portfolio, api_key=user_gemini_key)
-                
+
                 if not opps:
                     self.send_message("No high-conviction asymmetric opportunities surfaced at this time.", chat_id)
                     return
@@ -634,7 +626,7 @@ class FinancialSentinelTelegramBot:
                 cash_pct = (portfolio.cash / tot_eq * 100.0) if tot_eq > 0 else 0.0
 
                 lines = [
-                    f"🚀 <b>HIGH-CONVICTION MARKET OPPORTUNITIES</b>",
+                    "🚀 <b>HIGH-CONVICTION MARKET OPPORTUNITIES</b>",
                     f"<i>Tailored to your {len(portfolio.holdings)} holdings and ${portfolio.cash:,.2f} ({cash_pct:.1f}%) deployable cash</i>\n"
                 ]
                 for opp in opps[:3]:
@@ -644,7 +636,7 @@ class FinancialSentinelTelegramBot:
                     lines.append(f"  <b>Target:</b> +{opp.estimated_upside_pct:.1f}% Upside | Stop: -{opp.suggested_stop_loss_pct:.1f}% | R/R {opp.asymmetric_ratio}:1")
                     lines.append(f"  <b>Catalyst:</b> {opp.catalyst_description}")
                     lines.append(f"  <b>Portfolio Synergy:</b> {opp.portfolio_synergy}\n")
-                
+
                 first_tick = opps[0].ticker if opps else "VRT"
                 lines.append(f"💡 <i>Type <code>/{first_tick}</code> or <code>/analysis {first_tick}</code> for a comprehensive deep dive, fundamental catalysts, and buy recommendation.</i>")
                 self.send_message("\n".join(lines), chat_id)
@@ -743,9 +735,9 @@ class FinancialSentinelTelegramBot:
                 tot_eq = portfolio.total_equity()
                 holdings_val = sum(h.market_value for h in portfolio.holdings)
                 cash_pct = (portfolio.cash / tot_eq * 100.0) if tot_eq > 0 else 0.0
-                
+
                 lines = [
-                    f"💼 <b>ACTIVE PORTFOLIO SUMMARY</b>",
+                    "💼 <b>ACTIVE PORTFOLIO SUMMARY</b>",
                     f"Total Equity: <b>${tot_eq:,.2f}</b>",
                     f"Holdings Value: <b>${holdings_val:,.2f}</b> ({len(portfolio.holdings)} Assets)",
                     f"💰 Deployable Cash: <b>${portfolio.cash:,.2f}</b> ({cash_pct:.1f}% Dry Powder)\n"
@@ -793,7 +785,7 @@ class FinancialSentinelTelegramBot:
                 moonshots = self.orchestrator.opportunity_agent.discover_moonshot_opportunities(
                     portfolio, count=3, api_key=user_gemini_key
                 )
-                
+
                 if not moonshots:
                     self.send_message("No moonshots surfaced at this time.", chat_id)
                     return
@@ -838,11 +830,11 @@ class FinancialSentinelTelegramBot:
             try:
                 from analytics.market_data import fetch_live_quote
                 quote = fetch_live_quote(target_ticker)
-                
+
                 cur_price = quote.get("current_price") or 0.0
                 company_name = quote.get("name") or target_ticker
                 sector = quote.get("sector") or "Technology"
-                
+
                 if purchase_price is None:
                     purchase_price = cur_price if cur_price > 0 else 100.0
 
@@ -850,7 +842,7 @@ class FinancialSentinelTelegramBot:
                     cur_price = purchase_price
 
                 portfolio = self.orchestrator.get_active_portfolio(user_id=user_id)
-                
+
                 existing_holding = None
                 for h in portfolio.holdings:
                     if h.ticker.upper() == target_ticker:
@@ -862,7 +854,7 @@ class FinancialSentinelTelegramBot:
                     old_avg = existing_holding.avg_price
                     new_shares = old_shares + shares_to_add
                     new_avg = ((old_shares * old_avg) + (shares_to_add * purchase_price)) / new_shares
-                    
+
                     existing_holding.shares = new_shares
                     existing_holding.avg_price = new_avg
                     existing_holding.current_price = cur_price
@@ -930,7 +922,7 @@ class FinancialSentinelTelegramBot:
             self.send_message(f"⏳ <i>Processing removal for {target_ticker}...</i>", chat_id)
             try:
                 portfolio = self.orchestrator.get_active_portfolio(user_id=user_id)
-                
+
                 existing_holding = None
                 for h in portfolio.holdings:
                     if h.ticker.upper() == target_ticker:
@@ -1003,7 +995,7 @@ class FinancialSentinelTelegramBot:
                 holdings_str = ', '.join([f"{h.ticker} ({h.weight_pct}%, ${h.current_price})" for h in portfolio.holdings])
                 context = f"Portfolio Equity: ${portfolio.total_equity():,.2f}. Holdings: {holdings_str}"
                 sys_inst = f"You are the Lead Portfolio Manager for this investor. Context: {context}. Be concise, institutional, and direct. Format with clean HTML/text."
-                
+
                 reply = self.orchestrator.notification_agent.query_llm_text(
                     prompt=f"Investor Question: {text}\nAnswer:",
                     system_instruction=sys_inst,

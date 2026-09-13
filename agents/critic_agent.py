@@ -2,12 +2,11 @@
 Risk & Critic Agent: Acts as an adversarial auditor, evaluating analyses and opportunities for confirmation bias,
 low-confidence sources, and hype bubbles using unified batch evaluation.
 """
-from typing import List, Optional, Dict, Any, Union
+from typing import List, Optional, Any
 from models import (
     HoldingExposureAnalysis, OpportunityAnalysis, CriticReview, CriticVerdict, AlertPriority, NewsItem
 )
 from agents.base_agent import BaseAgent
-from config import config
 
 
 CREDIBILITY_GRADES = {
@@ -155,7 +154,7 @@ class RiskCriticAgent(BaseAgent):
         name = analysis.holding_name or t
         is_direct_regulatory = any("SEC" in c or "Exchange" in c or "Quantitative" in c for c in analysis.citations)
         source_score = 0.95 if is_direct_regulatory else (0.90 if news_item else 0.88)
-        
+
         is_critical = (analysis.priority == AlertPriority.P0_CRITICAL or analysis.impact_magnitude_pct >= 4.0)
         verdict = CriticVerdict.APPROVED_WITH_CAVEATS if is_critical else CriticVerdict.APPROVED
         confidence = 78.0 if is_critical else 90.0
@@ -185,7 +184,7 @@ class RiskCriticAgent(BaseAgent):
     ) -> CriticReview:
         is_speculative = (opp.estimated_upside_pct >= 40.0 or opp.asymmetric_ratio >= 4.5 or opp.suggested_stop_loss_pct <= 4.0)
         is_high_synergy = "Diversification" in opp.portfolio_synergy or "Sector" in opp.portfolio_synergy
-        
+
         if is_speculative:
             verdict = CriticVerdict.REJECTED_SPECULATIVE
             confidence = 52.0

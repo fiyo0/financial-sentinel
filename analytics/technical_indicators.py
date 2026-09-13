@@ -3,7 +3,7 @@ Deterministic Technical Analysis & Momentum Engine.
 Computes mathematically verified technical indicators (RSI-14, MACD, Bollinger Bands, Moving Averages, ATR)
 from verified daily price bars with zero LLM math hallucination.
 """
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from typing import List, Dict, Any, Optional, Tuple
 import math
 import time
@@ -55,7 +55,7 @@ class TechnicalSnapshot:
         """Compact single-line technical pulse for telegram and executive briefs."""
         if not self.is_live:
             return "Technical Indicators: Unavailable"
-        
+
         cross_str = f" | {self.trend_alignment}" if "CROSS" in self.trend_alignment else ""
         dma_200_part = f" | 200 DMA: {self.dist_from_200_dma_pct:+.1f}%" if self.dist_from_200_dma_pct is not None else ""
         return (
@@ -69,17 +69,17 @@ class TechnicalSnapshot:
         """Rich HTML formatted section for Telegram."""
         if not self.is_live:
             return "📈 <i>Technical momentum data currently unavailable.</i>"
-        
+
         rsi_emoji = "🔴" if self.rsi_14 >= 70 else ("🟢" if self.rsi_14 <= 30 else "⚪")
         macd_emoji = "🟢" if "BULLISH" in self.macd_status else ("🔴" if "BEARISH" in self.macd_status else "⚪")
-        
+
         dma_50_sign = "+" if self.dist_from_50_dma_pct >= 0 else ""
         if self.sma_200 is not None and self.dist_from_200_dma_pct is not None:
             dma_200_sign = "+" if self.dist_from_200_dma_pct >= 0 else ""
             dma_200_str = f"200 DMA: <code>${self.sma_200:.2f}</code> ({dma_200_sign}{self.dist_from_200_dma_pct:.1f}%)"
         else:
             dma_200_str = "200 DMA: <code>N/A (&lt;200 bars)</code>"
-        
+
         squeeze_alert = " ⚠️ <i>[Volatility Squeeze in Progress]</i>" if self.bollinger_status == "VOLATILITY_SQUEEZE" else ""
 
         return (
@@ -124,7 +124,7 @@ def _fetch_historical_bars(ticker: str, force_fresh: bool = False) -> List[Dict[
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
     }
-    
+
     # 1. Primary: Robinhood Marketdata Historicals (1 year daily)
     rh_url = f"https://api.robinhood.com/marketdata/historicals/{clean_ticker}/?interval=day&span=year"
     try:
@@ -164,7 +164,7 @@ def _fetch_historical_bars(ticker: str, force_fresh: bool = False) -> List[Dict[
             lows = quotes.get("low", [])
             opens = quotes.get("open", [])
             volumes = quotes.get("volume", [])
-            
+
             bars = []
             for i in range(len(closes)):
                 c = closes[i]
@@ -363,9 +363,9 @@ def compute_technical_snapshot(ticker: str, custom_bars: Optional[List[Dict[str,
     tr_values = []
     for i in range(1, n_bars):
         h = highs[i]
-        l = lows[i]
+        lo = lows[i]
         prev_c = closes[i - 1]
-        tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
+        tr = max(h - lo, abs(h - prev_c), abs(lo - prev_c))
         tr_values.append(tr)
 
     if len(tr_values) >= 14:

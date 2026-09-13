@@ -277,14 +277,20 @@ function renderBriefing(b) {
                             sign = '~';
                         }
 
-                        const critBadge = isCrit ? `
+                        const critBadge = isCrit ? raw(`
                             <span class="px-2 py-0.5 rounded text-[10px] font-black bg-red-600/30 text-red-300 border border-red-500/50 animate-pulse flex items-center space-x-1" title="P0 Critical: Expected price volatility > 3%">
                                 <span>⚡</span>
                                 <span>P0 CRITICAL</span>
                             </span>
-                        ` : '';
+                        `) : raw('');
 
-                        return `
+                        const watchItems = r.key_risks && r.key_risks.length > 0 ? raw(`
+                            <div class="text-[10px] text-slate-400 font-mono">
+                                <span class="text-amber-400/90 font-semibold">⚠️ Watch Items:</span> ${r.key_risks.map(k => esc(k)).join(' &bull; ')}
+                            </div>
+                        `) : raw('');
+
+                        return html`
                             <div class="p-4 rounded-xl border ${borderClass} text-xs space-y-2 shadow-lg transition-all">
                                 <div class="flex items-center justify-between">
                                     <div class="font-bold text-sm ${titleColor} flex items-center space-x-2">
@@ -303,11 +309,7 @@ function renderBriefing(b) {
                                     <span>🎯 Action:</span>
                                     <span>${r.recommended_action || 'Hold and monitor'}</span>
                                 </div>
-                                ${r.key_risks && r.key_risks.length > 0 ? `
-                                    <div class="text-[10px] text-slate-400 font-mono">
-                                        <span class="text-amber-400/90 font-semibold">⚠️ Watch Items:</span> ${r.key_risks.join(' &bull; ')}
-                                    </div>
-                                ` : ''}
+                                ${watchItems}
                                 <div class="flex items-center justify-between pt-2.5 border-t border-slate-800/80 text-[10px] text-slate-400">
                                     <span class="font-mono text-cyan-400/90">ℹ️ Source: <b>${r.transmission_channel || 'Direct Market News'}</b></span>
                                     <div id="fb-wrap-${r.holding_ticker}_${r.news_item_id || 'item'}" class="flex items-center space-x-1.5">
@@ -332,7 +334,7 @@ function renderBriefing(b) {
                 if (opps.length === 0) {
                     oppCont.innerHTML = '<div class="p-4 bg-dark-900 border border-slate-800 rounded-xl text-xs text-slate-500">No new asymmetric catalysts detected in this cycle.</div>';
                 } else {
-                    oppCont.innerHTML = opps.map(o => `
+                    oppCont.innerHTML = opps.map(o => html`
                         <div class="p-4 bg-dark-900 border border-emerald-900/60 bg-emerald-950/10 rounded-xl text-xs space-y-2.5 shadow-lg">
                             <div class="flex items-center justify-between">
                                 <div class="font-bold text-sm text-emerald-400">

@@ -2,9 +2,7 @@
 Base agent infrastructure supporting Gemini 3.8 / 3.7 / 3.5 LLM inference with automated rate-limit failover and token governance.
 """
 
-import os
 import json
-import re
 import time
 import logging
 from typing import Dict, Any, Optional
@@ -139,7 +137,7 @@ class BaseAgent:
                         text = text[3:]
                     if text.endswith("```"):
                         text = text[:-3]
-                    
+
                     # Extract first valid JSON block if model returns conversational markdown
                     clean_text = text.strip()
                     if "{" in clean_text and "}" in clean_text:

@@ -2,13 +2,11 @@
 Unit tests for analytics/technical_indicators.py.
 Verifies mathematical correctness of RSI-14, MACD, Bollinger Bands, Moving Averages, and ATR.
 """
-import pytest
 from unittest.mock import patch, MagicMock
 from analytics.technical_indicators import (
     compute_technical_snapshot,
     _calc_ema,
     _fetch_historical_bars,
-    TechnicalSnapshot,
 )
 
 

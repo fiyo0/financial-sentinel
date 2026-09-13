@@ -3,7 +3,7 @@ Data models and schemas for the Financial Multi-Agent System.
 """
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Literal
 from pydantic import BaseModel, Field
 
 
@@ -33,7 +33,7 @@ class CriticVerdict(str, Enum):
     REJECTED_LOW_CREDIBILITY = "REJECTED_LOW_CREDIBILITY"
 
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import computed_field
 
 
 class PortfolioHolding(BaseModel):
@@ -266,4 +266,19 @@ class UserSettingsUpdateRequest(BaseModel):
     email: Optional[str] = None
     new_password: Optional[str] = None
     cash: Optional[float] = None
+
+
+class SingleTickerAnalysis(BaseModel):
+    ticker: str
+    company_name: str
+    verdict: Literal["BULLISH", "BEARISH", "NEUTRAL", "HOLD", "CAUTION"]
+    conviction_score: float = Field(default=85.0, ge=0.0, le=100.0, description="Conviction score between 0.0 and 100.0")
+    thesis: str = Field(default="", description="Summary thesis grounded in fundamentals, technicals, and sentiment")
+    catalysts: List[str] = Field(default_factory=list, description="Key fundamental growth drivers and positive catalysts")
+    risks: List[str] = Field(default_factory=list, description="Key operational, competitive, or valuation downside risks")
+    target_price: Optional[float] = Field(None, description="Forward 6-12 month target price if applicable")
+    stop_floor: Optional[float] = Field(None, description="Volatility-adjusted stop loss floor")
+    suggested_allocation_usd: float = Field(0.0, description="Recommended dollar allocation from available cash")
+    telegram_html: str = Field(default="", description="Formatted Telegram HTML output with <b>, <i>, and <code> tags")
+
 

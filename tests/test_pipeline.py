@@ -5,7 +5,7 @@ import os
 import json
 import pytest
 from orchestrator import FinancialSentinelOrchestrator
-from models import Portfolio, AlertPriority, DirectionalImpact, CriticVerdict
+from models import DirectionalImpact, CriticVerdict
 
 
 @pytest.fixture
@@ -145,7 +145,7 @@ def test_cash_persistence_and_retrieval(temp_orchestrator, sample_portfolio_obj)
     """
     sample_portfolio_obj.cash = 15500.0
     temp_orchestrator.persist_active_portfolio(sample_portfolio_obj)
-    
+
     # Reload active portfolio
     reloaded_p = temp_orchestrator.get_active_portfolio()
     assert reloaded_p.cash == 15500.0
@@ -253,7 +253,7 @@ def test_telegram_add_and_rm_execution_flow(temp_orchestrator, sample_portfolio_
     # 2. Test /add existing ticker (average in)
     with patch("analytics.market_data.fetch_live_quote", return_value={"name": "Palantir", "sector": "Technology", "current_price": 35.00}):
         bot._handle_incoming_message("/add PLTR 10 @ 40.00", "test_chat", "Investor")
-    
+
     p_after_add2 = temp_orchestrator.get_active_portfolio()
     pltr_h2 = next((h for h in p_after_add2.holdings if h.ticker == "PLTR"), None)
     assert pltr_h2.shares == 20.0

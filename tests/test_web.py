@@ -359,7 +359,6 @@ def test_api_market_briefings_endpoints(client, monkeypatch):
 
 
 def test_api_analyze_ticker(client, monkeypatch):
-    from unittest.mock import MagicMock
     from analytics.technical_indicators import TechnicalSnapshot
     from analytics.sentiment_stream import SentimentSnapshot
     from web.app import orchestrator

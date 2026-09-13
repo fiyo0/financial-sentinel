@@ -4,7 +4,7 @@ Orchestrator: Coordinates the full lifecycle across all 5 agents, quantitative a
 import os
 import json
 import csv
-from datetime import datetime
+import logging
 from typing import Optional, List, Dict, Any
 from models import Portfolio, PortfolioHolding, BriefingReport
 from storage.state_store import StateStore
@@ -17,6 +17,8 @@ from agents.opportunity_agent import OpportunityDiscoveryAgent
 from agents.critic_agent import RiskCriticAgent
 from agents.notification_agent import NotificationAgent
 from config import config
+
+logger = logging.getLogger(__name__)
 
 
 class FinancialSentinelOrchestrator:
@@ -122,7 +124,7 @@ class FinancialSentinelOrchestrator:
     def persist_active_portfolio(self, portfolio: Portfolio, user_id: Optional[str] = None) -> Dict[str, Any]:
         portfolio.deduplicate_and_aggregate()
         dumped = portfolio.model_dump(mode="json")
-        
+
         admin = self.state_store.get_or_create_default_admin()
         admin_id = admin["id"] if admin else None
 
@@ -135,7 +137,7 @@ class FinancialSentinelOrchestrator:
         if target_uid == admin_id or not user_id:
             self.state_store.set_kv("active_portfolio", dumped)
             self.state_store.set_kv("portfolio_cash", portfolio.cash)
-            
+
             data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
             active_json = os.path.join(data_dir, "active_portfolio.json")
             os.makedirs(data_dir, exist_ok=True)

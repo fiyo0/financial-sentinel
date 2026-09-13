@@ -4,12 +4,11 @@ to surface high-conviction asymmetric alpha plays outside current portfolio hold
 Zero static catalogs.
 """
 
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Any
 from models import (
-    Portfolio, NewsItem, NewsCategory, OpportunityAnalysis, OpportunityHorizon, AlertPriority
+    Portfolio, NewsItem, OpportunityAnalysis, OpportunityHorizon, AlertPriority
 )
 from agents.base_agent import BaseAgent
-from config import config
 
 
 class OpportunityDiscoveryAgent(BaseAgent):

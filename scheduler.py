@@ -9,10 +9,10 @@ import threading
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from typing import Optional, Callable, Set, Dict, Any
+from typing import Optional, Callable, Set
 
 from orchestrator import FinancialSentinelOrchestrator
-from models import Portfolio, NewsCategory
+from models import Portfolio
 from agents.market_briefing_agent import MarketBriefingAgent
 from analytics.market_data import fetch_market_overview, fetch_market_movers, update_portfolio_live_prices
 from channels.telegram import TelegramChannel
@@ -319,7 +319,7 @@ class MonitoringScheduler:
             cycle_count += 1
             now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
             print(f"\n[{now_str}] 🔄 Executing Monitoring Cycle #{cycle_count}...")
-            
+
             try:
                 briefing = self.orchestrator.run_monitoring_cycle(self.portfolio, live=True)
                 print(f"✅ Cycle #{cycle_count} Completed.")

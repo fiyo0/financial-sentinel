@@ -8,7 +8,7 @@ import os
 import logging
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
-from models import NewsItem, BriefingReport, HoldingExposureAnalysis, OpportunityAnalysis, CriticReview
+from models import NewsItem, BriefingReport
 
 import threading
 
@@ -141,7 +141,7 @@ class StateStore:
     def _init_db(self):
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            
+
             # Ingested news table (for deduplication & story evolution)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS ingested_news (
@@ -157,7 +157,7 @@ class StateStore:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
-            
+
             # Processed alerts & analyses
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS processed_alerts (
@@ -293,7 +293,7 @@ class StateStore:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
-            
+
             # High-performance indexes for historical scalability
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_briefings_user_slot ON briefing_history(user_id, slot, generated_at DESC);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_scans_user ON user_scans(user_id, created_at DESC);")
@@ -301,7 +301,7 @@ class StateStore:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_deepdives_ticker ON user_deepdives(user_id, ticker);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_token_usage_created ON token_usage(created_at DESC);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_ingested_news_created ON ingested_news(created_at DESC);")
-            
+
             conn.commit()
 
 
@@ -319,7 +319,7 @@ class StateStore:
     def save_news_item(self, item: NewsItem) -> bool:
         if not item.raw_hash:
             item.raw_hash = self.compute_hash(item.title, item.source)
-            
+
         with self._get_connection() as conn:
             cursor = conn.cursor()
             try:
@@ -377,7 +377,7 @@ class StateStore:
                 return BriefingReport(**cached)
             except Exception:
                 pass
-        
+
         # Fallback: scan recent briefing history for a BriefingReport
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -714,7 +714,7 @@ class StateStore:
                 admin = self.get_user_by_username(tg_user) or self.get_user_by_telegram(tg_user)
             if not admin:
                 admin = self.get_user_by_telegram("forello0")
-            
+
         admin_pass = config.dashboard_password or "sentinel_admin"
         pw_hash = hash_password(admin_pass)
         enc_key = encrypt_api_key(config.gemini_api_key) if config.gemini_api_key else ""

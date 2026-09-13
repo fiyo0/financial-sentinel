@@ -24,7 +24,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from fastapi import FastAPI, Request, HTTPException, Response, BackgroundTasks, UploadFile, File
+from fastapi import FastAPI, Request, HTTPException, Response, UploadFile, File, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
@@ -32,17 +32,23 @@ from pydantic import BaseModel, Field
 
 from orchestrator import FinancialSentinelOrchestrator
 from models import (
-    Portfolio, PortfolioHolding, UserSession, UserRegisterRequest,
+    Portfolio, PortfolioHolding, UserRegisterRequest,
     UserLoginRequest, UserSettingsUpdateRequest
 )
 from config import config
 from auth.crypto import (
-    create_session_token, verify_session_token, mask_api_key,
+    create_session_token, mask_api_key,
     decrypt_api_key, validate_gemini_api_key
 )
 from channels.telegram_bot import FinancialSentinelTelegramBot
 from scheduler import DailyMarketScheduler
 from analytics.market_data import update_portfolio_live_prices, fetch_live_quote
+from web.auth_deps import (
+    require_user, require_admin, require_cron_or_admin,
+    get_current_user_optional
+)
+
+get_current_user = get_current_user_optional
 
 logger = logging.getLogger("WebApp")
 
@@ -58,6 +64,7 @@ daily_scheduler = DailyMarketScheduler(
     portfolio_loader=orchestrator.get_active_portfolio
 )
 telegram_bot = FinancialSentinelTelegramBot(orchestrator=orchestrator)
+
 
 
 @asynccontextmanager
@@ -133,37 +140,9 @@ STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(STATIC_DIR, exist_ok=True)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+app.state.store = orchestrator.state_store
+app.state.orchestrator = orchestrator
 
-
-def get_current_user(request: Request) -> Optional[Dict[str, Any]]:
-    """
-    Extracts and authenticates user from encrypted session cookie or legacy master pass.
-    """
-    # 1. Check Fernet session token cookie
-    token = request.cookies.get("sentinel_token") or request.headers.get("X-Sentinel-Token")
-    if token:
-        payload = verify_session_token(token)
-        if payload and payload.get("uid"):
-            user = orchestrator.state_store.get_user_by_id(payload["uid"])
-            if not user and (payload.get("uid") == "usr_admin" or payload.get("usr") == "admin"):
-                user = orchestrator.state_store.get_or_create_default_admin()
-            if user:
-                return user
-
-
-    # 2. Check legacy password cookie / header for default admin
-    cookie_auth = request.cookies.get("sentinel_auth")
-    header_auth = request.headers.get("X-Sentinel-Auth")
-    if config.dashboard_password and (cookie_auth == config.dashboard_password or header_auth == config.dashboard_password):
-        admin = orchestrator.state_store.get_or_create_default_admin()
-        return admin
-
-    # 3. If auth is completely disabled in config, fallback to default admin
-    if not config.dashboard_auth_enabled:
-        admin = orchestrator.state_store.get_or_create_default_admin()
-        return admin
-
-    return None
 
 
 class FeedbackRequest(BaseModel):
@@ -205,7 +184,7 @@ class VerifyKeyRequest(BaseModel):
 @app.middleware("http")
 async def security_and_auth_middleware(request: Request, call_next):
     path = request.url.path
-    
+
     # Layer 2 API Authentication Guard (Exact Path Matching)
     if config.dashboard_auth_enabled:
         exempt_paths = {
@@ -225,7 +204,7 @@ async def security_and_auth_middleware(request: Request, call_next):
                 return JSONResponse(status_code=401, content={"detail": "Unauthorized: Session expired or login required"})
 
     response = await call_next(request)
-    
+
     # Layer 4 HTTPS & Browser Defense Security Headers
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -245,7 +224,7 @@ async def security_and_auth_middleware(request: Request, call_next):
     )
     if path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
-    
+
     return response
 
 
@@ -271,7 +250,7 @@ async def api_register(payload: UserRegisterRequest, request: Request, response:
     # Check uniqueness
     if orchestrator.state_store.get_user_by_username(clean_user):
         raise HTTPException(status_code=400, detail="Username is already taken.")
-    
+
     # Create user (role is forced to 'user')
     try:
         user = orchestrator.state_store.create_user(
@@ -313,7 +292,7 @@ async def api_register(payload: UserRegisterRequest, request: Request, response:
 async def api_login(payload: UserLoginRequest, request: Request, response: Response):
     client_ip = request.client.host if request.client else "unknown"
     now = time.time()
-    
+
     # Bounded cache pruning for login attempts (H-7)
     if len(login_attempts) > 500:
         stale_cutoff = now - 180
@@ -326,10 +305,10 @@ async def api_login(payload: UserLoginRequest, request: Request, response: Respo
         raise HTTPException(status_code=429, detail="Too many login attempts. Please wait 60 seconds.")
 
     clean_id = payload.username_or_email.strip()
-    
+
     # 1. Check user database authentication
     user = orchestrator.state_store.authenticate_user(clean_id, payload.password)
-    
+
     # 2. Check fallback master passcode for default admin
     if not user and config.dashboard_password and payload.password == config.dashboard_password:
         user = orchestrator.state_store.get_or_create_default_admin()
@@ -370,11 +349,7 @@ async def api_logout(response: Response):
 
 
 @app.get("/api/user/me")
-async def api_get_user_me(request: Request):
-    user = get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    
+async def api_get_user_me(user: Dict[str, Any] = Depends(require_user)):
     raw_key = decrypt_api_key(user.get("encrypted_gemini_key", "")) if user.get("encrypted_gemini_key") else ""
     masked = mask_api_key(raw_key)
 
@@ -394,11 +369,7 @@ async def api_get_user_me(request: Request):
 
 
 @app.post("/api/user/settings")
-async def api_update_user_settings(payload: UserSettingsUpdateRequest, request: Request):
-    user = get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
+async def api_update_user_settings(payload: UserSettingsUpdateRequest, user: Dict[str, Any] = Depends(require_user)):
     user_id = user["id"]
     updated_user = orchestrator.state_store.update_user_settings(
         user_id=user_id,
@@ -429,10 +400,7 @@ async def api_update_user_settings(payload: UserSettingsUpdateRequest, request: 
 
 
 @app.post("/api/user/verify-key")
-async def api_verify_gemini_key(payload: VerifyKeyRequest, request: Request):
-    user = get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Authentication required to verify API key.")
+async def api_verify_gemini_key(payload: VerifyKeyRequest, user: Dict[str, Any] = Depends(require_user)):
     result = await asyncio.to_thread(validate_gemini_api_key, payload.api_key)
     return result
 
@@ -451,7 +419,7 @@ async def dashboard_view(request: Request):
 
     total_equity = portfolio.total_equity()
     total_wealth = total_equity + max(0.0, portfolio.cash)
-    
+
     top_gainer = None
     top_laggard = None
     if portfolio.holdings:
@@ -461,7 +429,7 @@ async def dashboard_view(request: Request):
 
     raw_key = decrypt_api_key(user.get("encrypted_gemini_key", "")) if user.get("encrypted_gemini_key") else ""
     masked_key = mask_api_key(raw_key)
-    
+
     return templates.TemplateResponse(request=request, name="index.html", context={
         "user": user,
         "masked_gemini_key": masked_key,
@@ -479,9 +447,8 @@ async def dashboard_view(request: Request):
 
 
 @app.get("/api/portfolio")
-async def api_get_portfolio(request: Request):
-    user = get_current_user(request)
-    user_id = user["id"] if user else None
+async def api_get_portfolio(user: Dict[str, Any] = Depends(require_user)):
+    user_id = user["id"]
     portfolio = orchestrator.get_active_portfolio(user_id=user_id)
     portfolio.recalculate_weights()
     stress = orchestrator.quant_engine.analyze_portfolio(portfolio)
@@ -495,20 +462,19 @@ async def api_get_portfolio(request: Request):
 
 
 @app.post("/api/portfolio/cash")
-async def api_update_portfolio_cash(request: Request):
-    user = get_current_user(request)
-    user_id = user["id"] if user else None
+async def api_update_portfolio_cash(request: Request, user: Dict[str, Any] = Depends(require_user)):
+    user_id = user["id"]
     try:
         body = await request.json()
         new_cash = float(body.get("cash", 0.0))
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid cash payload")
-    
+
     portfolio = orchestrator.get_active_portfolio(user_id=user_id)
     portfolio.cash = max(0.0, new_cash)
     dumped = orchestrator.persist_active_portfolio(portfolio, user_id=user_id)
     stress = orchestrator.quant_engine.analyze_portfolio(portfolio)
-    
+
     return {
         "status": "success",
         "message": f"Cash balance updated to ${portfolio.cash:,.2f}",
@@ -518,14 +484,13 @@ async def api_update_portfolio_cash(request: Request):
 
 
 @app.post("/api/portfolio/upload")
-async def api_upload_portfolio(request: Request, file: UploadFile = File(...)):
-    user = get_current_user(request)
-    user_id = user["id"] if user else None
+async def api_upload_portfolio(file: UploadFile = File(...), user: Dict[str, Any] = Depends(require_user)):
+    user_id = user["id"]
     filename = file.filename.lower()
     content = await file.read()
-    
+
     holdings = []
-    
+
     if filename.endswith(".json"):
         try:
             data = json.loads(content.decode("utf-8"))
@@ -560,14 +525,14 @@ async def api_upload_portfolio(request: Request, file: UploadFile = File(...)):
 
             reader = csv.DictReader(io.StringIO(text))
             imported_cash = 0.0
-            
+
             for row in reader:
                 clean_row = {}
                 for k, v in row.items():
                     if k:
                         norm_k = "".join(c for c in k.lower() if c.isalnum())
                         clean_row[norm_k] = v.strip() if isinstance(v, str) else v
-                
+
                 ticker = (
                     clean_row.get("ticker") or clean_row.get("symbol") or clean_row.get("stock")
                     or clean_row.get("sym") or clean_row.get("security") or clean_row.get("symbolticker")
@@ -628,7 +593,7 @@ async def api_upload_portfolio(request: Request, file: UploadFile = File(...)):
 
             cur_p = orchestrator.get_active_portfolio(user_id=user_id)
             final_cash = imported_cash if imported_cash > 0 else cur_p.cash
-            
+
             p = Portfolio(name="Imported Portfolio", cash=final_cash, holdings=holdings)
             dumped = orchestrator.persist_active_portfolio(p, user_id=user_id)
             stress = orchestrator.quant_engine.analyze_portfolio(p)
@@ -641,10 +606,9 @@ async def api_upload_portfolio(request: Request, file: UploadFile = File(...)):
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Failed to parse CSV: {e}")
 @app.post("/api/portfolio/save")
-async def api_save_portfolio(payload: PortfolioSavePayload, request: Request):
-    user = get_current_user(request)
-    user_id = user["id"] if user else None
-    
+async def api_save_portfolio(payload: PortfolioSavePayload, user: Dict[str, Any] = Depends(require_user)):
+    user_id = user["id"]
+
     new_holdings = []
     for item in payload.holdings:
         ticker = item.ticker.strip().upper()
@@ -660,14 +624,14 @@ async def api_save_portfolio(payload: PortfolioSavePayload, request: Request):
             sector=item.sector or "Technology",
             thematic_tags=item.thematic_tags or []
         ))
-        
+
     portfolio = Portfolio(
         name=payload.name or "Custom Managed Portfolio",
         cash=float(payload.cash or 0.0),
         holdings=new_holdings,
         last_updated=datetime.utcnow()
     )
-    
+
     # Concurrently sync live quotes for current market prices
     try:
         portfolio, _ = update_portfolio_live_prices(portfolio)
@@ -676,7 +640,7 @@ async def api_save_portfolio(payload: PortfolioSavePayload, request: Request):
 
     dumped = orchestrator.persist_active_portfolio(portfolio, user_id=user_id)
     stress = orchestrator.quant_engine.analyze_portfolio(portfolio)
-    
+
     return {
         "status": "success",
         "portfolio": dumped,
@@ -685,17 +649,15 @@ async def api_save_portfolio(payload: PortfolioSavePayload, request: Request):
 
 
 @app.post("/api/portfolio/add")
-async def api_add_holding_alias(holding: HoldingUpdateRequest, request: Request):
-    return await api_update_holding(holding, request)
+async def api_add_holding_alias(holding: HoldingUpdateRequest, user: Dict[str, Any] = Depends(require_user)):
+    return await api_update_holding(holding, user=user)
 
 
 @app.post("/api/portfolio/holding")
-async def api_update_holding(holding: HoldingUpdateRequest, request: Request):
-
-    user = get_current_user(request)
-    user_id = user["id"] if user else None
+async def api_update_holding(holding: HoldingUpdateRequest, user: Dict[str, Any] = Depends(require_user)):
+    user_id = user["id"]
     portfolio = orchestrator.get_active_portfolio(user_id=user_id)
-    
+
     target_ticker = holding.ticker.strip().upper()
     found = False
     for i, h in enumerate(portfolio.holdings):
@@ -715,7 +677,7 @@ async def api_update_holding(holding: HoldingUpdateRequest, request: Request):
             portfolio.holdings[i].sector = holding.sector
             found = True
             break
-            
+
     if not found:
         purchase_cost = holding.shares * holding.avg_price
         if (portfolio.cash or 0.0) >= purchase_cost:
@@ -729,10 +691,10 @@ async def api_update_holding(holding: HoldingUpdateRequest, request: Request):
             sector=holding.sector,
             thematic_tags=[]
         ))
-        
+
     dumped = orchestrator.persist_active_portfolio(portfolio, user_id=user_id)
     stress = orchestrator.quant_engine.analyze_portfolio(portfolio)
-    
+
     return {
         "status": "success",
         "portfolio": dumped,
@@ -741,17 +703,16 @@ async def api_update_holding(holding: HoldingUpdateRequest, request: Request):
 
 
 @app.post("/api/portfolio/holding/delete")
-async def api_delete_holding(request: Request):
-    user = get_current_user(request)
-    user_id = user["id"] if user else None
+async def api_delete_holding(request: Request, user: Dict[str, Any] = Depends(require_user)):
+    user_id = user["id"]
     try:
         body = await request.json()
         ticker = body.get("ticker", "").strip().upper()
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid payload")
-        
+
     portfolio = orchestrator.get_active_portfolio(user_id=user_id)
-    
+
     # Liquidate deleted holding directly into cash reserve
     deleted_holding = next((h for h in portfolio.holdings if h.ticker.upper() == ticker), None)
     liquidated_val = 0.0
@@ -760,10 +721,10 @@ async def api_delete_holding(request: Request):
         portfolio.cash = max(0.0, float(portfolio.cash or 0.0) + liquidated_val)
 
     portfolio.holdings = [h for h in portfolio.holdings if h.ticker.upper() != ticker]
-    
+
     dumped = orchestrator.persist_active_portfolio(portfolio, user_id=user_id)
     stress = orchestrator.quant_engine.analyze_portfolio(portfolio)
-    
+
     return {
         "status": "success",
         "message": f"Sold {ticker}. Credited ${liquidated_val:,.2f} to cash reserve.",
@@ -774,9 +735,8 @@ async def api_delete_holding(request: Request):
 
 
 @app.post("/api/scan")
-async def api_trigger_scan(request: Request, force_fresh: bool = False):
-    user = get_current_user(request)
-    user_id = user["id"] if user else None
+async def api_trigger_scan(force_fresh: bool = False, user: Dict[str, Any] = Depends(require_user)):
+    user_id = user["id"]
     user_key = orchestrator.resolve_user_api_key(user_id)
 
     if not user_key:
@@ -813,9 +773,8 @@ async def api_trigger_scan(request: Request, force_fresh: bool = False):
 
 @app.get("/api/scan/stream")
 @app.post("/api/scan/stream")
-async def api_scan_stream(request: Request, force_fresh: bool = False):
-    user = get_current_user(request)
-    user_id = user["id"] if user else None
+async def api_scan_stream(request: Request, force_fresh: bool = False, user: Dict[str, Any] = Depends(require_user)):
+    user_id = user["id"]
     user_key = orchestrator.resolve_user_api_key(user_id)
 
     if not user_key:
@@ -862,7 +821,7 @@ async def api_scan_stream(request: Request, force_fresh: bool = False):
                 traceback.print_exc()
                 await queue.put({"type": "error", "message": str(ex)})
 
-        scan_task = asyncio.create_task(run_scan())
+        _scan_task = asyncio.create_task(run_scan())
 
         while True:
             item = await queue.get()
@@ -884,9 +843,8 @@ async def api_scan_stream(request: Request, force_fresh: bool = False):
 
 
 @app.get("/api/news/live")
-async def api_get_live_news(request: Request):
-    user = get_current_user(request)
-    user_id = user["id"] if user else None
+async def api_get_live_news(user: Dict[str, Any] = Depends(require_user)):
+    user_id = user["id"]
     portfolio = orchestrator.get_active_portfolio(user_id=user_id)
     portfolio_tickers = [h.ticker for h in portfolio.holdings]
     news_items = await asyncio.to_thread(orchestrator.news_agent.ingest_all_feeds, live=True, portfolio_tickers=portfolio_tickers)
@@ -898,10 +856,7 @@ async def api_get_live_news(request: Request):
 
 
 @app.get("/api/quote/{ticker}")
-async def api_get_quote(ticker: str, request: Request):
-    user = get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Authentication required")
+async def api_get_quote(ticker: str, user: Dict[str, Any] = Depends(require_user)):
     clean_ticker = ticker.strip().upper()
     if not re.match(r"^[A-Z0-9.\-]{1,10}$", clean_ticker):
         raise HTTPException(status_code=400, detail="Invalid ticker symbol format")
@@ -910,9 +865,8 @@ async def api_get_quote(ticker: str, request: Request):
 
 
 @app.get("/api/quotes/refresh")
-async def api_refresh_quotes(request: Request):
-    user = get_current_user(request)
-    user_id = user["id"] if user else None
+async def api_refresh_quotes(user: Dict[str, Any] = Depends(require_user)):
+    user_id = user["id"]
     portfolio = orchestrator.get_active_portfolio(user_id=user_id)
     portfolio, quotes = await asyncio.to_thread(update_portfolio_live_prices, portfolio)
     dumped = orchestrator.persist_active_portfolio(portfolio, user_id=user_id)
@@ -926,10 +880,9 @@ async def api_refresh_quotes(request: Request):
 
 
 @app.get("/api/earnings/calendar")
-async def api_get_earnings_calendar(request: Request):
+async def api_get_earnings_calendar(user: Dict[str, Any] = Depends(require_user)):
     from analytics.earnings_calendar import fetch_7day_earnings_schedule
-    user = get_current_user(request)
-    user_id = user["id"] if user else None
+    user_id = user["id"]
     portfolio = orchestrator.get_active_portfolio(user_id=user_id)
     portfolio_tickers = [h.ticker for h in portfolio.holdings]
     schedule = fetch_7day_earnings_schedule(portfolio_tickers=portfolio_tickers)
@@ -940,9 +893,8 @@ async def api_get_earnings_calendar(request: Request):
 
 
 @app.post("/api/analyze/{ticker}")
-async def api_analyze_ticker(ticker: str, request: Request):
-    user = get_current_user(request)
-    user_id = user["id"] if user else None
+async def api_analyze_ticker(ticker: str, user: Dict[str, Any] = Depends(require_user)):
+    user_id = user["id"]
     user_key = orchestrator.resolve_user_api_key(user_id)
 
     if not user_key:
@@ -976,9 +928,9 @@ async def api_analyze_ticker(ticker: str, request: Request):
     # Dynamically calibrate sentiment volume weighting with live RVOL if available
     if tech_snap and tech_snap.is_live and tech_snap.rvol and sent_snap:
         sent_snap.relative_volume = tech_snap.rvol
-    
-    analysis_text = await asyncio.to_thread(
-        orchestrator.analysis_agent.analyze_single_ticker,
+
+    analysis_obj = await asyncio.to_thread(
+        orchestrator.analysis_agent.analyze_single_ticker_structured,
         ticker=target_ticker,
         portfolio=portfolio,
         news_items=news_items,
@@ -993,30 +945,11 @@ async def api_analyze_ticker(ticker: str, request: Request):
         current_price = float(quote.get("current_price") or 0.0)
     elif tech_snap and getattr(tech_snap, "current_price", None):
         current_price = float(tech_snap.current_price or 0.0)
-    
+
     company_name = (quote.get("name") if quote else None) or target_ticker
-
-    # Extract stance / verdict
-    upper_analysis = analysis_text.upper() if analysis_text else ""
-    verdict = "NEUTRAL"
-    if "STRONG BUY" in upper_analysis or "BULLISH" in upper_analysis or "ACCUMULATE" in upper_analysis:
-        verdict = "BULLISH"
-    elif "STRONG SELL" in upper_analysis or "BEARISH" in upper_analysis or "TRIM" in upper_analysis or "LIQUIDATE" in upper_analysis:
-        verdict = "BEARISH"
-    elif "CAUTION" in upper_analysis or "HIGH RISK" in upper_analysis:
-        verdict = "CAUTION"
-    elif "HOLD" in upper_analysis:
-        verdict = "HOLD"
-
-    conviction_score = 85.0
-    if tech_snap and tech_snap.is_live:
-        if (tech_snap.rsi_14 <= 35 and verdict == "BULLISH") or (tech_snap.rsi_14 >= 75 and verdict == "BEARISH"):
-            conviction_score = 92.0
-
-    effective_user_id = user_id
-    if not effective_user_id:
-        admin = orchestrator.state_store.get_or_create_default_admin()
-        effective_user_id = admin["id"] if admin else "usr_admin"
+    verdict = analysis_obj.verdict
+    conviction_score = analysis_obj.conviction_score
+    analysis_text = analysis_obj.telegram_html
 
     deepdive_payload = {
         "status": "success",
@@ -1026,12 +959,18 @@ async def api_analyze_ticker(ticker: str, request: Request):
         "sentiment": asdict(sent_snap) if sent_snap else None,
         "analysis": analysis_text,
         "verdict": verdict,
-        "conviction_score": conviction_score
+        "conviction_score": conviction_score,
+        "thesis": analysis_obj.thesis,
+        "catalysts": analysis_obj.catalysts,
+        "risks": analysis_obj.risks,
+        "target_price": analysis_obj.target_price,
+        "stop_floor": analysis_obj.stop_floor,
+        "suggested_allocation_usd": analysis_obj.suggested_allocation_usd
     }
 
     try:
         dd_id = orchestrator.state_store.save_deepdive(
-            user_id=effective_user_id,
+            user_id=user_id,
             ticker=target_ticker,
             company_name=company_name,
             current_price=current_price,
@@ -1050,24 +989,16 @@ async def api_analyze_ticker(ticker: str, request: Request):
 
 
 @app.get("/api/deepdives")
-async def api_get_user_deepdives(request: Request, limit: int = 50, ticker: Optional[str] = None):
-    user = get_current_user(request)
-    user_id = user["id"] if user else None
-    if not user_id:
-        admin = orchestrator.state_store.get_or_create_default_admin()
-        user_id = admin["id"] if admin else "usr_admin"
+async def api_get_user_deepdives(limit: int = 50, ticker: Optional[str] = None, user: Dict[str, Any] = Depends(require_user)):
+    user_id = user["id"]
     deepdives = orchestrator.state_store.get_user_deepdives(user_id=user_id, limit=limit, ticker=ticker)
     return {"status": "success", "deepdives": deepdives}
 
 
 @app.get("/api/deepdives/{deepdive_id}")
-async def api_get_deepdive_detail(deepdive_id: str, request: Request):
-    user = get_current_user(request)
-    user_id = user["id"] if user else None
-    if not user_id:
-        admin = orchestrator.state_store.get_or_create_default_admin()
-        user_id = admin["id"] if admin else "usr_admin"
-    is_admin = bool(user and user.get("role") == "admin")
+async def api_get_deepdive_detail(deepdive_id: str, user: Dict[str, Any] = Depends(require_user)):
+    user_id = user["id"]
+    is_admin = bool(user.get("role") == "admin")
 
     dd = orchestrator.state_store.get_deepdive_by_id(deepdive_id, user_id=user_id if not is_admin else None)
     if not dd:
@@ -1080,13 +1011,9 @@ async def api_get_deepdive_detail(deepdive_id: str, request: Request):
 
 
 @app.delete("/api/deepdives/{deepdive_id}")
-async def api_delete_deepdive(deepdive_id: str, request: Request):
-    user = get_current_user(request)
-    user_id = user["id"] if user else None
-    if not user_id:
-        admin = orchestrator.state_store.get_or_create_default_admin()
-        user_id = admin["id"] if admin else "usr_admin"
-    is_admin = bool(user and user.get("role") == "admin")
+async def api_delete_deepdive(deepdive_id: str, user: Dict[str, Any] = Depends(require_user)):
+    user_id = user["id"]
+    is_admin = bool(user.get("role") == "admin")
 
     existing = orchestrator.state_store.get_deepdive_by_id(deepdive_id)
     if not existing:
@@ -1102,10 +1029,7 @@ async def api_delete_deepdive(deepdive_id: str, request: Request):
 
 
 @app.post("/api/feedback")
-async def api_submit_feedback(req: FeedbackRequest, request: Request):
-    user = get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Authentication required to submit feedback.")
+async def api_submit_feedback(req: FeedbackRequest, user: Dict[str, Any] = Depends(require_user)):
     clean_notes = (req.user_notes or "").strip()
     if len(clean_notes) > 2000:
         raise HTTPException(status_code=400, detail="Feedback notes exceed maximum allowed length (2,000 characters).")
@@ -1127,9 +1051,8 @@ class ChatMessageRequest(BaseModel):
 
 
 @app.post("/api/chat")
-async def api_chat(req: ChatMessageRequest, request: Request):
-    user = get_current_user(request)
-    user_id = user["id"] if user else None
+async def api_chat(req: ChatMessageRequest, user: Dict[str, Any] = Depends(require_user)):
+    user_id = user["id"]
     user_key = orchestrator.resolve_user_api_key(user_id)
 
     if user and user.get("role") != "admin" and not user_key:
@@ -1142,13 +1065,13 @@ async def api_chat(req: ChatMessageRequest, request: Request):
     stress = orchestrator.quant_engine.analyze_portfolio(portfolio)
     recent_briefings = orchestrator.state_store.get_recent_briefings(limit=1)
     briefing_payload = recent_briefings[0].get("payload", {}) if recent_briefings else {}
-    
+
     holdings_summary = []
     for h in portfolio.holdings:
         holdings_summary.append(
             f"{h.ticker} ({h.name}): {h.shares} sh @ avg ${h.avg_price:.2f}, price ${h.current_price:.2f}, val ${h.market_value:,.2f} ({h.weight_pct:.1f}%), PnL {h.unrealized_pnl_pct:+.2f}% (${h.unrealized_pnl:+,.2f})"
         )
-    
+
     context = f"""
 PORTFOLIO SUMMARY:
 - Total Equity: ${portfolio.total_equity():,.2f} | Cash: ${portfolio.cash:,.2f}
@@ -1187,7 +1110,7 @@ GUIDELINES:
         role = msg.get("role", "user").upper()
         content = msg.get("content", "")
         history_prompt += f"{role}: {content}\n"
-    
+
     full_prompt = f"{history_prompt}USER: {req.message}\nASSISTANT:"
 
     reply = await asyncio.to_thread(
@@ -1216,9 +1139,8 @@ class DiscoverOpportunitiesRequest(BaseModel):
 
 
 @app.post("/api/opportunities/discover")
-async def api_discover_opportunities(req: DiscoverOpportunitiesRequest, request: Request):
-    user = get_current_user(request)
-    user_id = user["id"] if user else None
+async def api_discover_opportunities(req: DiscoverOpportunitiesRequest, user: Dict[str, Any] = Depends(require_user)):
+    user_id = user["id"]
     user_key = orchestrator.resolve_user_api_key(user_id)
     portfolio = orchestrator.get_active_portfolio(user_id=user_id)
     opps = await asyncio.to_thread(
@@ -1238,9 +1160,8 @@ async def api_discover_opportunities(req: DiscoverOpportunitiesRequest, request:
 
 
 @app.post("/api/opportunities/moonshots")
-async def api_discover_moonshots(request: Request, count: int = 4):
-    user = get_current_user(request)
-    user_id = user["id"] if user else None
+async def api_discover_moonshots(count: int = 4, user: Dict[str, Any] = Depends(require_user)):
+    user_id = user["id"]
     user_key = orchestrator.resolve_user_api_key(user_id)
     portfolio = orchestrator.get_active_portfolio(user_id=user_id)
     moonshots = await asyncio.to_thread(
@@ -1303,19 +1224,11 @@ async def api_get_schedule_status():
 
 
 @app.post("/api/schedule/trigger/{slot}")
-async def api_trigger_scheduled_briefing(slot: str, request: Request, force: bool = False):
+async def api_trigger_scheduled_briefing(slot: str, force: bool = False, caller: Dict[str, Any] = Depends(require_cron_or_admin)):
     if slot not in ("premarket", "midmarket", "postmarket", "weekend", "earnings"):
         raise HTTPException(status_code=400, detail="Invalid slot. Choose premarket, midmarket, postmarket, weekend, or earnings.")
 
-    user = get_current_user(request)
-    is_admin = bool(user and user.get("role") == "admin")
-    cron_hdr = request.headers.get("X-Cron-Secret", "")
-    is_cron = bool(config.cron_secret and secrets.compare_digest(cron_hdr, config.cron_secret))
-
-    if not (is_admin or is_cron):
-        return JSONResponse(status_code=403, content={"detail": "Forbidden: Admin privileges or valid X-Cron-Secret required to trigger briefing."})
-
-    target_user_id = user["id"] if user else None
+    target_user_id = caller.get("id") if caller.get("id") != "cron_scheduler" else None
     msg = await asyncio.to_thread(daily_scheduler.execute_briefing, slot, None, target_user_id, True, force)
     return {
         "status": "success",
@@ -1365,10 +1278,7 @@ class GenerateBriefingPayload(BaseModel):
 
 
 @app.get("/api/briefings")
-async def api_get_market_briefings(request: Request, slot: Optional[str] = None, limit: int = 20):
-    user = get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Authentication required to view market briefings.")
+async def api_get_market_briefings(slot: Optional[str] = None, limit: int = 20, user: Dict[str, Any] = Depends(require_user)):
     user_id = user["id"]
     is_admin = bool(user.get("role") == "admin")
     # Non-admin users strictly only see their own briefings
@@ -1395,14 +1305,10 @@ async def api_get_market_briefings(request: Request, slot: Optional[str] = None,
 
 
 @app.get("/api/briefings/{report_id}")
-async def api_get_market_briefing_detail(report_id: str, request: Request):
+async def api_get_market_briefing_detail(report_id: str, user: Dict[str, Any] = Depends(require_user)):
     b = orchestrator.state_store.get_market_briefing_by_id(report_id)
     if not b:
         raise HTTPException(status_code=404, detail="Briefing report not found.")
-
-    user = get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Authentication required to view briefing details.")
 
     user_id = user["id"]
     is_admin = bool(user.get("role") == "admin")
@@ -1427,18 +1333,13 @@ async def api_get_market_briefing_detail(report_id: str, request: Request):
 
 
 @app.post("/api/briefings/generate")
-async def api_generate_market_briefing(payload: GenerateBriefingPayload, request: Request):
+async def api_generate_market_briefing(payload: GenerateBriefingPayload, user: Dict[str, Any] = Depends(require_user)):
     slot = payload.slot.lower().strip()
     if slot not in SLOT_METADATA:
         raise HTTPException(status_code=400, detail=f"Invalid briefing slot. Choose one of: {list(SLOT_METADATA.keys())}")
-    
-    user = get_current_user(request)
-    user_id = user["id"] if user else None
-    if not user_id:
-        admin = orchestrator.state_store.get_or_create_default_admin()
-        if admin:
-            user_id = admin["id"]
-    
+
+    user_id = user["id"]
+
     target_chat = None
     if payload.dispatch_telegram:
         if user and user.get("telegram_chat_id"):
@@ -1454,7 +1355,7 @@ async def api_generate_market_briefing(payload: GenerateBriefingPayload, request
         payload.dispatch_telegram,
         True
     )
-    
+
     meta = SLOT_METADATA.get(slot, {})
     return {
         "status": "success",
@@ -1467,13 +1368,12 @@ async def api_generate_market_briefing(payload: GenerateBriefingPayload, request
 
 
 @app.post("/api/briefings/{report_id}/dispatch")
-async def api_dispatch_market_briefing(report_id: str, request: Request):
+async def api_dispatch_market_briefing(report_id: str, user: Dict[str, Any] = Depends(require_user)):
     b = orchestrator.state_store.get_market_briefing_by_id(report_id)
     if not b:
         raise HTTPException(status_code=404, detail="Briefing report not found.")
-    
-    user = get_current_user(request)
-    user_id = user["id"] if user else None
+
+    user_id = user["id"]
     is_admin = bool(user and user.get("role") == "admin")
 
     # Strict tenant isolation for private briefing dispatch
@@ -1486,10 +1386,10 @@ async def api_dispatch_market_briefing(report_id: str, request: Request):
         target_chat = user["telegram_chat_id"]
     else:
         target_chat = telegram_bot.get_effective_chat_id() or config.telegram_chat_id
-    
+
     if not target_chat:
         raise HTTPException(status_code=400, detail="Telegram chat ID is not configured. Please link Telegram in Settings.")
-    
+
     msg = b.get("message_html") or b.get("executive_summary")
     try:
         telegram_bot.send_message(msg, chat_id=target_chat)
@@ -1499,13 +1399,7 @@ async def api_dispatch_market_briefing(report_id: str, request: Request):
 
 
 @app.post("/api/briefings/prune")
-async def api_prune_market_briefings(request: Request, retention_days: int = 30):
-    user = get_current_user(request)
-    if not user and config.dashboard_auth_enabled:
-        raise HTTPException(status_code=401, detail="Unauthorized: Please log in.")
-    if user and user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Forbidden: Admin privileges required to prune briefing archives.")
-
+async def api_prune_market_briefings(retention_days: int = 30, user: Dict[str, Any] = Depends(require_admin)):
     pruned_count = orchestrator.state_store.prune_briefings(retention_days=retention_days)
     return {
         "status": "success",
@@ -1520,14 +1414,11 @@ class TelegramConfigPayload(BaseModel):
 
 
 @app.post("/api/telegram/configure")
-async def api_configure_telegram(payload: TelegramConfigPayload, request: Request):
-    user = get_current_user(request)
-    if not user or user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Forbidden: Administrator access required to reconfigure Telegram bot.")
+async def api_configure_telegram(payload: TelegramConfigPayload, user: Dict[str, Any] = Depends(require_admin)):
     config.telegram_bot_token = payload.bot_token
     if payload.chat_id:
         config.telegram_chat_id = payload.chat_id
-    
+
     telegram_bot.bot_token = payload.bot_token
     telegram_bot.chat_id = payload.chat_id or telegram_bot.chat_id
     telegram_bot.start_polling()
@@ -1535,11 +1426,8 @@ async def api_configure_telegram(payload: TelegramConfigPayload, request: Reques
 
 
 @app.post("/api/cache/clear")
-async def api_cache_clear(request: Request):
+async def api_cache_clear(user: Dict[str, Any] = Depends(require_admin)):
     """Admin endpoint to invalidate in-memory quote, bars, and general caches."""
-    user = get_current_user(request)
-    if not user or user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Forbidden: Administrator access required.")
     from analytics.market_data import PRICE_CACHE
     from analytics.technical_indicators import BARS_CACHE
     from storage.cache_manager import cache_manager
@@ -1559,11 +1447,8 @@ async def api_cache_clear(request: Request):
 
 
 @app.get("/api/cache/stats")
-async def api_cache_stats(request: Request):
+async def api_cache_stats(user: Dict[str, Any] = Depends(require_admin)):
     """Admin endpoint to monitor cache telemetry."""
-    user = get_current_user(request)
-    if not user or user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Forbidden: Administrator access required.")
     from analytics.market_data import PRICE_CACHE
     from analytics.technical_indicators import BARS_CACHE
     from storage.cache_manager import cache_manager
@@ -1586,7 +1471,7 @@ async def healthz():
         db_ok = True
     except Exception as e:
         logger.error(f"Healthcheck database probe failed: {e}")
-    
+
     status_code = 200 if db_ok else 503
     return JSONResponse(
         status_code=status_code,

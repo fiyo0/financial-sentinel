@@ -5,7 +5,6 @@ on historical deep dives and briefings.
 import pytest
 from fastapi.testclient import TestClient
 from web.app import app, orchestrator, create_session_token
-from config import config
 
 
 @pytest.fixture

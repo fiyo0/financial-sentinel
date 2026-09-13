@@ -1,0 +1,20 @@
+# Ruff configuration for Financial Sentinel
+target-version = "py311"
+line-length = 120
+
+[lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # Pyflakes
+    "W",    # pycodestyle warnings
+]
+ignore = [
+    "E501", # Line too long
+    "E402", # Module level import not at top of file
+    "B008", # FastAPI Depends in argument defaults
+    "W291", # Trailing whitespace
+    "W293", # Blank line contains whitespace
+]
+
+[lint.per-file-ignores]
+"tests/*" = ["F841"]

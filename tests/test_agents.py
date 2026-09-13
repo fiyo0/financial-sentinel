@@ -2,10 +2,8 @@
 Unit tests for individual agents in isolation.
 """
 import pytest
-from datetime import datetime
 from models import (
-    Portfolio, PortfolioHolding, NewsItem, NewsCategory,
-    HoldingExposureAnalysis, OpportunityAnalysis, OpportunityHorizon,
+    Portfolio, PortfolioHolding, HoldingExposureAnalysis, OpportunityAnalysis, OpportunityHorizon,
     DirectionalImpact, AlertPriority, CriticVerdict
 )
 from agents.news_ingestion import NewsIngestionAgent
@@ -50,7 +48,7 @@ def test_news_ingestion_entity_extraction(tmp_path):
 
     text = "Federal Reserve issues statement on inflation while $NVDA and TSMC (TSM) announce joint AI foundry."
     entities = agent.extract_entities(text)
-    
+
     assert "NVDA" in entities["tickers"]
     assert "TSM" in entities["tickers"]
     assert "Semiconductors" in entities["sectors"] or "Technology" in entities["sectors"]
@@ -175,14 +173,14 @@ def test_notification_agent_channel_formatting(mock_portfolio):
 def test_single_ticker_analysis(mock_portfolio, monkeypatch):
     agent = PortfolioAnalysisAgent()
     monkeypatch.setattr(agent, "query_llm_text", lambda *args, **kwargs: "🔬 <b>STOCK ANALYSIS: NVDA</b>\nPrice: $125.50\nVerdict: BUY")
-    
+
     quote = {
         "ticker": "NVDA",
         "name": "NVIDIA Corporation",
         "current_price": 125.50,
         "sector": "Semiconductors"
     }
-    
+
     result = agent.analyze_single_ticker(
         ticker="NVDA",
         portfolio=mock_portfolio,
@@ -190,7 +188,7 @@ def test_single_ticker_analysis(mock_portfolio, monkeypatch):
         quote_data=quote,
         api_key="mock_byok_key"
     )
-    
+
     assert "STOCK ANALYSIS" in result
     assert "NVDA" in result
     assert "$125.50" in result
