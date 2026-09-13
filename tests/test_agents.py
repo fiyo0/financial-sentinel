@@ -170,9 +170,40 @@ def test_notification_agent_channel_formatting(mock_portfolio):
     assert any(tz_label in email_html for tz_label in ["PST", "PDT"])
 
 
-def test_single_ticker_analysis(mock_portfolio, monkeypatch):
+def test_single_ticker_analysis_structured(mock_portfolio, monkeypatch):
     agent = PortfolioAnalysisAgent()
-    monkeypatch.setattr(agent, "query_llm_text", lambda *args, **kwargs: "🔬 <b>STOCK ANALYSIS: NVDA</b>\nPrice: $125.50\nVerdict: BUY")
+    mock_json = {
+        "verdict": "BULLISH",
+        "conviction_score": 88.0,
+        "thesis": "Secular datacenter demand and proprietary CUDA moat provide strong pricing power.",
+        "catalysts": [
+            "Blackwell architecture volume ramp driving enterprise datacenter compute expansion.",
+            "Networking and Spectrum-X Ethernet attach rates accelerating gross margin resilience."
+        ],
+        "risks": [
+            "Export control restrictions limiting addressable revenue in key geographic markets.",
+            "Customer capex digestion risk following massive hyperscaler buildout cycles."
+        ],
+        "target_price": 165.0,
+        "stop_floor": 115.0,
+        "suggested_allocation_usd": 1500.0,
+        "telegram_html": (
+            "🔬 <b>STOCK ANALYSIS: NVDA (NVIDIA Corporation)</b>\n"
+            "<i>Sector: Semiconductors | Price: $125.50</i>\n\n"
+            "📊 <b>Fundamental Catalysts & Growth Drivers:</b>\n"
+            "• <b>Blackwell GPU Compute Cycle:</b> Multi-quarter hyperscaler order backlogs.\n\n"
+            "💼 <b>Portfolio Fit & Synergy Analysis:</b>\n"
+            "Complementary to existing compute exposure.\n\n"
+            "⚠️ <b>Key Risks & Fundamental Vulnerabilities:</b>\n"
+            "• <b>Supply Chain Packaging:</b> CoWoS advanced packaging capacity constraints.\n\n"
+            "🎯 <b>Conviction Verdict & Actionable Sizing:</b>\n"
+            "• <b>Verdict:</b> 🟢 <b>BULLISH (ACCUMULATE)</b>\n"
+            "• <b>Verdict Rationale:</b> Robust multi-sentence synthesis of momentum, margin expansion, and demand.\n"
+            "• <b>Target Price & Trailing Stop:</b> Target: $165.00 | Dynamic Stop: $115.00\n"
+            "• <b>Position Sizing:</b> Deploy $1,500.00 from cash reserves (~12 shares)."
+        )
+    }
+    monkeypatch.setattr(agent, "query_llm_json", lambda *args, **kwargs: mock_json)
 
     quote = {
         "ticker": "NVDA",
@@ -181,7 +212,7 @@ def test_single_ticker_analysis(mock_portfolio, monkeypatch):
         "sector": "Semiconductors"
     }
 
-    result = agent.analyze_single_ticker(
+    analysis = agent.analyze_single_ticker_structured(
         ticker="NVDA",
         portfolio=mock_portfolio,
         news_items=[],
@@ -189,9 +220,28 @@ def test_single_ticker_analysis(mock_portfolio, monkeypatch):
         api_key="mock_byok_key"
     )
 
-    assert "STOCK ANALYSIS" in result
-    assert "NVDA" in result
-    assert "$125.50" in result
+    assert analysis.ticker == "NVDA"
+    assert analysis.verdict == "BULLISH"
+    assert analysis.conviction_score == 88.0
+    assert len(analysis.catalysts) == 2
+    assert len(analysis.risks) == 2
+    assert analysis.target_price == 165.0
+    assert analysis.stop_floor == 115.0
+    assert analysis.suggested_allocation_usd == 1500.0
+    assert "Fundamental Catalysts & Growth Drivers" in analysis.telegram_html
+    assert "Portfolio Fit & Synergy Analysis" in analysis.telegram_html
+    assert "Conviction Verdict & Actionable Sizing" in analysis.telegram_html
+
+    # Also verify backward-compatible analyze_single_ticker wrapper
+    raw_html = agent.analyze_single_ticker(
+        ticker="NVDA",
+        portfolio=mock_portfolio,
+        news_items=[],
+        quote_data=quote,
+        api_key="mock_byok_key"
+    )
+    assert raw_html == analysis.telegram_html
+
 
 
 
