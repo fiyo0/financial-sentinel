@@ -11,3 +11,4 @@ python-dotenv>=1.0.1
 python-multipart>=0.0.9
 cryptography>=42.0.0
 google-cloud-storage>=3.0.0
+hypothesis>=6.100.0

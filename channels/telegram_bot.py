@@ -97,10 +97,24 @@ def parse_rm_args(text: str) -> Optional[Dict[str, Any]]:
 
 
 class FinancialSentinelTelegramBot:
-    def __init__(self, orchestrator=None):
+    def __init__(
+        self,
+        orchestrator=None,
+        identity_service=None,
+        portfolio_service=None,
+        analysis_service=None,
+        briefing_service=None,
+    ):
         from orchestrator import FinancialSentinelOrchestrator
         from channels.telegram import TelegramChannel
+        from services import IdentityService, PortfolioService, AnalysisService, BriefingService
+
         self.orchestrator = orchestrator or FinancialSentinelOrchestrator(config.db_path)
+        self.identity_service = identity_service or IdentityService(self.orchestrator.state_store)
+        self.portfolio_service = portfolio_service or PortfolioService(self.orchestrator)
+        self.analysis_service = analysis_service or AnalysisService(self.orchestrator)
+        self.briefing_service = briefing_service or BriefingService(self.orchestrator)
+
         self.bot_token = config.telegram_bot_token
         self.chat_id = config.telegram_chat_id
         self.telegram_channel = TelegramChannel(self.bot_token, self.chat_id)
@@ -312,7 +326,7 @@ class FinancialSentinelTelegramBot:
 
     def _execute_ticker_analysis(self, target_ticker: str, chat_id: str, user_id: str, user_gemini_key: Optional[str]):
         """
-        Executes an institutional-grade, multi-agent single ticker deep dive.
+        Executes an institutional-grade, multi-agent single ticker deep dive via AnalysisService.
         Progressively streams status to Telegram, computes technical momentum,
         social sentiment velocity, news catalysts, fundamental moats, and portfolio fit.
         Automatically preserves the generated analysis in the user's web Deep Dive Archive.
@@ -325,105 +339,38 @@ class FinancialSentinelTelegramBot:
             return
 
         clean_sym = target_ticker.strip().upper().replace("$", "")
-
-        # Guard: Validate live market data/quote or portfolio presence before running indicators or LLM
-        try:
-            from analytics.market_data import fetch_live_quote
-            quote = fetch_live_quote(clean_sym)
-        except Exception as e:
-            logger.warning(f"Error fetching quote for {clean_sym}: {e}")
-            quote = {}
-
-        current_price = quote.get("current_price", 0.0) if quote else 0.0
-        portfolio = self.orchestrator.get_active_portfolio(user_id=user_id)
-        is_portfolio_holding = any(h.ticker.upper() == clean_sym for h in portfolio.holdings)
-
-        if current_price <= 0.0 and not is_portfolio_holding:
-            self.send_message(
-                f"⚠️ <b>Ticker '{clean_sym}' Not Recognized:</b>\n\n"
-                f"Unable to verify live trade data for <code>{clean_sym}</code>. "
-                f"Please verify the symbol (e.g. <code>/NVDA</code>, <code>/AAPL</code>, <code>/MSFT</code>).\n\n"
-                f"<i>If you intended to ask a portfolio question, send plain text without a leading slash.</i>",
-                chat_id
-            )
-            return
-
         status_id = self.send_message_returning_id(
             f"🔬 <b>Analyzing {clean_sym}... [20%]</b>\n<i>Fetching real-time market quote and order flow...</i>",
             chat_id
         )
+
+        def progress_cb(pct: int, msg: str):
+            if status_id and pct < 100:
+                self.edit_message(f"🔬 <b>Analyzing {clean_sym}... [{pct}%]</b>\n<i>{msg}</i>", chat_id, status_id)
+
         try:
-            if status_id:
-                self.edit_message(f"🔬 <b>Analyzing {clean_sym}... [40%]</b>\n<i>📈 Computing verified technical momentum (RSI, MACD, Bollinger Bands)...</i>", chat_id, status_id)
-            from analytics.technical_indicators import compute_technical_snapshot
-            tech_snap = compute_technical_snapshot(clean_sym)
-
-            if status_id:
-                self.edit_message(f"🔬 <b>Analyzing {clean_sym}... [60%]</b>\n<i>💬 Ingesting StockTwits & Reddit retail sentiment velocity...</i>", chat_id, status_id)
-            from analytics.sentiment_stream import fetch_social_sentiment_snapshot
-            rvol_val = tech_snap.rvol if tech_snap and tech_snap.is_live else None
-            sent_snap = fetch_social_sentiment_snapshot(clean_sym, rvol=rvol_val)
-
-            news_items = self.orchestrator.news_agent.ingest_all_feeds(live=True, portfolio_tickers=[clean_sym])
-
-            if status_id:
-                self.edit_message(f"🔬 <b>Analyzing {clean_sym}... [80%]</b>\n<i>🧠 Gemini 3.8 deep thinking: evaluating fundamental moats & portfolio synergy...</i>", chat_id, status_id)
-
-            analysis_obj = self.orchestrator.analysis_agent.analyze_single_ticker_structured(
+            res = self.analysis_service.run_single_ticker_analysis(
                 ticker=clean_sym,
-                portfolio=portfolio,
-                news_items=news_items,
-                quote_data=quote,
-                technical_snapshot=tech_snap,
-                sentiment_snapshot=sent_snap,
-                api_key=user_gemini_key
+                user_id=user_id,
+                api_key=user_gemini_key,
+                progress_callback=progress_cb
             )
-            analysis_msg = analysis_obj.telegram_html
-
-            # Auto-archive in user's deepdive repository so it's instantly accessible in the Web UI
-            try:
-                from dataclasses import asdict
-                verdict = analysis_obj.verdict
-                conviction_score = analysis_obj.conviction_score
-                company_name = quote.get("name") or clean_sym
-                current_price = float(quote.get("current_price", 0.0) or 0.0)
-
-                deepdive_payload = {
-                    "status": "success",
-                    "ticker": clean_sym,
-                    "quote": quote,
-                    "technicals": asdict(tech_snap) if tech_snap else None,
-                    "sentiment": asdict(sent_snap) if sent_snap else None,
-                    "analysis": analysis_msg,
-                    "verdict": verdict,
-                    "conviction_score": conviction_score,
-                    "thesis": analysis_obj.thesis,
-                    "catalysts": analysis_obj.catalysts,
-                    "risks": analysis_obj.risks,
-                    "target_price": analysis_obj.target_price,
-                    "stop_floor": analysis_obj.stop_floor,
-                    "suggested_allocation_usd": analysis_obj.suggested_allocation_usd
-                }
-
-                self.orchestrator.state_store.save_deepdive(
-                    user_id=user_id,
-                    ticker=clean_sym,
-                    company_name=company_name,
-                    current_price=current_price,
-                    verdict=verdict,
-                    conviction_score=conviction_score,
-                    technicals=asdict(tech_snap) if tech_snap else None,
-                    sentiment=asdict(sent_snap) if sent_snap else None,
-                    analysis_text=analysis_msg,
-                    payload_json=deepdive_payload
-                )
-            except Exception as save_err:
-                logger.warning(f"Telegram auto-archive deepdive exception for {clean_sym}: {save_err}")
-
+            analysis_msg = res["analysis"]
             if status_id and len(analysis_msg) < 4000:
                 self.edit_message(analysis_msg, chat_id, status_id)
             else:
                 self.send_message(analysis_msg, chat_id)
+        except ValueError as ve:
+            if "not recognized" in str(ve).lower():
+                self.send_message(
+                    f"⚠️ <b>Ticker '{clean_sym}' Not Recognized:</b>\n\n"
+                    f"Unable to verify live trade data for <code>{clean_sym}</code>. "
+                    f"Please verify the symbol (e.g. <code>/NVDA</code>, <code>/AAPL</code>, <code>/MSFT</code>).\n\n"
+                    f"<i>If you intended to ask a portfolio question, send plain text without a leading slash.</i>",
+                    chat_id
+                )
+            else:
+                self.send_message(f"⚠️ {ve}", chat_id)
         except Exception as e:
             self.send_message(f"⚠️ Analysis error for {clean_sym}: {e}", chat_id)
 
@@ -445,19 +392,7 @@ class FinancialSentinelTelegramBot:
         # -------------------------------------------------------------
         # 1. Multi-User Dynamic Resolution & Linking
         # -------------------------------------------------------------
-        user = None
-        if chat_id:
-            user = self.orchestrator.state_store.get_user_by_telegram(chat_id)
-        if not user and username:
-            user = self.orchestrator.state_store.get_user_by_telegram(username)
-
-        # Admin fallback matching
-        if not user:
-            allowed_users = [u.lower().replace("@", "") for u in config.telegram_allowed_usernames if u]
-            allowed_chats = [c for c in config.telegram_allowed_chat_ids if c]
-            if (username and username.lower() in allowed_users) or (chat_id and chat_id in allowed_chats):
-                user = self.orchestrator.state_store.get_or_create_default_admin()
-
+        user = self.identity_service.resolve_user_from_telegram(chat_id=chat_id, username=username)
 
         # Unlinked user onboarding guidance
         if not user:
@@ -477,11 +412,11 @@ class FinancialSentinelTelegramBot:
 
         user_id = user["id"]
         user_role = user.get("role", "user")
-        user_gemini_key = self.orchestrator.resolve_user_api_key(user_id)
+        user_gemini_key = self.identity_service.resolve_api_key(user_id)
 
         # Auto-update active chat_id for user
         if chat_id and user.get("telegram_chat_id") != chat_id:
-            self.orchestrator.state_store.update_user_settings(user_id, telegram_chat_id=chat_id)
+            self.identity_service.link_telegram_chat_id(user_id, chat_id)
             if user_role == "admin":
                 self.chat_id = chat_id
                 config.telegram_chat_id = chat_id
@@ -543,9 +478,7 @@ class FinancialSentinelTelegramBot:
                 return
             self.send_message("🌅 <i>Generating 6:30 AM PST Pre-Market Intelligence Briefing...</i>", chat_id)
             try:
-                from scheduler import DailyMarketScheduler
-                scheduler = DailyMarketScheduler(self.orchestrator)
-                scheduler.execute_briefing("premarket", target_chat_id=chat_id, user_id=user_id, auto_dispatch=True)
+                self.briefing_service.generate_briefing("premarket", target_chat_id=chat_id, user_id=user_id, auto_dispatch=True)
             except Exception as e:
                 self.send_message(f"⚠️ Pre-market generation error: {e}", chat_id)
 
@@ -558,9 +491,7 @@ class FinancialSentinelTelegramBot:
                 return
             self.send_message("☀️ <i>Generating 10:00 AM PST Mid-Market Momentum Pulse...</i>", chat_id)
             try:
-                from scheduler import DailyMarketScheduler
-                scheduler = DailyMarketScheduler(self.orchestrator)
-                scheduler.execute_briefing("midmarket", target_chat_id=chat_id, user_id=user_id, auto_dispatch=True)
+                self.briefing_service.generate_briefing("midmarket", target_chat_id=chat_id, user_id=user_id, auto_dispatch=True)
             except Exception as e:
                 self.send_message(f"⚠️ Mid-market generation error: {e}", chat_id)
 
@@ -573,9 +504,7 @@ class FinancialSentinelTelegramBot:
                 return
             self.send_message("🌙 <i>Generating 3:00 PM PST Post-Market Wrap & Hot Movers...</i>", chat_id)
             try:
-                from scheduler import DailyMarketScheduler
-                scheduler = DailyMarketScheduler(self.orchestrator)
-                scheduler.execute_briefing("postmarket", target_chat_id=chat_id, user_id=user_id, auto_dispatch=True)
+                self.briefing_service.generate_briefing("postmarket", target_chat_id=chat_id, user_id=user_id, auto_dispatch=True)
             except Exception as e:
                 self.send_message(f"⚠️ Post-market generation error: {e}", chat_id)
 
@@ -588,9 +517,7 @@ class FinancialSentinelTelegramBot:
                 return
             self.send_message("🌟 <i>Generating 9:00 PM PST Weekend Macro & Week-Ahead Preview...</i>", chat_id)
             try:
-                from scheduler import DailyMarketScheduler
-                scheduler = DailyMarketScheduler(self.orchestrator)
-                scheduler.execute_briefing("weekend", target_chat_id=chat_id, user_id=user_id, auto_dispatch=True)
+                self.briefing_service.generate_briefing("weekend", target_chat_id=chat_id, user_id=user_id, auto_dispatch=True)
             except Exception as e:
                 self.send_message(f"⚠️ Weekend briefing error: {e}", chat_id)
 
@@ -603,9 +530,7 @@ class FinancialSentinelTelegramBot:
                 return
             self.send_message("📅 <i>Compiling this week's scheduled corporate earnings calls and market sentiment...</i>", chat_id)
             try:
-                from scheduler import DailyMarketScheduler
-                scheduler = DailyMarketScheduler(self.orchestrator)
-                scheduler.execute_briefing("earnings", target_chat_id=chat_id, user_id=user_id, auto_dispatch=True)
+                self.briefing_service.generate_briefing("earnings", target_chat_id=chat_id, user_id=user_id, auto_dispatch=True)
             except Exception as e:
                 self.send_message(f"⚠️ Earnings report error: {e}", chat_id)
 
@@ -755,8 +680,9 @@ class FinancialSentinelTelegramBot:
 
         elif base_cmd in ("/cash", "cash", "/balance", "balance"):
             try:
-                portfolio = self.orchestrator.get_active_portfolio(user_id=user_id)
-                tot_eq = portfolio.total_equity()
+                val = self.portfolio_service.get_portfolio_valuation(user_id=user_id, update_prices=True)
+                portfolio = val["portfolio"]
+                tot_eq = val["total_equity"]
                 cash_pct = (portfolio.cash / tot_eq * 100.0) if tot_eq > 0 else 0.0
                 msg = (
                     f"💰 <b>DEPLOYABLE CASH & CAPITAL POSTURE</b>\n\n"
@@ -832,60 +758,25 @@ class FinancialSentinelTelegramBot:
 
             self.send_message(f"⏳ <i>Adding {shares_to_add:g} share(s) of {target_ticker} to your active holdings...</i>", chat_id)
             try:
-                from analytics.market_data import fetch_live_quote
-                quote = fetch_live_quote(target_ticker)
-
-                cur_price = quote.get("current_price") or 0.0
-                company_name = quote.get("name") or target_ticker
-                sector = quote.get("sector") or "Technology"
-
-                if purchase_price is None:
-                    purchase_price = cur_price if cur_price > 0 else 100.0
-
-                if cur_price <= 0:
-                    cur_price = purchase_price
-
-                portfolio = self.orchestrator.get_active_portfolio(user_id=user_id)
-
-                existing_holding = None
-                for h in portfolio.holdings:
-                    if h.ticker.upper() == target_ticker:
-                        existing_holding = h
-                        break
-
-                if existing_holding:
-                    old_shares = existing_holding.shares
-                    old_avg = existing_holding.avg_price
-                    new_shares = old_shares + shares_to_add
-                    new_avg = ((old_shares * old_avg) + (shares_to_add * purchase_price)) / new_shares
-
-                    existing_holding.shares = new_shares
-                    existing_holding.avg_price = new_avg
-                    existing_holding.current_price = cur_price
-                    holding_ref = existing_holding
-                    action_desc = f"Added <b>+{shares_to_add:g}</b> share(s) @ <b>${purchase_price:.2f}</b> to existing position"
-                else:
-                    from models import PortfolioHolding
-                    new_holding = PortfolioHolding(
-                        ticker=target_ticker,
-                        name=company_name,
-                        sector=sector,
-                        shares=shares_to_add,
-                        avg_price=purchase_price,
-                        current_price=cur_price,
-                        thematic_tags=[]
-                    )
-                    portfolio.holdings.append(new_holding)
-                    holding_ref = new_holding
-                    action_desc = f"Opened new position with <b>{shares_to_add:g}</b> share(s) @ <b>${purchase_price:.2f}</b>"
-
-                update_portfolio_live_prices(portfolio)
-                self.orchestrator.persist_active_portfolio(portfolio, user_id=user_id)
-
+                res = self.portfolio_service.add_or_update_holding(
+                    user_id=user_id,
+                    ticker=target_ticker,
+                    shares=shares_to_add,
+                    price=purchase_price,
+                    incremental=True,
+                    deduct_cash=True
+                )
+                holding_ref = res["holding"]
+                portfolio = self.portfolio_service.get_portfolio(user_id=user_id)
                 tot_eq = portfolio.total_equity()
                 pnl = (holding_ref.current_price - holding_ref.avg_price) * holding_ref.shares
                 pnl_pct = ((holding_ref.current_price - holding_ref.avg_price) / holding_ref.avg_price * 100) if holding_ref.avg_price > 0 else 0
                 pnl_sign = "+" if pnl >= 0 else ""
+
+                if res["action"] == "updated":
+                    action_desc = f"Added <b>+{shares_to_add:g}</b> share(s) @ <b>${purchase_price or holding_ref.avg_price:.2f}</b> to existing position"
+                else:
+                    action_desc = f"Opened new position with <b>{shares_to_add:g}</b> share(s) @ <b>${holding_ref.avg_price:.2f}</b>"
 
                 msg = (
                     f"✅ <b>HOLDING UPDATED SUCCESSFULLY</b>\n\n"
@@ -925,51 +816,38 @@ class FinancialSentinelTelegramBot:
 
             self.send_message(f"⏳ <i>Processing removal for {target_ticker}...</i>", chat_id)
             try:
-                portfolio = self.orchestrator.get_active_portfolio(user_id=user_id)
+                res = self.portfolio_service.remove_or_trim_holding(
+                    user_id=user_id,
+                    ticker=target_ticker,
+                    shares_to_remove=shares_to_rm,
+                    exit_price=exit_price,
+                    credit_cash=True
+                )
+                portfolio = self.portfolio_service.get_portfolio(user_id=user_id)
+                tot_eq = portfolio.total_equity()
 
-                existing_holding = None
-                for h in portfolio.holdings:
-                    if h.ticker.upper() == target_ticker:
-                        existing_holding = h
-                        break
-
-                if not existing_holding:
-                    available = ', '.join([h.ticker for h in portfolio.holdings])
-                    self.send_message(f"❌ <b>Ticker {target_ticker} not found in your portfolio.</b>\nActive holdings: <code>{available}</code>", chat_id)
-                    return
-
-                old_shares = existing_holding.shares
-                old_avg = existing_holding.avg_price
-                company_name = existing_holding.name
-                cur_price = existing_holding.current_price or exit_price or old_avg
-
-                if shares_to_rm is None or shares_to_rm == "all" or (isinstance(shares_to_rm, (int, float)) and shares_to_rm >= old_shares):
-                    portfolio.holdings = [h for h in portfolio.holdings if h.ticker.upper() != target_ticker]
-                    action_desc = f"Completely closed position (removed all <b>{old_shares:g}</b> shares)"
+                if res["is_full_removal"]:
                     remaining_info = "<i>Position is no longer in active holdings.</i>"
                 else:
-                    new_shares = old_shares - float(shares_to_rm)
-                    existing_holding.shares = new_shares
-                    action_desc = f"Trimmed <b>-{shares_to_rm:g}</b> share(s) from position"
+                    existing_holding = next(h for h in portfolio.holdings if h.ticker.upper() == target_ticker)
                     remaining_info = (
-                        f"• <b>Remaining Shares:</b> <b>{new_shares:g} shares</b>\n"
+                        f"• <b>Remaining Shares:</b> <b>{existing_holding.shares:g} shares</b>\n"
                         f"• <b>Avg Cost Basis:</b> ${existing_holding.avg_price:.2f}\n"
                         f"• <b>Market Value:</b> ${existing_holding.market_value:,.2f}"
                     )
 
-                update_portfolio_live_prices(portfolio)
-                self.orchestrator.persist_active_portfolio(portfolio, user_id=user_id)
-
-                tot_eq = portfolio.total_equity()
-
                 msg = (
                     f"🗑️ <b>HOLDING UPDATED / REMOVED</b>\n\n"
-                    f"• <b>Ticker:</b> <code>{target_ticker}</code> ({company_name})\n"
-                    f"• <b>Action:</b> {action_desc}\n"
+                    f"• <b>Ticker:</b> <code>{target_ticker}</code> ({res['company_name']})\n"
+                    f"• <b>Action:</b> {res['action_desc']}\n"
                     f"{remaining_info}\n\n"
                     f"💼 <b>Updated Portfolio:</b> <b>${tot_eq:,.2f}</b> across {len(portfolio.holdings)} holdings | 💰 Cash: <b>${portfolio.cash:,.2f}</b>"
                 )
                 self.send_message(msg, chat_id)
+            except ValueError as ve:
+                portfolio = self.portfolio_service.get_portfolio(user_id=user_id)
+                available = ', '.join([h.ticker for h in portfolio.holdings])
+                self.send_message(f"❌ <b>{ve}</b>\nActive holdings: <code>{available}</code>", chat_id)
             except Exception as e:
                 self.send_message(f"⚠️ Failed to remove {target_ticker}: {e}", chat_id)
 

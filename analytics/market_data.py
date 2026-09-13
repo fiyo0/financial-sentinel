@@ -4,9 +4,13 @@ Zero static/hardcoded pricing. Every quote is fetched live over HTTP from offici
 If a live price cannot be fetched, it explicitly reports failure instead of falling back to outdated data.
 """
 import time
+import logging
 from typing import Dict, Any, Optional, List, Tuple
 import httpx
 from models import Portfolio
+
+logger = logging.getLogger(__name__)
+
 
 # In-memory short-term TTL cache: ticker -> (timestamp, data_dict)
 PRICE_CACHE: Dict[str, tuple[float, Dict[str, Any]]] = {}
@@ -20,6 +24,12 @@ try:
 except ImportError:
     _HAS_HTTP2 = False
 
+PROVIDER_METRICS: Dict[str, Dict[str, Any]] = {
+    "robinhood": {"successes": 0, "failures": 0, "circuit_broken": False},
+    "yahoo": {"successes": 0, "failures": 0, "circuit_broken": False},
+}
+
+
 def get_market_http_client() -> httpx.Client:
     global _MARKET_HTTP_CLIENT
     if _MARKET_HTTP_CLIENT is None or _MARKET_HTTP_CLIENT.is_closed:
@@ -29,6 +39,7 @@ def get_market_http_client() -> httpx.Client:
             timeout=8.0
         )
     return _MARKET_HTTP_CLIENT
+
 
 
 def fetch_live_quote(ticker: str) -> Dict[str, Any]:
@@ -50,6 +61,7 @@ def fetch_live_quote(ticker: str) -> Dict[str, Any]:
     sector = "Technology"
     prev_close = 0.0
     fetch_success = False
+    provider_used = "none"
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
@@ -70,6 +82,8 @@ def fetch_live_quote(ticker: str) -> Dict[str, Any]:
                 if p > 0:
                     current_price = p
                     fetch_success = True
+                    provider_used = "robinhood"
+                    PROVIDER_METRICS["robinhood"]["successes"] += 1
                     if raw_prev:
                         prev_close = float(raw_prev)
 
@@ -85,8 +99,12 @@ def fetch_live_quote(ticker: str) -> Dict[str, Any]:
                             short_name = resolved_name
                 except Exception:
                     pass
-    except Exception:
-        pass
+        else:
+            PROVIDER_METRICS["robinhood"]["failures"] += 1
+    except Exception as e:
+        PROVIDER_METRICS["robinhood"]["failures"] += 1
+        logger.debug(f"Robinhood quote fetch error for {clean_ticker}: {e}")
+
 
     # 2. Secondary Live API: Yahoo Finance Chart API (if primary did not return a price)
     if not fetch_success or current_price <= 0:
@@ -100,12 +118,15 @@ def fetch_live_quote(ticker: str) -> Dict[str, Any]:
                 if p > 0:
                     current_price = p
                     fetch_success = True
+                    provider_used = "yahoo"
+                    PROVIDER_METRICS["yahoo"]["successes"] += 1
                     prev_close = float(meta.get("chartPreviousClose", current_price) or current_price)
                     y_name = meta.get("shortName")
                     if y_name:
                         short_name = y_name
-        except Exception:
-            pass
+        except Exception as e:
+            PROVIDER_METRICS["yahoo"]["failures"] += 1
+            logger.debug(f"Yahoo quote fetch error for {clean_ticker}: {e}")
 
     # Dynamic Sector Classification from resolved name
     name_lower = short_name.lower()
@@ -128,6 +149,7 @@ def fetch_live_quote(ticker: str) -> Dict[str, Any]:
         "prev_close": round(float(prev_close), 2),
         "change_pct": round(((current_price - prev_close) / prev_close) * 100.0, 2) if (prev_close and current_price > 0) else 0.0,
         "is_live": fetch_success,
+        "provider": provider_used,
         "error": None if fetch_success else f"Unable to fetch live quote for {clean_ticker}"
     }
 
@@ -135,6 +157,7 @@ def fetch_live_quote(ticker: str) -> Dict[str, Any]:
         PRICE_CACHE[clean_ticker] = (now, quote)
 
     return quote
+
 
 
 def update_portfolio_live_prices(portfolio: Portfolio, override_all: bool = True) -> Tuple[Portfolio, List[str]]:

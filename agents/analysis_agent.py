@@ -291,17 +291,7 @@ class PortfolioAnalysisAgent(BaseAgent):
         tech_block_text = technical_snapshot.to_telegram_block() if technical_snapshot else "📈 <i>Technical momentum data unavailable.</i>"
         sent_block_text = sentiment_snapshot.to_telegram_block() if sentiment_snapshot else "💬 <i>Social sentiment stream unavailable.</i>"
 
-        tech_details = ""
-        if technical_snapshot and technical_snapshot.is_live:
-            tech_details = f"""
-        VERIFIED TECHNICAL MOMENTUM DATA (CALCULATED FROM 250 DAILY BARS):
-        • Live Price: ${price:.2f}
-        • RSI (14-Day): {technical_snapshot.rsi_14:.1f} ({technical_snapshot.rsi_status})
-        • MACD (12, 26, 9): Line {technical_snapshot.macd_line:+.2f} | Signal {technical_snapshot.macd_signal:+.2f} | Hist {technical_snapshot.macd_hist:+.2f} ({technical_snapshot.macd_status})
-        • Moving Averages: 50 DMA ${technical_snapshot.sma_50:.2f} ({technical_snapshot.dist_from_50_dma_pct:+.1f}%) | 200 DMA ${technical_snapshot.sma_200:.2f} ({technical_snapshot.dist_from_200_dma_pct:+.1f}%)
-        • Bollinger Bands: ${technical_snapshot.bollinger_lower:.2f} to ${technical_snapshot.bollinger_upper:.2f} (%B: {technical_snapshot.bollinger_pct_b:.2f}, Bandwidth: {technical_snapshot.bollinger_bandwidth:.1f}%, Status: {technical_snapshot.bollinger_status})
-        • Volatility ATR (14-Day): ${technical_snapshot.atr_14:.2f} | Suggested Trailing Stop Floor: ${technical_snapshot.suggested_stop_loss:.2f}
-        """
+        tech_details = technical_snapshot.to_prompt_context(price=price) if (technical_snapshot and technical_snapshot.is_live) else ""
 
         sent_details = ""
         if sentiment_snapshot and sentiment_snapshot.is_live:
@@ -314,7 +304,8 @@ class PortfolioAnalysisAgent(BaseAgent):
         • Relative Volume (RVOL): {sentiment_snapshot.relative_volume:.2f}x
         """
 
-        stop_floor_text = f"${technical_snapshot.suggested_stop_loss:.2f}" if (technical_snapshot and technical_snapshot.suggested_stop_loss > 0) else f"${price * 0.92:.2f}"
+        stop_floor_text = f"${technical_snapshot.suggested_stop_loss:.2f}" if (technical_snapshot and technical_snapshot.suggested_stop_loss is not None and technical_snapshot.suggested_stop_loss > 0) else f"${price * 0.92:.2f}"
+
 
         system_instruction = (
             "You are an institutional Chief Investment Officer and Senior Equity Portfolio Strategist. "

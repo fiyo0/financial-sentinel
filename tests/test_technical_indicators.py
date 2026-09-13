@@ -46,10 +46,13 @@ def test_insufficient_bars():
     short_bars = generate_bars(n=10)
     snap = compute_technical_snapshot("TEST", custom_bars=short_bars)
     assert snap.is_live is False
-    assert snap.rsi_14 == 50.0
+    assert snap.rsi_14 is None
+    assert snap.provenance is not None
+    assert "rsi_14" in snap.provenance.fields_unavailable
     assert "Insufficient historical" in (snap.error or "")
     assert "Unavailable" in snap.to_summary_line()
     assert "currently unavailable" in snap.to_telegram_block()
+
 
 
 def test_bullish_momentum_math():

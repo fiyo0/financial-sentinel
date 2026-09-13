@@ -57,12 +57,30 @@ sentinel_executor = ThreadPoolExecutor(
     thread_name_prefix="sentinel_worker"
 )
 
+from services import (
+    IdentityService,
+    PortfolioService,
+    AnalysisService,
+    BriefingService,
+)
+
 orchestrator = FinancialSentinelOrchestrator()
 daily_scheduler = DailyMarketScheduler(
     orchestrator=orchestrator,
     portfolio_loader=orchestrator.get_active_portfolio
 )
-telegram_bot = FinancialSentinelTelegramBot(orchestrator=orchestrator)
+portfolio_service = PortfolioService(orchestrator=orchestrator)
+analysis_service = AnalysisService(orchestrator=orchestrator)
+briefing_service = BriefingService(orchestrator=orchestrator, scheduler=daily_scheduler)
+identity_service = IdentityService(state_store=orchestrator.state_store)
+
+telegram_bot = FinancialSentinelTelegramBot(
+    orchestrator=orchestrator,
+    identity_service=identity_service,
+    portfolio_service=portfolio_service,
+    analysis_service=analysis_service,
+    briefing_service=briefing_service,
+)
 
 
 
@@ -469,17 +487,8 @@ async def api_update_portfolio_cash(request: Request, user: Dict[str, Any] = Dep
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid cash payload")
 
-    portfolio = orchestrator.get_active_portfolio(user_id=user_id)
-    portfolio.cash = max(0.0, new_cash)
-    dumped = orchestrator.persist_active_portfolio(portfolio, user_id=user_id)
-    stress = orchestrator.quant_engine.analyze_portfolio(portfolio)
-
-    return {
-        "status": "success",
-        "message": f"Cash balance updated to ${portfolio.cash:,.2f}",
-        "portfolio": dumped,
-        "stress": stress.model_dump(mode="json")
-    }
+    res = portfolio_service.update_cash_balance(user_id=user_id, new_cash=new_cash)
+    return res
 
 
 @app.post("/api/portfolio/upload")
@@ -655,50 +664,25 @@ async def api_add_holding_alias(holding: HoldingUpdateRequest, user: Dict[str, A
 @app.post("/api/portfolio/holding")
 async def api_update_holding(holding: HoldingUpdateRequest, user: Dict[str, Any] = Depends(require_user)):
     user_id = user["id"]
-    portfolio = orchestrator.get_active_portfolio(user_id=user_id)
-
-    target_ticker = holding.ticker.strip().upper()
-    found = False
-    for i, h in enumerate(portfolio.holdings):
-        if h.ticker.upper() == target_ticker:
-            share_diff = holding.shares - h.shares
-            if share_diff > 0:
-                cost = share_diff * (holding.avg_price or h.avg_price or 0.0)
-                portfolio.cash = max(0.0, float(portfolio.cash or 0.0) - cost)
-            elif share_diff < 0:
-                proceeds = abs(share_diff) * (holding.current_price or h.current_price or holding.avg_price or 0.0)
-                portfolio.cash = max(0.0, float(portfolio.cash or 0.0) + proceeds)
-
-            portfolio.holdings[i].name = holding.name
-            portfolio.holdings[i].shares = holding.shares
-            portfolio.holdings[i].avg_price = holding.avg_price
-            portfolio.holdings[i].current_price = holding.current_price
-            portfolio.holdings[i].sector = holding.sector
-            found = True
-            break
-
-    if not found:
-        purchase_cost = holding.shares * holding.avg_price
-        if (portfolio.cash or 0.0) >= purchase_cost:
-            portfolio.cash = max(0.0, float(portfolio.cash or 0.0) - purchase_cost)
-        portfolio.holdings.append(PortfolioHolding(
-            ticker=target_ticker,
-            name=holding.name,
+    try:
+        res = portfolio_service.add_or_update_holding(
+            user_id=user_id,
+            ticker=holding.ticker,
             shares=holding.shares,
-            avg_price=holding.avg_price,
-            current_price=holding.current_price,
+            price=holding.avg_price,
+            name=holding.name,
             sector=holding.sector,
-            thematic_tags=[]
-        ))
-
-    dumped = orchestrator.persist_active_portfolio(portfolio, user_id=user_id)
-    stress = orchestrator.quant_engine.analyze_portfolio(portfolio)
-
-    return {
-        "status": "success",
-        "portfolio": dumped,
-        "stress": stress.model_dump(mode="json")
-    }
+            current_price=holding.current_price,
+            incremental=False,
+            deduct_cash=True
+        )
+        return {
+            "status": "success",
+            "portfolio": res["portfolio"],
+            "stress": res["stress"]
+        }
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
 
 
 @app.post("/api/portfolio/holding/delete")
@@ -710,26 +694,24 @@ async def api_delete_holding(request: Request, user: Dict[str, Any] = Depends(re
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid payload")
 
-    portfolio = orchestrator.get_active_portfolio(user_id=user_id)
+    if not ticker:
+        raise HTTPException(status_code=400, detail="Ticker is required")
 
-    # Liquidate deleted holding directly into cash reserve
-    deleted_holding = next((h for h in portfolio.holdings if h.ticker.upper() == ticker), None)
-    liquidated_val = 0.0
-    if deleted_holding:
-        liquidated_val = deleted_holding.shares * (deleted_holding.current_price or deleted_holding.avg_price or 0.0)
-        portfolio.cash = max(0.0, float(portfolio.cash or 0.0) + liquidated_val)
-
-    portfolio.holdings = [h for h in portfolio.holdings if h.ticker.upper() != ticker]
-
-    dumped = orchestrator.persist_active_portfolio(portfolio, user_id=user_id)
-    stress = orchestrator.quant_engine.analyze_portfolio(portfolio)
-
-    return {
-        "status": "success",
-        "message": f"Sold {ticker}. Credited ${liquidated_val:,.2f} to cash reserve.",
-        "portfolio": dumped,
-        "stress": stress.model_dump(mode="json")
-    }
+    try:
+        res = portfolio_service.remove_or_trim_holding(
+            user_id=user_id,
+            ticker=ticker,
+            shares_to_remove="all",
+            credit_cash=True
+        )
+        return {
+            "status": "success",
+            "message": f"Sold {ticker}. Credited ${res['liquidated_val']:,.2f} to cash reserve.",
+            "portfolio": res["portfolio"],
+            "stress": res["stress"]
+        }
+    except ValueError as ve:
+        raise HTTPException(status_code=404, detail=str(ve))
 
 
 
@@ -892,99 +874,25 @@ async def api_get_earnings_calendar(user: Dict[str, Any] = Depends(require_user)
 
 
 @app.post("/api/analyze/{ticker}")
+@app.get("/api/analyze/{ticker}")
 async def api_analyze_ticker(ticker: str, user: Dict[str, Any] = Depends(require_user)):
     user_id = user["id"]
-    user_key = orchestrator.resolve_user_api_key(user_id)
-
-    if not user_key:
-        raise HTTPException(
-            status_code=400,
-            detail="Gemini API Key Required: Please configure GEMINI_API_KEY on the server or add your personal Gemini API key in Dashboard Settings."
-        )
-
-
-    target_ticker = ticker.strip().upper().replace("$", "")
-    from analytics.market_data import fetch_live_quote
-    from analytics.technical_indicators import compute_technical_snapshot
-    from analytics.sentiment_stream import fetch_social_sentiment_snapshot
-    from dataclasses import asdict
-
-    # Concurrently gather live quote, technical momentum, targeted news feeds, sentiment snapshot, and active portfolio
-    quote_task = asyncio.to_thread(fetch_live_quote, target_ticker)
-    tech_task = asyncio.to_thread(compute_technical_snapshot, target_ticker)
-    news_task = asyncio.to_thread(
-        orchestrator.news_agent.ingest_all_feeds,
-        live=True,
-        portfolio_tickers=[target_ticker],
-        api_key=user_key
-    )
-    sent_task = asyncio.to_thread(fetch_social_sentiment_snapshot, target_ticker)
-    portfolio_task = asyncio.to_thread(orchestrator.get_active_portfolio, user_id=user_id)
-
-    quote, tech_snap, news_items, sent_snap, portfolio = await asyncio.gather(
-        quote_task, tech_task, news_task, sent_task, portfolio_task
-    )
-    # Dynamically calibrate sentiment volume weighting with live RVOL if available
-    if tech_snap and tech_snap.is_live and tech_snap.rvol and sent_snap:
-        sent_snap.relative_volume = tech_snap.rvol
-
-    analysis_obj = await asyncio.to_thread(
-        orchestrator.analysis_agent.analyze_single_ticker_structured,
-        ticker=target_ticker,
-        portfolio=portfolio,
-        news_items=news_items,
-        quote_data=quote,
-        technical_snapshot=tech_snap,
-        sentiment_snapshot=sent_snap,
-        api_key=user_key
-    )
-    # Extract headline metadata for persistent archive repository
-    current_price = 0.0
-    if quote and quote.get("current_price"):
-        current_price = float(quote.get("current_price") or 0.0)
-    elif tech_snap and getattr(tech_snap, "current_price", None):
-        current_price = float(tech_snap.current_price or 0.0)
-
-    company_name = (quote.get("name") if quote else None) or target_ticker
-    verdict = analysis_obj.verdict
-    conviction_score = analysis_obj.conviction_score
-    analysis_text = analysis_obj.telegram_html
-
-    deepdive_payload = {
-        "status": "success",
-        "ticker": target_ticker,
-        "quote": quote,
-        "technicals": asdict(tech_snap) if tech_snap else None,
-        "sentiment": asdict(sent_snap) if sent_snap else None,
-        "analysis": analysis_text,
-        "verdict": verdict,
-        "conviction_score": conviction_score,
-        "thesis": analysis_obj.thesis,
-        "catalysts": analysis_obj.catalysts,
-        "risks": analysis_obj.risks,
-        "target_price": analysis_obj.target_price,
-        "stop_floor": analysis_obj.stop_floor,
-        "suggested_allocation_usd": analysis_obj.suggested_allocation_usd
-    }
-
     try:
-        dd_id = orchestrator.state_store.save_deepdive(
+        res = await asyncio.to_thread(
+            analysis_service.run_single_ticker_analysis,
+            ticker=ticker,
             user_id=user_id,
-            ticker=target_ticker,
-            company_name=company_name,
-            current_price=current_price,
-            verdict=verdict,
-            conviction_score=conviction_score,
-            technicals=asdict(tech_snap) if tech_snap else None,
-            sentiment=asdict(sent_snap) if sent_snap else None,
-            analysis_text=analysis_text,
-            payload_json=deepdive_payload
         )
-        deepdive_payload["deepdive_id"] = dd_id
-    except Exception as save_err:
-        logger.warning(f"Failed to auto-archive deep dive for {target_ticker}: {save_err}")
-
-    return deepdive_payload
+        res_copy = dict(res)
+        res_copy.pop("structured", None)
+        return res_copy
+    except ValueError as ve:
+        err_msg = str(ve)
+        status_code = 404 if "not recognized" in err_msg.lower() else 400
+        raise HTTPException(status_code=status_code, detail=err_msg)
+    except Exception as e:
+        logger.error(f"Error analyzing {ticker}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to analyze {ticker}: {str(e)}")
 
 
 @app.get("/api/deepdives")
@@ -1224,7 +1132,7 @@ async def api_trigger_scheduled_briefing(slot: str, force: bool = False, caller:
         raise HTTPException(status_code=400, detail="Invalid slot. Choose premarket, midmarket, postmarket, weekend, or earnings.")
 
     target_user_id = caller.get("id") if caller.get("id") != "cron_scheduler" else None
-    msg = await asyncio.to_thread(daily_scheduler.execute_briefing, slot, None, target_user_id, True, force)
+    msg = await asyncio.to_thread(briefing_service.generate_briefing, slot, target_user_id, None, True, force)
     return {
         "status": "success",
         "slot": slot,
@@ -1277,7 +1185,7 @@ async def api_get_market_briefings(slot: Optional[str] = None, limit: int = 20, 
     user_id = user["id"]
     is_admin = bool(user.get("role") == "admin")
     # Non-admin users strictly only see their own briefings
-    briefings = orchestrator.state_store.get_market_briefings(
+    briefings = briefing_service.list_briefings(
         user_id=user_id if not is_admin else None,
         slot=slot,
         limit=min(limit, 100)
@@ -1301,7 +1209,7 @@ async def api_get_market_briefings(slot: Optional[str] = None, limit: int = 20, 
 
 @app.get("/api/briefings/{report_id}")
 async def api_get_market_briefing_detail(report_id: str, user: Dict[str, Any] = Depends(require_user)):
-    b = orchestrator.state_store.get_market_briefing_by_id(report_id)
+    b = briefing_service.get_briefing(report_id)
     if not b:
         raise HTTPException(status_code=404, detail="Briefing report not found.")
 
@@ -1343,10 +1251,10 @@ async def api_generate_market_briefing(payload: GenerateBriefingPayload, user: D
             target_chat = telegram_bot.get_effective_chat_id() or config.telegram_chat_id
 
     msg = await asyncio.to_thread(
-        daily_scheduler.execute_briefing,
+        briefing_service.generate_briefing,
         slot,
-        target_chat if payload.dispatch_telegram else None,
         user_id,
+        target_chat if payload.dispatch_telegram else None,
         payload.dispatch_telegram,
         True
     )
@@ -1364,7 +1272,7 @@ async def api_generate_market_briefing(payload: GenerateBriefingPayload, user: D
 
 @app.post("/api/briefings/{report_id}/dispatch")
 async def api_dispatch_market_briefing(report_id: str, user: Dict[str, Any] = Depends(require_user)):
-    b = orchestrator.state_store.get_market_briefing_by_id(report_id)
+    b = briefing_service.get_briefing(report_id)
     if not b:
         raise HTTPException(status_code=404, detail="Briefing report not found.")
 
@@ -1395,7 +1303,7 @@ async def api_dispatch_market_briefing(report_id: str, user: Dict[str, Any] = De
 
 @app.post("/api/briefings/prune")
 async def api_prune_market_briefings(retention_days: int = 30, user: Dict[str, Any] = Depends(require_admin)):
-    pruned_count = orchestrator.state_store.prune_briefings(retention_days=retention_days)
+    pruned_count = briefing_service.prune_briefings(retention_days=retention_days)
     return {
         "status": "success",
         "message": f"Successfully pruned {pruned_count} duplicate and expired briefing entries.",
