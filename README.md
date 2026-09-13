@@ -1,12 +1,16 @@
 # 🛡️ Financial Sentinel & Alpha Discovery Multi-Agent Platform
 
-[![Version](https://img.shields.io/badge/version-2.3.0-blue.svg)](config.py)
-[![Tests](https://img.shields.io/badge/tests-68%20passed-brightgreen.svg)](tests/)
+[![Version](https://img.shields.io/badge/version-2.4.0-blue.svg)](config.py)
+[![Tests](https://img.shields.io/badge/tests-109%20passed-brightgreen.svg)](tests/)
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](requirements.txt)
 [![GCP Cloud Run](https://img.shields.io/badge/deployment-Cloud%20Run-orange.svg)](Dockerfile)
 [![Security](https://img.shields.io/badge/security-AES--256%20BYOK%20%7C%20Secret%20Manager-purple.svg)](auth/crypto.py)
+[![Audit](https://img.shields.io/badge/audit-verified%20dossier-emerald.svg)](AUDIT_DOSSIER.md)
 
 An autonomous, multi-agent financial intelligence and risk governance system combining **defensive portfolio monitoring**, **deterministic technical momentum**, **retail social sentiment velocity**, and **offensive asymmetric opportunity discovery**.
+
+> [!NOTE]
+> **Independent Auditor Reference:** For security posture, threat model, quantitative proofs, and regression mapping, refer directly to [`AUDIT_DOSSIER.md`](AUDIT_DOSSIER.md).
 
 ---
 
@@ -44,7 +48,14 @@ An autonomous, multi-agent financial intelligence and risk governance system com
                               │     Token Budget Guard)   │
                               └───────────┬───────────────┘
                                           │
-          ┌───────────────────────────────┴───────────────────────────────┐
+                                          ▼
+                  ┌───────────────────────────────────────────────┐
+                  │ 6. Decoupled Domain Services (services/)      │
+                  │ • IdentityService   • PortfolioService        │
+                  │ • AnalysisService   • BriefingService         │
+                  └───────────────┬───────────────┬───────────────┘
+                                  │               │
+          ┌───────────────────────┘               └───────────────────────┐
           ▼                                                               ▼
 ┌───────────────────────────┐                                   ┌───────────────────────────┐
 │ Web Console (FastAPI)     │                                   │ Telegram Terminal Bot     │
@@ -94,6 +105,19 @@ An autonomous, multi-agent financial intelligence and risk governance system com
 * **Single-Writer Concurrency Lock:** Service deployed with `--max-instances=1` (`autoscaling.knative.dev/maxScale: 1`), guaranteeing that exactly one container instance mounts SQLite and pushes snapshots to Google Cloud Storage (`gs://financial-sentinel-data-507007/state.db`).
 * **Synchronous WAL Checkpointing:** SQLite transactions are flushed via `PRAGMA wal_checkpoint(TRUNCATE);` before GCS snapshot uploads.
 * **Dedicated Worker Pool:** FastAPI event loop integrates a dedicated 16-worker `ThreadPoolExecutor` to eliminate thread starvation on single-core container runtimes.
+
+### 7. Decoupled Domain Service Architecture (`services/`)
+* **Single Source of Truth:** Extracted core business logic from Web and Telegram presentation channels into dedicated, tenant-isolated domain services:
+  * **`IdentityService`:** Centralized token validation, Telegram chat/user resolution, and encrypted BYOK key retrieval.
+  * **`PortfolioService`:** Unified position mutations, weighted-average cost basis tracking, and automatic cash debit/credit synchronization.
+  * **`AnalysisService`:** Concurrently orchestrates market quotes, technical indicators, social sentiment, and LLM synthesis with automatic state store persistence.
+  * **`BriefingService`:** Manages lifecycle, tenant isolation, and pruning for scheduled premarket, midmarket, postmarket, weekend, and earnings briefings.
+
+### 8. Data Provenance Envelopes & Hypothesis Property Testing (`analytics/`, `tests/`)
+* **Immutable Data Provenance:** Every technical analysis snapshot carries an immutable `Provenance` envelope tracking data origin, bar counts, adjustment status, and explicit missing-field telemetry.
+* **Strict Missing-Data Contract:** Strictly returns `None` instead of plausible or fabricated numbers on short data ($<14$ bars for RSI, $<35$ for MACD, $<200$ for SMA-200).
+* **Mathematical Invariants via Hypothesis:** Automated property-based tests verify RSI boundedness ($0 \le \text{RSI} \le 100$), Bollinger Band ordering ($\text{lower} \le \text{mid} \le \text{upper}$), and translation invariance across hundreds of generated price series.
+* **Wilder (1978) Golden Benchmark:** Canonical reference test matching J. Welles Wilder Jr.'s worked table within 0.05 tolerance.
 
 ---
 
@@ -167,7 +191,7 @@ When configured with `TELEGRAM_BOT_TOKEN`, the bot acts as an interactive privat
 | `GEMINI_API_KEY` | Google Gemini API key for CIO synthesis & chat | Optional (BYOK supported) |
 | `GEMINI_MODEL` | Target Gemini model (default: `gemini-3.8-flash`) | No |
 | `APP_SECRET_KEY` | 256-bit random hex key for AES-256 BYOK encryption | Yes (production) |
-| `DASHBOARD_AUTH_ENABLED` | Enable session authentication (`true`/`false`) | No (default: `false`) |
+| `DASHBOARD_AUTH_ENABLED` | Enable session authentication (`true`/`false`) | No (default: `true`) |
 | `DASHBOARD_PASSWORD` | Master password for dashboard admin access | No |
 | `TELEGRAM_BOT_TOKEN` | BotFather API token for Telegram channel | Optional |
 | `TELEGRAM_ALLOWED_USERNAMES` | Comma-separated list of authorized Telegram handles | No |

@@ -3,6 +3,12 @@ __pycache__
 *.pyc
 .git
 .gitignore
+.env
+.env.*
+*.env
+.pytest_cache
+.hypothesis
+.ruff_cache
 tests
 *.db
 *.db-*
@@ -13,3 +19,8 @@ storage/*.db*
 storage/*.db-wal
 storage/*.db-shm
 storage/*.db-journal
+storage/legacy_archive/
+data/my_portfolio*
+data/active_portfolio.json
+data/telegram_chat_id.txt
+*.log
