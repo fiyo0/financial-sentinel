@@ -1,0 +1,1844 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Financial Sentinel | Autonomous Multi-Agent Portfolio Intelligence</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        try { localStorage.removeItem('sentinel_theme'); } catch(e) {}
+        document.documentElement.classList.add('dark');
+        document.documentElement.classList.remove('light');
+
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        dark: {
+                            950: '#090d16',
+                            900: '#0f172a',
+                            850: '#151f38',
+                            800: '#1e293b',
+                            700: '#334155'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+        
+        /* Prevent layout shift and width jumping across tab switches */
+        html {
+            overflow-y: scroll;
+            scrollbar-gutter: stable;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            min-width: 320px;
+        }
+
+        .font-mono { font-family: 'JetBrains Mono', monospace; }
+        .pulse-subtle { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .6; } }
+        .flash-green { animation: flashGreen 1.2s ease-out; }
+        @keyframes flashGreen { 0% { background-color: rgba(16, 185, 129, 0.3); } 100% { background-color: transparent; } }
+        .tab-active { border-color: #06b6d4; color: #38bdf8; background: rgba(14, 165, 233, 0.08); font-weight: 700; }
+        .tab-inactive { border-color: transparent; color: #94a3b8; }
+        .tab-inactive:hover { color: #e2e8f0; border-color: #334155; }
+        
+        /* Consistent container sizing */
+        .sentinel-container {
+            width: 100%;
+            max-width: 1720px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        /* Briefing Executive HTML Renderer Styling */
+        .briefing-html-content {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            line-height: 1.75;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .briefing-html-content b {
+            color: #f8fafc;
+            font-weight: 700;
+        }
+        .briefing-html-content i {
+            color: #cbd5e1;
+            font-style: italic;
+        }
+        .briefing-html-content code {
+            font-family: 'JetBrains Mono', monospace;
+            background: #020617;
+            border: 1px solid #334155;
+            color: #38bdf8;
+            padding: 0.15rem 0.35rem;
+            border-radius: 0.375rem;
+            font-size: 0.85em;
+        }
+        .briefing-html-content a {
+            color: #38bdf8;
+            text-decoration: underline;
+        }
+    
+
+    </style>
+</head>
+<body class="bg-dark-950 text-slate-100 min-h-screen flex flex-col antialiased">
+
+    <!-- Top Navigation Bar -->
+    <header class="sticky top-0 z-40 bg-dark-900/90 backdrop-blur-md border-b border-slate-800/80 shadow-lg w-full">
+        <div class="sentinel-container px-4 sm:px-6 lg:px-8 xl:px-12 py-3 flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+                <div class="p-2 bg-gradient-to-br from-cyan-500 to-blue-600 rounded-xl text-white font-bold text-lg shadow-md shadow-cyan-500/20">
+                    ⚡
+                </div>
+                <div>
+                    <div class="flex items-center space-x-2">
+                        <h1 class="text-base font-extrabold text-white tracking-tight">Financial Sentinel</h1>
+                        <span class="hidden sm:inline-flex items-center space-x-1.5 px-2.5 py-0.5 text-[10px] font-mono bg-dark-950 text-cyan-300 border border-slate-800 rounded-full" title="Pacific Time (PST/PDT)">
+                            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                            <span id="header-pst-clock">--:--:-- PST</span>
+                        </span>
+                    </div>
+                    <p class="text-[11px] text-slate-400 hidden sm:block">Autonomous Portfolio Risk Management & Alpha Intelligence</p>
+                </div>
+            </div>
+
+            <!-- Action Controls & Session Management -->
+            <div class="flex items-center space-x-2">
+                <input type="file" id="portfolio-file-input" accept=".csv,.json" class="hidden" onchange="handleFileUpload(event)">
+
+                
+                <button onclick="document.getElementById('portfolio-file-input').click()" title="Import CSV/JSON Portfolio" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 active:scale-95 transition text-slate-300 hover:text-white text-xs font-medium rounded-lg border border-slate-700/80 flex items-center space-x-1">
+                    <span>📥 Import</span>
+                </button>
+                <button onclick="openAddHoldingModal()" class="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:scale-95 transition text-white text-xs font-bold rounded-lg shadow-sm shadow-emerald-900/30 flex items-center space-x-1">
+                    <span>➕ Add Holding</span>
+                </button>
+                <button onclick="openHoldingsModal()" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 active:scale-95 transition text-cyan-300 text-xs font-medium rounded-lg border border-cyan-900/50 flex items-center space-x-1">
+                    <span>✏️ Edit & Cash</span>
+                </button>
+
+                <button onclick="refreshLiveQuotes()" id="btn-refresh-quotes" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 active:scale-95 transition text-slate-300 hover:text-white text-xs font-medium rounded-lg border border-slate-700/80 flex items-center space-x-1">
+                    <span>🔄 Sync Quotes</span>
+                </button>
+                <button onclick="triggerScan(true, false)" id="btn-scan" class="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:scale-95 transition text-white text-xs font-bold rounded-lg shadow-sm shadow-emerald-900/40 flex items-center space-x-1.5">
+                    <span>⚡ Analyze</span>
+                </button>
+
+                <button onclick="openSettingsModal()" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 active:scale-95 transition text-slate-200 text-xs font-medium rounded-lg border border-slate-700/80 flex items-center space-x-1.5" title="User Settings & BYOK Gemini Key">
+                    <span>👤</span>
+                    <span class="font-bold max-w-[90px] truncate text-slate-100">{{ user.username if user else "Investor" }}</span>
+                    {% if has_gemini_key %}
+                    <span class="w-2 h-2 rounded-full bg-emerald-400" title="BYOK Gemini Key Active"></span>
+                    {% else %}
+                    <span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse" title="BYOK Gemini Key Unset"></span>
+                    {% endif %}
+                </button>
+                <button onclick="openSettingsModal()" class="p-1.5 bg-slate-800 hover:bg-slate-700 active:scale-95 transition text-slate-300 hover:text-white text-xs rounded-lg border border-slate-700/80" title="Settings & BYOK Gemini Key">
+                    <span>⚙️</span>
+                </button>
+                <button onclick="lockSession()" title="Sign Out & Lock Session" class="p-1.5 bg-slate-800 hover:bg-red-950/60 hover:border-red-800/80 active:scale-95 transition text-slate-400 hover:text-red-300 text-xs font-medium rounded-lg border border-slate-700/80 flex items-center">
+                    <span>🔒</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Notification Toast Banner -->
+    <div id="status-banner" class="sentinel-container px-4 sm:px-6 lg:px-8 xl:px-12 mt-2.5 hidden">
+        <div id="status-banner-content" class="p-2.5 bg-emerald-950/40 border border-emerald-800/80 rounded-lg text-xs text-emerald-300 flex items-center justify-between">
+            <span id="status-banner-text">Analysis completed successfully.</span>
+            <button onclick="document.getElementById('status-banner').classList.add('hidden')" class="text-slate-400 hover:text-white text-sm leading-none">&times;</button>
+        </div>
+    </div>
+
+    <!-- Main Container -->
+    <main class="sentinel-container px-4 py-4 sm:px-6 lg:px-8 xl:px-12 space-y-4 flex-1 w-full">
+        
+        <!-- Adaptive Portfolio HUD -->
+        <div id="portfolio-hud-container" class="w-full space-y-1">
+            <!-- Full Analytical 6-Card HUD (Default visible on Portfolio & Risk tab) -->
+            <div id="portfolio-hud-full" class="space-y-1.5 w-full">
+                <div class="flex items-center justify-end">
+                    <button onclick="toggleHudManual()" id="btn-toggle-hud-full" class="text-[10px] text-slate-500 hover:text-cyan-400 flex items-center space-x-1 font-mono transition">
+                        <span>↕ Collapse HUD</span>
+                    </button>
+                </div>
+                <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-xs font-mono w-full">
+                    <div class="p-3.5 bg-dark-900 border border-slate-800 rounded-xl shadow-md">
+                        <div class="text-[10px] text-slate-400 font-sans uppercase font-semibold">Total Wealth</div>
+                        <div id="hud-total-wealth" class="text-sm sm:text-base font-bold text-white mt-0.5">
+                            ${{ "{:,.2f}".format(total_wealth) }}
+                        </div>
+                        <div class="text-[10px] text-slate-500 font-sans truncate">Equity + Cash Reserves</div>
+                    </div>
+
+                    <div class="p-3.5 bg-dark-900 border border-slate-800 rounded-xl shadow-md">
+                        <div class="text-[10px] text-slate-400 font-sans uppercase font-semibold">Monitored Equity</div>
+                        <div id="hud-total-equity" class="text-sm sm:text-base font-bold text-emerald-400 mt-0.5">
+                            ${{ "{:,.2f}".format(portfolio.total_equity()) }}
+                        </div>
+                        <div id="hud-holdings-count" class="text-[10px] text-slate-500 font-sans truncate">{{ portfolio.holdings | length }} Active Positions</div>
+                    </div>
+
+                    <div class="p-3.5 bg-dark-900 border border-cyan-900/40 rounded-xl shadow-md">
+                        <div class="text-[10px] text-cyan-400 font-sans uppercase font-semibold">Deployable Cash</div>
+                        <div id="hud-cash-reserves" class="text-sm sm:text-base font-bold text-cyan-300 mt-0.5">
+                            ${{ "{:,.2f}".format(portfolio.cash) }}
+                        </div>
+                        <div id="hud-cash-pct" class="text-[10px] text-cyan-500/80 font-sans truncate">
+                            {{ stress.cash_allocation_pct if stress else 0 }}% Dry Powder
+                        </div>
+                    </div>
+
+                    <div class="p-3.5 bg-dark-900 border border-slate-800 rounded-xl shadow-md">
+                        <div class="text-[10px] text-slate-400 font-sans uppercase font-semibold">Unrealized PnL</div>
+                        <div id="hud-unrealized-pnl" class="text-sm sm:text-base font-bold {% if portfolio.total_unrealized_pnl() >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %} mt-0.5">
+                            {% if portfolio.total_unrealized_pnl() >= 0 %}+{% endif %}${{ "{:,.2f}".format(portfolio.total_unrealized_pnl()) }}
+                        </div>
+                        <div id="hud-unrealized-pct" class="text-[10px] {% if portfolio.total_unrealized_pnl() >= 0 %}text-emerald-500/80{% else %}text-rose-500/80{% endif %} font-sans truncate">
+                            {{ "{:+.1f}".format(portfolio.total_unrealized_pnl_pct()) }}% Return
+                        </div>
+                    </div>
+
+                    <div class="p-3.5 bg-dark-900 border border-slate-800 rounded-xl shadow-md">
+                        <div class="text-[10px] text-slate-400 font-sans uppercase font-semibold">Market Beta</div>
+                        <div id="hud-beta" class="text-sm sm:text-base font-bold text-cyan-400 mt-0.5">
+                            {{ stress.estimated_portfolio_beta if stress else 1.0 }}
+                        </div>
+                        <div class="text-[10px] text-slate-500 font-sans truncate">S&P 500 Sensitivity</div>
+                    </div>
+
+                    <div class="p-3.5 bg-dark-900 border border-slate-800 rounded-xl shadow-md">
+                        <div class="text-[10px] text-slate-400 font-sans uppercase font-semibold">95% 1-Day VaR</div>
+                        <div id="hud-var" class="text-sm sm:text-base font-bold text-rose-400 mt-0.5">
+                            -{{ stress.var_95_daily_pct if stress else 1.8 }}%
+                        </div>
+                        <div id="hud-var-usd" class="text-[10px] text-slate-500 font-sans truncate">
+                            -${{ "{:,.0f}".format(stress.var_95_daily_usd) if (stress and stress.var_95_daily_usd) else 0 }} Bad Day Limit
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Compact 1-Line Sticky HUD Ticker (Default visible on all non-portfolio tabs) -->
+            <div id="portfolio-hud-compact" class="hidden bg-dark-900/90 backdrop-blur border border-slate-800 rounded-xl px-4 py-2 flex flex-wrap items-center justify-between text-xs font-mono shadow-md w-full gap-2">
+                <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-slate-300">
+                    <div class="flex items-center space-x-1.5">
+                        <span class="text-[10px] text-slate-400 uppercase font-sans">Total Wealth:</span>
+                        <span id="compact-hud-total-wealth" class="text-white font-bold">${{ "{:,.2f}".format(total_wealth) }}</span>
+                    </div>
+                    <div class="flex items-center space-x-1.5 border-l border-slate-800 pl-3">
+                        <span class="text-[10px] text-slate-400 uppercase font-sans">Equity:</span>
+                        <span id="compact-hud-total-equity" class="text-emerald-400 font-bold">${{ "{:,.2f}".format(portfolio.total_equity()) }}</span>
+                    </div>
+                    <div class="flex items-center space-x-1.5 border-l border-slate-800 pl-3">
+                        <span class="text-[10px] text-cyan-400 uppercase font-sans">Cash:</span>
+                        <span id="compact-hud-cash-reserves" class="text-cyan-300 font-bold">${{ "{:,.2f}".format(portfolio.cash) }}</span>
+                        <span id="compact-hud-cash-pct" class="text-[10px] text-cyan-500/80">({{ stress.cash_allocation_pct if stress else 0 }}%)</span>
+                    </div>
+                    <div class="flex items-center space-x-1.5 border-l border-slate-800 pl-3">
+                        <span class="text-[10px] text-slate-400 uppercase font-sans">PnL:</span>
+                        <span id="compact-hud-unrealized-pnl" class="font-bold {% if portfolio.total_unrealized_pnl() >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
+                            {% if portfolio.total_unrealized_pnl() >= 0 %}+{% endif %}${{ "{:,.2f}".format(portfolio.total_unrealized_pnl()) }} ({{ "{:+.1f}".format(portfolio.total_unrealized_pnl_pct()) }}%)
+                        </span>
+                    </div>
+                    <div class="flex items-center space-x-1.5 border-l border-slate-800 pl-3">
+                        <span class="text-[10px] text-slate-400 uppercase font-sans">Beta:</span>
+                        <span id="compact-hud-beta" class="text-cyan-400 font-bold">{{ stress.estimated_portfolio_beta if stress else 1.0 }}</span>
+                    </div>
+                    <div class="flex items-center space-x-1.5 border-l border-slate-800 pl-3">
+                        <span class="text-[10px] text-slate-400 uppercase font-sans">1D VaR:</span>
+                        <span id="compact-hud-var" class="text-rose-400 font-bold">-{{ stress.var_95_daily_pct if stress else 1.8 }}%</span>
+                    </div>
+                </div>
+                <button onclick="toggleHudManual()" id="btn-toggle-hud-compact" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-cyan-300 rounded text-[10px] font-sans flex items-center space-x-1 transition font-semibold">
+                    <span>↕ Expand HUD</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Dashboard Navigation View Switcher Tabs -->
+        <div class="flex items-center justify-between border-b border-slate-800 pb-1 w-full">
+            <nav class="flex space-x-1 sm:space-x-2 overflow-x-auto text-xs font-semibold py-1">
+                <button onclick="switchTab('tab-portfolio')" id="btn-tab-portfolio" class="tab-btn px-3.5 py-2 border-b-2 rounded-t-lg transition flex items-center space-x-1.5 tab-active">
+                    <span>📊</span>
+                    <span>Portfolio & Risk</span>
+                </button>
+                <button onclick="switchTab('tab-scans')" id="btn-tab-scans" class="tab-btn px-3.5 py-2 border-b-2 rounded-t-lg transition flex items-center space-x-1.5 tab-inactive">
+                    <span>⚡</span>
+                    <span>Multi Agent Analysis</span>
+                </button>
+                <button onclick="switchTab('tab-deepdive')" id="btn-tab-deepdive" class="tab-btn px-3.5 py-2 border-b-2 rounded-t-lg transition flex items-center space-x-1.5 tab-inactive">
+                    <span>🔬</span>
+                    <span>Ticker Deep Dive</span>
+                </button>
+                <button onclick="switchTab('tab-briefings')" id="btn-tab-briefings" class="tab-btn px-3.5 py-2 border-b-2 rounded-t-lg transition flex items-center space-x-1.5 tab-inactive">
+                    <span>🌅</span>
+                    <span>Market Briefings</span>
+                </button>
+                <button onclick="switchTab('tab-chat')" id="btn-tab-chat" class="tab-btn px-3.5 py-2 border-b-2 rounded-t-lg transition flex items-center space-x-1.5 tab-inactive">
+                    <span>💬</span>
+                    <span>AI Agent Chat</span>
+                </button>
+                <button onclick="switchTab('tab-earnings')" id="btn-tab-earnings" class="tab-btn px-3.5 py-2 border-b-2 rounded-t-lg transition flex items-center space-x-1.5 tab-inactive">
+                    <span>📅</span>
+                    <span>Earnings & Events</span>
+                </button>
+                <button onclick="switchTab('tab-guide')" id="btn-tab-guide" class="tab-btn px-3.5 py-2 border-b-2 rounded-t-lg transition flex items-center space-x-1.5 tab-inactive">
+                    <span>📖</span>
+                    <span>System Key & Guide</span>
+                </button>
+            </nav>
+        </div>
+
+        <!-- ========================================== -->
+        <!-- TAB 1: PORTFOLIO & RISK                   -->
+        <!-- ========================================== -->
+        <div id="tab-portfolio" class="tab-content space-y-4 w-full">
+            
+            <!-- Sector Allocation Progress Visualizer -->
+            <div class="bg-dark-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl space-y-3 w-full">
+                <div class="flex items-center justify-between text-xs">
+                    <div class="flex items-center space-x-2">
+                        <span class="text-base">🥧</span>
+                        <h3 class="font-bold text-white text-sm">Portfolio Asset & Sector Weight Distribution</h3>
+                    </div>
+                    <span id="sector-concentration-status" class="text-[10px] font-mono px-2.5 py-0.5 rounded font-semibold {% if stress and stress.high_concentration_warning %}bg-amber-500/20 text-amber-300 border border-amber-500/30{% else %}bg-emerald-500/20 text-emerald-300 border border-emerald-500/30{% endif %}">
+                        {% if stress and stress.high_concentration_warning %}⚠️ High Concentration{% else %}✅ Well Balanced{% endif %}
+                    </span>
+                </div>
+
+                <!-- Segmented Multi-Color Progress Bar -->
+                <div id="sector-progress-bar" class="w-full h-3.5 bg-dark-950 rounded-full overflow-hidden flex border border-slate-800">
+                    <!-- Populated dynamically by JS -->
+                </div>
+
+                <!-- Sector Legend Chips -->
+                <div id="sector-legend-chips" class="flex flex-wrap gap-2 text-[11px] font-mono">
+                    <!-- Populated dynamically by JS -->
+                </div>
+            </div>
+
+            <!-- Holdings & Quant Stress Grid -->
+            <div class="grid grid-cols-1 xl:grid-cols-3 gap-5 w-full">
+                <!-- Holdings Table (2 Cols on Desktop) -->
+                <div class="xl:col-span-2 bg-dark-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col justify-between w-full">
+                    <div>
+                        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                            <div>
+                                <h2 class="text-base font-bold text-white flex items-center space-x-2">
+                                    <span>💼 Monitored Holdings</span>
+                                    <span id="portfolio-holdings-count" class="text-xs px-2 py-0.5 bg-slate-800 rounded text-slate-300 font-mono">{{ portfolio.holdings | length }} Assets</span>
+                                </h2>
+                                <p class="text-xs text-slate-400 mt-0.5">Real-time quotes, cost basis, unrealized PnL, and position sizing</p>
+                            </div>
+                            
+                            <!-- Search / Filter Input & Actions -->
+                            <div class="flex items-center space-x-2">
+                                <input type="text" id="holdings-search-input" oninput="filterHoldingsTable()" placeholder="🔍 Filter ticker, name, sector..." class="px-3 py-1.5 bg-dark-950 border border-slate-800 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 w-44 sm:w-56 transition-all" />
+                                <button onclick="openAddHoldingModal()" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-xs text-white rounded-lg font-bold transition flex items-center space-x-1 shadow-md shadow-emerald-700/20 whitespace-nowrap">
+                                    <span>➕ Add Holding</span>
+                                </button>
+                                <button onclick="openHoldingsModal()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 active:scale-95 text-xs text-cyan-300 rounded-lg border border-cyan-700/50 font-semibold transition whitespace-nowrap">
+                                    ✏️ Edit All
+                                </button>
+                            </div>
+
+                        </div>
+
+                        <div class="overflow-x-auto w-full">
+                            <table class="w-full text-left text-xs">
+                                <thead class="text-[11px] uppercase tracking-wider text-slate-400 border-b border-slate-800">
+                                    <tr>
+                                        <th class="pb-2.5">Asset & Sector</th>
+                                        <th class="pb-2.5 text-right">Position & Cost</th>
+                                        <th class="pb-2.5 text-right">Live Price</th>
+                                        <th class="pb-2.5 text-right">Market Value</th>
+                                        <th class="pb-2.5 text-right">Unrealized PnL</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="dashboard-holdings-tbody" class="divide-y divide-slate-800/60 font-mono">
+                                    {% for h in portfolio.holdings %}
+                                    <tr class="hover:bg-slate-800/60 transition cursor-pointer group" onclick="analyzeHoldingTicker('{{ h.ticker }}')" title="Click to select {{ h.ticker }} in Ticker Deep Dive">
+                                        <td class="py-3 font-bold">
+                                            <div class="flex items-center space-x-2">
+                                                <span class="text-cyan-400 group-hover:text-cyan-300 font-bold tracking-wide">{{ h.ticker }}</span>
+                                                <span class="px-1.5 py-0.5 bg-slate-800 text-slate-300 rounded text-[10px] font-sans font-normal border border-slate-700/50">{{ h.sector }}</span>
+                                                <span class="text-[10px] text-cyan-400 opacity-0 group-hover:opacity-100 transition font-sans font-medium">🔬 Deep Dive →</span>
+                                            </div>
+                                            <div class="text-[10px] text-slate-400 font-normal font-sans truncate max-w-[200px] mt-0.5">{{ h.name }}</div>
+                                        </td>
+                                        <td class="py-3 text-right">
+                                            <div class="text-slate-200 font-bold font-mono">{{ "{:,.2f}".format(h.shares).rstrip('0').rstrip('.') }}</div>
+                                            <div class="text-[10px] text-slate-400 font-mono">@ ${{ "{:.2f}".format(h.avg_price) }}</div>
+                                        </td>
+                                        <td class="py-3 text-right">
+                                            <div class="font-bold text-slate-100 font-mono">${{ "{:.2f}".format(h.current_price) }}</div>
+                                            <div class="text-[10px] {% if h.unrealized_pnl >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %} font-mono">
+                                                {{ "{:+.1f}".format(h.unrealized_pnl_pct) }}%
+                                            </div>
+                                        </td>
+                                        <td class="py-3 text-right">
+                                            <div class="font-bold text-slate-200 font-mono">${{ "{:,.2f}".format(h.market_value) }}</div>
+                                            <div class="text-[10px] font-bold text-blue-400 font-mono">{{ h.weight_pct }}% weight</div>
+                                        </td>
+                                        <td class="py-3 text-right">
+                                            <div class="font-bold {% if h.unrealized_pnl >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %} font-mono">
+                                                {% if h.unrealized_pnl >= 0 %}+{% endif %}${{ "{:,.2f}".format(h.unrealized_pnl) }}
+                                            </div>
+                                            <div class="text-[10px] {% if h.unrealized_pnl >= 0 %}text-emerald-500/80{% else %}text-rose-500/80{% endif %} font-mono">
+                                                {{ "{:+.1f}".format(h.unrealized_pnl_pct) }}% return
+                                            </div>
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Quantitative Stress Matrix (1 Col on Desktop) -->
+                <div class="bg-dark-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col justify-between w-full">
+                    <div>
+                        <div class="flex items-center justify-between mb-1">
+                            <h2 class="text-base font-bold text-white flex items-center space-x-2">
+                                <span>📊 Quant Risk Matrix</span>
+                            </h2>
+                            <span class="px-2 py-0.5 text-[10px] font-mono bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 rounded-full font-semibold">Quantitative Model</span>
+                        </div>
+                        <p class="text-xs text-slate-400 mb-3.5">Parametric volatility modeling & historical crisis stress testing</p>
+                        
+                        <div id="stress-container" class="space-y-2.5 text-xs">
+                            <!-- Key Risk Metrics HUD Grid -->
+                            <div class="grid grid-cols-2 gap-2">
+                                <div class="p-3 bg-dark-950 rounded-xl border border-slate-800/80">
+                                    <div class="text-[10px] text-slate-400 font-semibold">Beta vs S&P 500</div>
+                                    <div id="val-beta" class="font-mono font-bold text-sm text-cyan-400">{{ stress.estimated_portfolio_beta if stress else 1.0 }}</div>
+                                </div>
+                                <div class="p-3 bg-dark-950 rounded-xl border border-slate-800/80">
+                                    <div class="text-[10px] text-slate-400 font-semibold">95% 1-Day VaR</div>
+                                    <div id="val-var" class="font-mono font-bold text-sm text-rose-400">-{{ stress.var_95_daily_pct if stress else 1.8 }}% <span id="val-var-usd" class="text-[10px] text-slate-400 font-normal">(${{ "{:,.0f}".format(stress.var_95_daily_usd) if (stress and stress.var_95_daily_usd) else 0 }})</span></div>
+                                </div>
+                                <div class="p-3 bg-dark-950 rounded-xl border border-slate-800/80">
+                                    <div class="text-[10px] text-slate-400 font-semibold">Annualized Volatility</div>
+                                    <div id="val-vol" class="font-mono font-bold text-sm text-amber-400">{{ stress.annualized_volatility_pct if stress else 18.0 }}%</div>
+                                </div>
+                                <div class="p-3 bg-dark-950 rounded-xl border border-slate-800/80">
+                                    <div class="text-[10px] text-slate-400 font-semibold">Est. Sharpe Ratio</div>
+                                    <div id="val-sharpe" class="font-mono font-bold text-sm text-emerald-400">{{ stress.sharpe_ratio if stress else 1.2 }}</div>
+                                </div>
+                            </div>
+
+                            <!-- Concentration & Cash Buffer -->
+                            <div class="p-3 bg-dark-950 rounded-xl border border-slate-800/80 space-y-1.5">
+                                <div class="flex justify-between items-center text-slate-300">
+                                    <span class="text-[11px]">Top 3 Concentration:</span>
+                                    <span id="val-top3" class="font-mono font-bold {% if stress and stress.top_3_concentration_pct >= 60 %}text-amber-400{% else %}text-emerald-400{% endif %}">{{ stress.top_3_concentration_pct if stress else 0 }}%</span>
+                                </div>
+                                <div class="flex justify-between items-center text-slate-300">
+                                    <span class="text-[11px]">Deployable Cash Buffer:</span>
+                                    <span id="val-cash-alloc" class="font-mono font-bold text-cyan-400">{{ stress.cash_allocation_pct if stress else 0 }}%</span>
+                                </div>
+                            </div>
+
+                            <!-- Macro Shock Scenarios List -->
+                            <div class="p-3 bg-dark-950 rounded-xl border border-slate-800/80">
+                                <div class="text-[11px] text-slate-400 mb-2 font-semibold flex items-center justify-between">
+                                    <span>Macro Crisis & Rate Stress Tests</span>
+                                    <span class="text-[10px] text-slate-500 font-normal">Estimated PnL</span>
+                                </div>
+                                <div id="stress-scenarios-list" class="space-y-1.5 font-mono text-[11px]">
+                                    {% if stress and stress.macro_shock_scenarios %}
+                                        {% for scenario, impact in stress.macro_shock_scenarios.items() %}
+                                        <div class="flex justify-between items-center py-1 border-b border-slate-900/60 last:border-0">
+                                            <span class="text-slate-400">{{ scenario }}</span>
+                                            <span class="{% if impact >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %} font-semibold">
+                                                {% if impact >= 0 %}+{% endif %}{{ impact }}%
+                                            </span>
+                                        </div>
+                                        {% endfor %}
+                                    {% else %}
+                                        <div class="text-slate-500">Calculating stress scenarios...</div>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ========================================== -->
+        <!-- TAB 2: MULTI-AGENT ANALYSIS               -->
+        <!-- ========================================== -->
+        <div id="tab-scans" class="tab-content space-y-5 w-full hidden">
+            <!-- 3-Way Segmented Pill View Switcher Filter -->
+            <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
+                <div class="flex flex-wrap items-center gap-2 text-xs font-mono">
+                    <button onclick="switchScanSubView('defense')" id="btn-scan-defense" class="scan-pill-btn px-4 py-2 bg-cyan-600 text-white rounded-xl border border-cyan-500 shadow-md shadow-cyan-600/30 transition font-bold text-xs flex items-center space-x-2">
+                        <span>🛡️</span>
+                        <span>Defensive Health & Risks</span>
+                    </button>
+                    <button onclick="switchScanSubView('alpha')" id="btn-scan-alpha" class="scan-pill-btn px-4 py-2 bg-dark-950 hover:bg-slate-800 text-slate-400 hover:text-white rounded-xl border border-slate-800 transition font-semibold text-xs flex items-center space-x-2">
+                        <span>🚀</span>
+                        <span>Vetted Alpha & Moonshots</span>
+                    </button>
+                    <button onclick="switchScanSubView('critic')" id="btn-scan-critic" class="scan-pill-btn px-4 py-2 bg-dark-950 hover:bg-slate-800 text-slate-400 hover:text-white rounded-xl border border-slate-800 transition font-semibold text-xs flex items-center space-x-2">
+                        <span>⚖️</span>
+                        <span>Critic Audit Log</span>
+                    </button>
+                </div>
+                <button onclick="switchScanSubView('all')" id="btn-scan-all" class="text-[11px] text-slate-500 hover:text-slate-300 font-mono transition">
+                    <span>Show All Views</span>
+                </button>
+            </div>
+
+            <!-- SUB-VIEW 1: DEFENSIVE HEALTH & RISKS -->
+            <div id="scan-view-defense" class="space-y-5 w-full">
+                <!-- Executive Summary Card -->
+                <div class="bg-gradient-to-r from-slate-900 via-dark-900 to-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl w-full">
+                    <div class="flex items-center justify-between mb-2">
+                        <div class="flex items-center space-x-2 text-xs font-semibold text-emerald-400 uppercase tracking-wider">
+                            <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+                            <span>Executive Briefing</span>
+                        </div>
+                        <span class="text-[10px] font-mono text-slate-400 bg-dark-950 px-2.5 py-1 rounded border border-slate-800">
+                            ⚡ Real-Time Multi-Agent Synthesis
+                        </span>
+                    </div>
+                    <p id="briefing-summary" class="text-slate-200 text-sm leading-relaxed">
+                        {% if latest_briefing %}
+                            {{ latest_briefing.executive_summary }}
+                        {% else %}
+                            Click "Analyze" above to initiate real-time multi-agent intelligence on your active holdings.
+                        {% endif %}
+                    </p>
+                </div>
+
+                <!-- Defensive Risk & Catalyst Section -->
+                <div class="space-y-3.5 w-full">
+                    <h3 class="text-sm font-bold text-white flex items-center space-x-2">
+                        <span class="text-cyan-400">🛡️</span>
+                        <span>Portfolio Asset Health, Catalysts & Defensive Risk</span>
+                    </h3>
+                    <div id="risk-alerts-container" class="grid grid-cols-1 xl:grid-cols-2 gap-4 w-full">
+                        <div class="p-4 bg-dark-900 border border-slate-800 rounded-xl text-xs text-slate-500 col-span-full">
+                            No risk alerts generated yet. Trigger a scan to analyze holdings.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SUB-VIEW 2: VETTED ALPHA & MOONSHOTS -->
+            <div id="scan-view-alpha" class="space-y-5 w-full hidden">
+                <!-- Offensive Alpha Section -->
+                <div class="space-y-3.5 w-full">
+                    <div class="flex items-center justify-between">
+                        <h3 class="text-sm font-bold text-white flex items-center space-x-2">
+                            <span class="text-emerald-400">🟢</span>
+                            <span>Vetted Alpha & Thematic Opportunities</span>
+                        </h3>
+                        <button onclick="toggleAlphaDiscoveryModal()" class="px-2.5 py-1 bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-300 border border-emerald-800/60 rounded-lg text-xs font-semibold flex items-center space-x-1 transition-all">
+                            <span>✨ Discover More</span>
+                        </button>
+                    </div>
+
+                    <!-- On-Demand Discovery Thematic Filter Bar -->
+                    <div class="flex flex-wrap gap-1.5 p-2 bg-dark-950 rounded-xl border border-slate-800/80 text-[11px]">
+                        <span class="text-slate-400 self-center mr-1">Discovery Filter:</span>
+                        <button onclick="discoverThematicAlpha('AI Energy & Nuclear Baseload Infrastructure')" class="px-2.5 py-1 bg-dark-900 hover:bg-slate-800 text-slate-300 hover:text-white rounded border border-slate-800 transition-all">
+                            ⚡ Nuclear & Energy
+                        </button>
+                        <button onclick="discoverThematicAlpha('GLP-1 & Biopharmaceutical Dominance')" class="px-2.5 py-1 bg-dark-900 hover:bg-slate-800 text-slate-300 hover:text-white rounded border border-slate-800 transition-all">
+                            🧬 Biotech / GLP-1
+                        </button>
+                        <button onclick="discoverThematicAlpha('Next-Gen Cybersecurity Platform Consolidation')" class="px-2.5 py-1 bg-dark-900 hover:bg-slate-800 text-slate-300 hover:text-white rounded border border-slate-800 transition-all">
+                            🛡️ Cybersecurity
+                        </button>
+                        <button onclick="discoverThematicAlpha('Custom Silicon ASICs & Optical Interconnects')" class="px-2.5 py-1 bg-dark-900 hover:bg-slate-800 text-slate-300 hover:text-white rounded border border-slate-800 transition-all">
+                            🔬 Custom Silicon
+                        </button>
+                        <button onclick="discoverThematicAlpha('Defensive High-Yield Dividend & Infrastructure')" class="px-2.5 py-1 bg-dark-900 hover:bg-slate-800 text-slate-300 hover:text-white rounded border border-slate-800 transition-all">
+                            🌐 High Yield / Value
+                        </button>
+                    </div>
+
+                    <div id="opportunity-container" class="grid grid-cols-1 xl:grid-cols-2 gap-4 w-full">
+                        <div class="p-4 bg-dark-900 border border-slate-800 rounded-xl text-xs text-slate-500 col-span-full">
+                            No opportunities discovered yet. Trigger a scan to discover alpha candidates.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Moonshot & High-Asymmetry Alpha Radar -->
+                <div class="bg-gradient-to-br from-dark-900 via-purple-950/20 to-dark-950 border border-purple-900/50 rounded-2xl p-5 shadow-2xl space-y-4 w-full">
+                    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-purple-900/40 pb-4">
+                        <div class="space-y-1">
+                            <div class="flex items-center space-x-2">
+                                <span class="text-xl">🚀</span>
+                                <h3 class="text-base font-bold text-white tracking-wide">Moonshot & High-Asymmetry Alpha Radar</h3>
+                                <span class="px-2.5 py-0.5 bg-purple-500/20 text-purple-300 border border-purple-500/30 rounded text-[10px] font-bold uppercase tracking-wider">
+                                    High Risk / High Reward
+                                </span>
+                            </div>
+                            <p class="text-xs text-slate-400">
+                                Deep-tech & binary-catalyst asymmetric plays (+50% to +250% potential upside) with high volatility and explicit failure-mode stress testing.
+                            </p>
+                        </div>
+                        <button onclick="scanMoonshotOpportunities()" id="btn-scan-moonshots" class="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-purple-600/30 flex items-center space-x-2 transition-all self-start sm:self-auto">
+                            <span>⚡ Scan Moonshots</span>
+                        </button>
+                    </div>
+
+                    <!-- Moonshot Cards Grid -->
+                    <div id="moonshot-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 w-full">
+                        <div class="p-5 bg-dark-950/80 border border-purple-900/30 rounded-xl text-xs text-slate-400 col-span-full flex items-center justify-between">
+                            <span>Click <strong>"⚡ Scan Moonshots"</strong> to discover high-asymmetry deep-tech & binary-catalyst plays outside your core portfolio.</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SUB-VIEW 3: CRITIC AUDIT LOG -->
+            <div id="scan-view-critic" class="space-y-5 w-full hidden">
+                <div class="bg-dark-900 border border-slate-800 rounded-2xl p-5 shadow-xl w-full">
+                    <h3 class="text-sm font-bold text-white mb-3.5 flex items-center space-x-2">
+                        <span class="text-yellow-400">🔍</span>
+                        <span>Adversarial Risk / Critic Agent Audit Log</span>
+                    </h3>
+                    <div id="critic-container" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5 w-full">
+                        <div class="p-3.5 bg-dark-950 border border-slate-800/80 rounded-xl text-xs text-slate-500 col-span-full">
+                            Critic agent audits will populate here upon pipeline execution.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ========================================== -->
+        <!-- TAB: TICKER DEEP DIVE                      -->
+        <!-- ========================================== -->
+        <div id="tab-deepdive" class="tab-content space-y-5 w-full hidden">
+            <!-- Header Banner -->
+            <div class="bg-gradient-to-br from-dark-900 via-cyan-950/20 to-dark-950 border border-cyan-900/50 rounded-2xl p-5 shadow-2xl space-y-4 w-full">
+                <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-cyan-900/40 pb-4">
+                    <div class="space-y-1">
+                        <div class="flex items-center space-x-2">
+                            <span class="text-xl">🔬</span>
+                            <h3 class="text-base font-bold text-white tracking-wide">Single Ticker Technical & Sentiment Deep Dive</h3>
+                            <span class="px-2.5 py-0.5 bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 rounded text-[10px] font-bold uppercase tracking-wider">
+                                Deterministic + Live Data
+                            </span>
+                        </div>
+                        <p class="text-xs text-slate-400">
+                            Mathematically verified momentum (RSI-14, MACD, Bollinger Bands, 50/200 DMA, ATR Trailing Stop Floor) coupled with real-time retail crowd streams (StockTwits / Reddit) and institutional CIO capital sizing.
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Search Input Bar & Quick Ticker Pills -->
+                <div class="space-y-3">
+                    <div class="flex flex-col sm:flex-row items-center gap-2.5 w-full">
+                        <div class="relative flex-1 w-full">
+                            <input type="text" id="single-ticker-input" placeholder="ENTER TICKER SYMBOL (E.G. NVDA, AAPL, TSLA, CEG, PLTR, PANW)" class="w-full bg-dark-950 border border-slate-700 text-white text-xs px-4 py-3 rounded-xl uppercase font-mono tracking-wider focus:border-cyan-500 focus:outline-none shadow-inner" onkeydown="if(event.key==='Enter') runSingleTickerAnalysis()">
+                        </div>
+                        <button onclick="runSingleTickerAnalysis()" id="btn-single-ticker" class="w-full sm:w-auto px-6 py-3 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-xs font-bold text-white rounded-xl shadow-lg transition active:scale-95 flex items-center justify-center space-x-2 whitespace-nowrap">
+                            <span>⚡ Run Deep Dive</span>
+                        </button>
+                    </div>
+
+                    <!-- Quick Suggestions Chips -->
+                    <div class="flex flex-wrap items-center gap-1.5 text-[11px]">
+                        <span class="text-slate-400 mr-1">Quick Analyze:</span>
+                        <button onclick="analyzeQuickTicker('NVDA')" class="px-2.5 py-1 bg-dark-950 hover:bg-slate-800 text-slate-300 hover:text-cyan-300 rounded-lg border border-slate-800 transition font-mono font-semibold">NVDA</button>
+                        <button onclick="analyzeQuickTicker('AAPL')" class="px-2.5 py-1 bg-dark-950 hover:bg-slate-800 text-slate-300 hover:text-cyan-300 rounded-lg border border-slate-800 transition font-mono font-semibold">AAPL</button>
+                        <button onclick="analyzeQuickTicker('TSLA')" class="px-2.5 py-1 bg-dark-950 hover:bg-slate-800 text-slate-300 hover:text-cyan-300 rounded-lg border border-slate-800 transition font-mono font-semibold">TSLA</button>
+                        <button onclick="analyzeQuickTicker('MSFT')" class="px-2.5 py-1 bg-dark-950 hover:bg-slate-800 text-slate-300 hover:text-cyan-300 rounded-lg border border-slate-800 transition font-mono font-semibold">MSFT</button>
+                        <button onclick="analyzeQuickTicker('CEG')" class="px-2.5 py-1 bg-dark-950 hover:bg-slate-800 text-slate-300 hover:text-cyan-300 rounded-lg border border-slate-800 transition font-mono font-semibold">CEG</button>
+                        <button onclick="analyzeQuickTicker('PLTR')" class="px-2.5 py-1 bg-dark-950 hover:bg-slate-800 text-slate-300 hover:text-cyan-300 rounded-lg border border-slate-800 transition font-mono font-semibold">PLTR</button>
+                        <button onclick="analyzeQuickTicker('PANW')" class="px-2.5 py-1 bg-dark-950 hover:bg-slate-800 text-slate-300 hover:text-cyan-300 rounded-lg border border-slate-800 transition font-mono font-semibold">PANW</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Main Split Layout: Deep Dive Archive Sidebar (1 Col) & Active Deep Dive Reader (2 Cols) -->
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 w-full">
+                <!-- Deep Dive Archive Sidebar -->
+                <div class="bg-dark-900 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-3 flex flex-col max-h-[750px]">
+                    <div class="flex items-center justify-between border-b border-slate-800/80 pb-2.5">
+                        <div class="flex items-center space-x-2">
+                            <span class="text-sm">📁</span>
+                            <h4 class="font-bold text-white text-xs uppercase tracking-wide">Deep Dive Archive</h4>
+                        </div>
+                        <span id="deepdives-count-badge" class="text-[10px] font-mono bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full">0 Reports</span>
+                    </div>
+
+                    <!-- Search Filter -->
+                    <div class="relative w-full">
+                        <input type="text" id="deepdives-search-input" placeholder="Search saved tickers..." oninput="filterDeepDivesArchive()" class="w-full bg-dark-950 border border-slate-800 text-white text-[11px] px-3 py-1.5 rounded-lg font-mono focus:border-cyan-500 focus:outline-none">
+                    </div>
+
+                    <!-- Scrollable History List -->
+                    <div id="deepdives-list-container" class="space-y-2 overflow-y-auto flex-1 pr-1">
+                        <div class="p-4 text-center text-xs text-slate-500">
+                            Loading archived deep dives...
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Single Ticker Result Container (2 Cols) -->
+                <div class="lg:col-span-2">
+                    <div id="single-ticker-result-card" class="bg-dark-900 border border-cyan-900/50 rounded-2xl p-5 shadow-2xl space-y-4 w-full">
+                        <div class="flex items-center justify-between border-b border-slate-800/80 pb-3">
+                            <div class="flex items-center space-x-2.5">
+                                <span id="st-result-icon" class="text-xl">🔬</span>
+                                <div>
+                                    <h4 id="st-result-title" class="text-base font-bold text-white">Stock Analysis Result</h4>
+                                    <div id="st-result-meta" class="text-[11px] font-mono text-cyan-400">Live Quote & Momentum</div>
+                                </div>
+                            </div>
+                            <button onclick="document.getElementById('single-ticker-result-card').classList.add('hidden')" class="text-slate-400 hover:text-white px-2.5 py-1 bg-dark-950 rounded-lg border border-slate-800 text-xs transition">&times; Clear</button>
+                        </div>
+
+                        <!-- Technical & Sentiment Indicator Badges -->
+                        <div id="st-indicators-row" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3"></div>
+
+                        <!-- CIO Analysis Text Body -->
+                        <div id="st-analysis-body" class="p-4 bg-dark-950/80 border border-slate-800 rounded-xl text-xs text-slate-200 leading-relaxed font-sans space-y-3 briefing-html-content">
+                            <div class="text-center py-8 text-slate-400 space-y-2">
+                                <div class="text-3xl">🔬</div>
+                                <div class="font-bold text-white text-sm">No Ticker Analyzed Yet</div>
+                                <p class="text-xs text-slate-400 max-w-md mx-auto">
+                                    Enter any ticker symbol above (e.g. <code>NVDA</code>, <code>AAPL</code>, <code>CEG</code>), select an archived report on the left, or click a quick suggestion to run a full institutional deep dive.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ========================================== -->
+        <!-- TAB 3: AI AGENT CHAT                      -->
+        <!-- ========================================== -->
+        <div id="tab-chat" class="tab-content space-y-4 w-full hidden">
+            <div class="grid grid-cols-1 xl:grid-cols-4 gap-5 w-full">
+                <!-- Main Chat Console (3 Cols on Desktop) -->
+                <div class="xl:col-span-3 bg-dark-900 border border-purple-900/40 rounded-2xl p-5 shadow-xl space-y-4 flex flex-col justify-between">
+                    <div class="space-y-3.5">
+                        <div class="flex items-center justify-between border-b border-slate-800/80 pb-3">
+                            <div class="flex items-center space-x-2.5">
+                                <span class="p-2 rounded-xl bg-purple-950/60 text-purple-400 border border-purple-800/50 text-sm">💬</span>
+                                <div>
+                                    <h3 class="text-sm font-bold text-white flex items-center space-x-2">
+                                        <span>Interactive AI Portfolio Analyst</span>
+                                        <span class="px-2 py-0.5 text-[10px] font-mono bg-purple-500/10 text-purple-400 border border-purple-500/20 rounded-full">Gemini 3.8 Flash</span>
+                                    </h3>
+
+                                    <p class="text-xs text-slate-400">Ask questions about your live holdings, simulate market shocks, or ask for rebalancing and hedging strategies.</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Quick Prompt Suggestions -->
+                        <div class="flex flex-wrap gap-2">
+                            <button onclick="sendQuickChat('How should I hedge my NVDA position given its high weight and momentum?')" class="px-2.5 py-1 text-[11px] bg-dark-950 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg border border-slate-800 transition-all">
+                                🛡️ How should I hedge NVDA?
+                            </button>
+                            <button onclick="sendQuickChat('What is the simulated portfolio impact if the Federal Reserve cuts rates by 50 bps?')" class="px-2.5 py-1 text-[11px] bg-dark-950 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg border border-slate-800 transition-all">
+                                🏦 Impact of 50bps Fed cut?
+                            </button>
+                            <button onclick="sendQuickChat('Why is HOOD flagged in the briefing and what is its transmission risk?')" class="px-2.5 py-1 text-[11px] bg-dark-950 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg border border-slate-800 transition-all">
+                                ⚠️ Why is HOOD flagged?
+                            </button>
+                            <button onclick="sendQuickChat('Analyze my sector concentration and recommend 2 diversification ideas.')" class="px-2.5 py-1 text-[11px] bg-dark-950 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg border border-slate-800 transition-all">
+                                ⚖️ Sector rebalancing advice
+                            </button>
+                        </div>
+
+                        <!-- Chat Messages Feed -->
+                        <div id="chat-messages" class="p-4 bg-dark-950 rounded-xl border border-slate-800/80 min-h-[420px] max-h-[560px] overflow-y-auto space-y-3.5 text-xs">
+                            <div class="flex items-start space-x-2.5 text-slate-300">
+                                <div class="w-6 h-6 rounded-full bg-purple-900/60 text-purple-300 flex items-center justify-center flex-shrink-0 text-[11px] font-bold">AI</div>
+                                <div class="p-3.5 bg-dark-900 border border-slate-800 rounded-xl max-w-3xl leading-relaxed">
+                                    Hello! I am your AI Portfolio Officer with live access to your {{ portfolio.holdings | length }} active holdings, live market valuations, cost basis, quant stress metrics, and deployable cash. How can I assist you with your strategy today?
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Chat Input Form -->
+                    <form id="chat-form" onsubmit="handleChatSubmit(event)" class="flex gap-2 pt-2">
+                        <input type="text" id="chat-input" placeholder="Ask anything about your portfolio, risks, macro shocks, or hedging..." class="flex-1 px-4 py-2.5 bg-dark-950 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition-colors" />
+                        <button type="submit" id="chat-send-btn" class="px-5 py-2.5 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-xs font-semibold shadow-lg shadow-purple-900/30 transition-all flex items-center space-x-1.5 flex-shrink-0">
+                            <span>Send</span>
+                            <span>🚀</span>
+                        </button>
+                    </form>
+                </div>
+
+                <!-- Side Context Panel (1 Col on Desktop) -->
+                <div class="bg-dark-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+                    <div class="border-b border-slate-800 pb-2.5">
+                        <h4 class="text-xs font-bold text-white uppercase tracking-wider flex items-center space-x-1.5">
+                            <span>📋</span>
+                            <span>Live Context Snapshot</span>
+                        </h4>
+                        <p class="text-[11px] text-slate-400 mt-0.5">Parameters provided to Gemini AI</p>
+                    </div>
+
+                    <div class="space-y-2 text-xs font-mono">
+                        <div class="p-2.5 bg-dark-950 rounded-xl border border-slate-800/80">
+                            <div class="text-[10px] text-slate-400 font-sans">Monitored Holdings</div>
+                            <div class="text-white font-bold text-sm">{{ portfolio.holdings | length }} Positions</div>
+                            <div class="text-[10px] text-cyan-400 font-sans truncate">{{ portfolio.holdings | map(attribute='ticker') | join(', ') }}</div>
+                        </div>
+
+                        <div class="p-2.5 bg-dark-950 rounded-xl border border-slate-800/80">
+                            <div class="text-[10px] text-slate-400 font-sans">Total Wealth / Equity</div>
+                            <div class="text-emerald-400 font-bold text-sm">${{ "{:,.2f}".format(total_wealth) }}</div>
+                            <div class="text-[10px] text-slate-400 font-sans">Cash: ${{ "{:,.2f}".format(portfolio.cash) }}</div>
+                        </div>
+
+                        <div class="p-2.5 bg-dark-950 rounded-xl border border-slate-800/80">
+                            <div class="text-[10px] text-slate-400 font-sans">Risk Model Metrics</div>
+                            <div class="text-cyan-300 font-bold">Beta: {{ stress.estimated_portfolio_beta if stress else 1.0 }} &bull; VaR: -{{ stress.var_95_daily_pct if stress else 1.8 }}%</div>
+                            <div class="text-[10px] text-amber-400 font-sans">Top 3 Weight: {{ stress.top_3_concentration_pct if stress else 0 }}%</div>
+                        </div>
+                    </div>
+
+                    <div class="pt-2 border-t border-slate-800 space-y-2">
+                        <div class="text-[11px] font-semibold text-slate-300">Fast Strategy Prompts:</div>
+                        <div class="space-y-1.5">
+                            <button onclick="sendQuickChat('Evaluate my risk profile and recommend options hedging contracts.')" class="w-full text-left p-2 bg-dark-950 hover:bg-slate-800 rounded-lg border border-slate-800 text-[11px] text-slate-300 hover:text-white transition">
+                                📊 Options hedging recommendations
+                            </button>
+                            <button onclick="sendQuickChat('What is my exposure to an oil price surge and how does it transmit?')" class="w-full text-left p-2 bg-dark-950 hover:bg-slate-800 rounded-lg border border-slate-800 text-[11px] text-slate-300 hover:text-white transition">
+                                🛢️ Oil shock transmission
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ========================================== -->
+        <!-- TAB 4: EARNINGS & EVENTS CALENDAR         -->
+        <!-- ========================================== -->
+        <div id="tab-earnings" class="tab-content space-y-4 w-full hidden">
+            <div class="bg-dark-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4 w-full">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
+                    <div>
+                        <div class="flex items-center space-x-2">
+                            <span class="text-lg">📅</span>
+                            <h3 class="text-base font-bold text-white">Upcoming 7-Day Corporate Earnings Calendar</h3>
+                            <span class="px-2 py-0.5 bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 rounded-full text-[10px] font-mono font-semibold">Official Nasdaq Feed</span>
+                        </div>
+                        <p class="text-xs text-slate-400 mt-0.5">Verified session timing (BMO Pre-Market vs AMC Post-Market), consensus EPS, and cross-exposure to your holdings</p>
+                    </div>
+                    <button onclick="loadEarningsCalendar()" id="btn-refresh-earnings" class="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg border border-slate-700 text-xs font-semibold flex items-center space-x-1.5 self-start sm:self-auto transition">
+                        <span>🔄 Refresh Calendar</span>
+                    </button>
+                </div>
+
+                <div id="earnings-calendar-container" class="space-y-4 w-full">
+                    <div class="p-6 bg-dark-950 border border-slate-800/80 rounded-xl text-xs text-slate-400 flex items-center justify-center space-x-2">
+                        <span class="pulse-subtle">📡 Fetching verified Nasdaq corporate earnings for the next 7 calendar days...</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ========================================== -->
+        <!-- TAB 6: MARKET INTELLIGENCE BRIEFINGS       -->
+        <!-- ========================================== -->
+        <div id="tab-briefings" class="tab-content space-y-4 w-full hidden">
+            <!-- Header & Generator Control Bar -->
+            <div class="bg-dark-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4 w-full">
+                <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-800/80 pb-4">
+                    <div class="space-y-1">
+                        <div class="flex items-center space-x-2.5">
+                            <span class="p-2 rounded-xl bg-cyan-950/60 text-cyan-400 border border-cyan-800/50 text-base">🌅</span>
+                            <div>
+                                <h3 class="text-base font-bold text-white flex items-center space-x-2">
+                                    <span>Executive Market Intelligence Briefings</span>
+                                    <span class="px-2 py-0.5 text-[10px] font-mono bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 rounded-full font-semibold">Gemini 3.8 Flash</span>
+                                </h3>
+                                <p class="text-xs text-slate-400">
+                                    Generate on-demand or browse scheduled Chief Investment Officer intelligence reports across daily and weekly market milestones.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Dispatch Toggle & Actions -->
+                    <div class="flex items-center space-x-3 self-start lg:self-center">
+                        <label class="flex items-center space-x-2 text-xs text-slate-300 cursor-pointer select-none bg-dark-950 px-3 py-1.5 rounded-lg border border-slate-800">
+                            <input type="checkbox" id="briefing-dispatch-telegram" class="rounded bg-dark-900 border-slate-700 text-cyan-500 focus:ring-0 focus:ring-offset-0">
+                            <span>✈️ Also push to Telegram</span>
+                        </label>
+                        <button onclick="loadMarketBriefings()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 active:scale-95 text-xs text-slate-300 hover:text-white rounded-lg border border-slate-700 transition flex items-center space-x-1" title="Refresh archive list">
+                            <span>🔄</span>
+                            <span>Refresh</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Slot Selector Buttons -->
+                <div>
+                    <div class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2">Select Briefing Slot to Generate On-Demand:</div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
+                        <button onclick="triggerGenerateBriefing('premarket')" id="btn-slot-premarket" class="p-3 bg-dark-950 hover:bg-slate-800/80 active:scale-[0.98] border border-slate-800 hover:border-cyan-500/40 rounded-xl text-left transition group">
+                            <div class="flex items-center justify-between">
+                                <span class="text-lg">🌅</span>
+                                <span class="text-[10px] font-mono text-cyan-400 bg-cyan-950/60 px-2 py-0.5 rounded border border-cyan-800/40">6:30 AM PST</span>
+                            </div>
+                            <div class="font-bold text-white text-xs mt-2 group-hover:text-cyan-300 transition">Pre-Market Intelligence</div>
+                            <div class="text-[11px] text-slate-400 mt-1 leading-snug">Overnight macro, futures, catalysts & opening alpha.</div>
+                        </button>
+
+                        <button onclick="triggerGenerateBriefing('midmarket')" id="btn-slot-midmarket" class="p-3 bg-dark-950 hover:bg-slate-800/80 active:scale-[0.98] border border-slate-800 hover:border-amber-500/40 rounded-xl text-left transition group">
+                            <div class="flex items-center justify-between">
+                                <span class="text-lg">☀️</span>
+                                <span class="text-[10px] font-mono text-amber-400 bg-amber-950/60 px-2 py-0.5 rounded border border-amber-800/40">10:00 AM PST</span>
+                            </div>
+                            <div class="font-bold text-white text-xs mt-2 group-hover:text-amber-300 transition">Mid-Market Pulse</div>
+                            <div class="text-[11px] text-slate-400 mt-1 leading-snug">Intraday momentum, sector rotation & Fed data.</div>
+                        </button>
+
+                        <button onclick="triggerGenerateBriefing('postmarket')" id="btn-slot-postmarket" class="p-3 bg-dark-950 hover:bg-slate-800/80 active:scale-[0.98] border border-slate-800 hover:border-indigo-500/40 rounded-xl text-left transition group">
+                            <div class="flex items-center justify-between">
+                                <span class="text-lg">🌙</span>
+                                <span class="text-[10px] font-mono text-indigo-400 bg-indigo-950/60 px-2 py-0.5 rounded border border-indigo-800/40">3:00 PM PST</span>
+                            </div>
+                            <div class="font-bold text-white text-xs mt-2 group-hover:text-indigo-300 transition">Post-Market Wrap</div>
+                            <div class="text-[11px] text-slate-400 mt-1 leading-snug">Closing bell recap, top gainers/losers & after-hours.</div>
+                        </button>
+
+                        <button onclick="triggerGenerateBriefing('weekend')" id="btn-slot-weekend" class="p-3 bg-dark-950 hover:bg-slate-800/80 active:scale-[0.98] border border-slate-800 hover:border-purple-500/40 rounded-xl text-left transition group">
+                            <div class="flex items-center justify-between">
+                                <span class="text-lg">🌟</span>
+                                <span class="text-[10px] font-mono text-purple-400 bg-purple-950/60 px-2 py-0.5 rounded border border-purple-800/40">9:00 PM PST</span>
+                            </div>
+                            <div class="font-bold text-white text-xs mt-2 group-hover:text-purple-300 transition">Weekend Preview</div>
+                            <div class="text-[11px] text-slate-400 mt-1 leading-snug">Sunday futures, week-ahead catalysts & secular setups.</div>
+                        </button>
+
+                        <button onclick="triggerGenerateBriefing('earnings')" id="btn-slot-earnings" class="p-3 bg-dark-950 hover:bg-slate-800/80 active:scale-[0.98] border border-slate-800 hover:border-emerald-500/40 rounded-xl text-left transition group">
+                            <div class="flex items-center justify-between">
+                                <span class="text-lg">📅</span>
+                                <span class="text-[10px] font-mono text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-800/40">7-Day PST</span>
+                            </div>
+                            <div class="font-bold text-white text-xs mt-2 group-hover:text-emerald-300 transition">Earnings Outlook</div>
+                            <div class="text-[11px] text-slate-400 mt-1 leading-snug">Verified Nasdaq releases, BMO/AMC & holdings exposure.</div>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Live Generation Status Banner (Hidden by default) -->
+                <div id="briefing-generation-banner" class="hidden p-3 bg-cyan-950/40 border border-cyan-800/80 rounded-xl text-xs text-cyan-300 flex items-center justify-between animate-pulse">
+                    <div class="flex items-center space-x-2">
+                        <span class="animate-spin text-sm">⚙️</span>
+                        <span id="briefing-generation-text">Synthesizing Market Intelligence Briefing with Gemini 3.8 Flash...</span>
+                    </div>
+                    <span class="text-[10px] font-mono text-cyan-400">Please wait (~5-15s)</span>
+                </div>
+            </div>
+
+            <!-- Main Split Layout: Archive Sidebar (1 Col) & Reader (2 Cols) -->
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 w-full">
+                <!-- Archive Sidebar -->
+                <div class="bg-dark-900 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-3 flex flex-col max-h-[750px]">
+                    <div class="flex items-center justify-between border-b border-slate-800/80 pb-2.5">
+                        <div class="flex items-center space-x-2">
+                            <span class="text-sm">📁</span>
+                            <h4 class="font-bold text-white text-xs uppercase tracking-wide">Briefings Archive</h4>
+                        </div>
+                        <span id="briefings-count-badge" class="text-[10px] font-mono bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full">0 Reports</span>
+                    </div>
+
+                    <!-- Slot Filter Pills -->
+                    <div class="flex flex-wrap gap-1 text-[10px] pb-1 border-b border-slate-800/60">
+                        <button onclick="filterBriefingsArchive('all')" class="briefing-filter-btn px-2 py-1 bg-cyan-500/20 text-cyan-300 rounded border border-cyan-500/30 font-semibold" data-slot="all">All</button>
+                        <button onclick="filterBriefingsArchive('premarket')" class="briefing-filter-btn px-2 py-1 bg-dark-950 text-slate-400 hover:text-white rounded border border-slate-800" data-slot="premarket">🌅 Pre</button>
+                        <button onclick="filterBriefingsArchive('midmarket')" class="briefing-filter-btn px-2 py-1 bg-dark-950 text-slate-400 hover:text-white rounded border border-slate-800" data-slot="midmarket">☀️ Mid</button>
+                        <button onclick="filterBriefingsArchive('postmarket')" class="briefing-filter-btn px-2 py-1 bg-dark-950 text-slate-400 hover:text-white rounded border border-slate-800" data-slot="postmarket">🌙 Post</button>
+                        <button onclick="filterBriefingsArchive('weekend')" class="briefing-filter-btn px-2 py-1 bg-dark-950 text-slate-400 hover:text-white rounded border border-slate-800" data-slot="weekend">🌟 Wknd</button>
+                        <button onclick="filterBriefingsArchive('earnings')" class="briefing-filter-btn px-2 py-1 bg-dark-950 text-slate-400 hover:text-white rounded border border-slate-800" data-slot="earnings">📅 Earn</button>
+                    </div>
+
+                    <!-- Scrollable History List -->
+                    <div id="briefings-list-container" class="space-y-2 overflow-y-auto flex-1 pr-1">
+                        <div class="p-4 text-center text-xs text-slate-500">
+                            Loading archived briefings...
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Executive Reader Column (2 Cols) -->
+                <div class="lg:col-span-2 bg-dark-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4 flex flex-col min-h-[500px]">
+                    <!-- Reader Top Header -->
+                    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
+                        <div class="space-y-0.5">
+                            <div class="flex items-center space-x-2">
+                                <span id="reader-slot-icon" class="text-lg">🌅</span>
+                                <h4 id="reader-slot-title" class="font-bold text-white text-sm">Select or Generate a Briefing</h4>
+                                <span id="reader-slot-badge" class="px-2 py-0.5 text-[10px] font-mono bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 rounded font-semibold hidden">PRE-MARKET</span>
+                            </div>
+                            <div id="reader-timestamp" class="text-[11px] text-slate-400">Click any archived briefing on the left or generate a new one above.</div>
+                        </div>
+
+                        <!-- Reader Action Buttons -->
+                        <div class="flex items-center space-x-2">
+                            <button onclick="copyCurrentBriefingText()" id="btn-copy-briefing" class="px-3 py-1.5 bg-dark-950 hover:bg-slate-800 active:scale-95 text-xs text-slate-300 hover:text-white rounded-lg border border-slate-800 transition flex items-center space-x-1.5" title="Copy text to clipboard">
+                                <span>📋</span>
+                                <span id="copy-briefing-btn-text">Copy Text</span>
+                            </button>
+                            <button onclick="dispatchCurrentBriefingToTelegram()" id="btn-dispatch-briefing" class="px-3 py-1.5 bg-cyan-950/60 hover:bg-cyan-900/80 active:scale-95 text-xs text-cyan-300 rounded-lg border border-cyan-800/60 transition flex items-center space-x-1.5" title="Send this report to Telegram">
+                                <span>✈️</span>
+                                <span>Send to Telegram</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Reader Content Body -->
+                    <div id="reader-content-body" class="flex-1 overflow-y-auto bg-dark-950/60 border border-slate-800/80 rounded-xl p-5 text-slate-200 text-xs briefing-html-content leading-relaxed min-h-[420px]">
+                        <div class="h-full flex flex-col items-center justify-center text-center p-8 text-slate-500 space-y-3">
+                            <span class="text-4xl">📰</span>
+                            <div class="text-sm font-semibold text-slate-400">No Briefing Loaded</div>
+                            <div class="text-xs max-w-md">Click one of the briefing slots above (Pre-Market, Mid-Market, Post-Market, Weekend, or Earnings) to generate a live report, or pick from the archive on the left.</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ========================================== -->
+        <!-- TAB 7: SYSTEM KEY & GUIDE                  -->
+        <!-- ========================================== -->
+        <div id="tab-guide" class="tab-content space-y-6 w-full hidden">
+            <!-- Header Card -->
+            <div class="bg-dark-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-2">
+                <div class="flex items-center space-x-3">
+                    <span class="p-2.5 rounded-xl bg-cyan-950/60 text-cyan-400 border border-cyan-800/50 text-xl">📖</span>
+                    <div>
+                        <h2 class="text-lg font-bold text-white flex items-center space-x-2">
+                            <span>Financial Sentinel &bull; System Key & Intelligence Guide</span>
+                            <span class="px-2 py-0.5 text-[10px] font-mono bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 rounded-full font-semibold">Reference Manual</span>
+                        </h2>
+                        <p class="text-xs text-slate-400">
+                            Comprehensive guide to color coding, directional indicators, alert priority tiers, catalyst sources, feedback mechanics, and quantitative risk metrics.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Grid: 2 columns on lg -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+                <!-- Card 1: Directional Impact & Color Codes -->
+                <div class="bg-dark-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+                    <div class="flex items-center space-x-2 border-b border-slate-800/80 pb-3">
+                        <span class="text-base">🎨</span>
+                        <h3 class="text-sm font-bold text-white">Ticker Impact Signals & Color Coding</h3>
+                    </div>
+                    <p class="text-xs text-slate-400 leading-relaxed">
+                        Every detected market event is analyzed by our multi-agent pipeline and assigned a directional impact score and confidence-weighted percentage move. The card border, badge color, and mathematical sign communicate the direction:
+                    </p>
+
+                    <div class="space-y-3">
+                        <!-- Bullish -->
+                        <div class="p-3.5 rounded-xl border border-emerald-900/40 bg-emerald-950/10 space-y-1.5">
+                            <div class="flex items-center justify-between">
+                                <span class="text-xs font-bold text-emerald-400 flex items-center space-x-1.5">
+                                    <span>🟢</span>
+                                    <span>BULLISH (+X.X%)</span>
+                                </span>
+                                <span class="px-2 py-0.5 rounded text-[10px] font-bold border bg-emerald-500/20 text-emerald-300 border-emerald-500/30">
+                                    BULLISH (+3.5%)
+                                </span>
+                            </div>
+                            <p class="text-[11px] text-slate-300 leading-relaxed">
+                                <strong>Positive Upside Catalyst:</strong> Indicates news, earnings beats, contract awards, margin expansions, or regulatory clearances expected to exert upward pricing momentum on the holding. Prefixed with a <code class="text-emerald-300 font-bold">+</code> sign in emerald green.
+                            </p>
+                        </div>
+
+                        <!-- Bearish -->
+                        <div class="p-3.5 rounded-xl border border-rose-900/50 bg-rose-950/10 space-y-1.5">
+                            <div class="flex items-center justify-between">
+                                <span class="text-xs font-bold text-rose-400 flex items-center space-x-1.5">
+                                    <span>🔴</span>
+                                    <span>BEARISH (-X.X%)</span>
+                                </span>
+                                <span class="px-2 py-0.5 rounded text-[10px] font-bold border bg-rose-500/20 text-rose-300 border-rose-500/30">
+                                    BEARISH (-2.8%)
+                                </span>
+                            </div>
+                            <p class="text-[11px] text-slate-300 leading-relaxed">
+                                <strong>Downside Risk Threat:</strong> Indicates guidance cuts, margin compression, customer churn, supply shortages, litigation, or macroeconomic headwinds exerting downward pressure. Prefixed with a <code class="text-rose-300 font-bold">-</code> sign in rose red.
+                            </p>
+                        </div>
+
+                        <!-- High Volatility -->
+                        <div class="p-3.5 rounded-xl border border-amber-900/40 bg-amber-950/10 space-y-1.5">
+                            <div class="flex items-center justify-between">
+                                <span class="text-xs font-bold text-amber-400 flex items-center space-x-1.5">
+                                    <span>🟡</span>
+                                    <span>HIGH VOLATILITY (±X.X%)</span>
+                                </span>
+                                <span class="px-2 py-0.5 rounded text-[10px] font-bold border bg-amber-500/20 text-amber-300 border-amber-500/30">
+                                    HIGH_VOLATILITY (±4.0%)
+                                </span>
+                            </div>
+                            <p class="text-[11px] text-slate-300 leading-relaxed">
+                                <strong>Two-Sided / Binary Outcome:</strong> Indicates high-dispersion events such as FDA drug approval verdicts, major patent trial rulings, or impending FOMC rate decisions where significant movement is expected in either direction. Prefixed with <code class="text-amber-300 font-bold">±</code> in amber.
+                            </p>
+                        </div>
+
+                        <!-- Neutral -->
+                        <div class="p-3.5 rounded-xl border border-slate-800 bg-dark-950 space-y-1.5">
+                            <div class="flex items-center justify-between">
+                                <span class="text-xs font-bold text-cyan-400 flex items-center space-x-1.5">
+                                    <span>🔵</span>
+                                    <span>NEUTRAL (~X.X%)</span>
+                                </span>
+                                <span class="px-2 py-0.5 rounded text-[10px] font-bold border bg-cyan-500/20 text-cyan-300 border-cyan-500/30">
+                                    NEUTRAL (~0.5%)
+                                </span>
+                            </div>
+                            <p class="text-[11px] text-slate-300 leading-relaxed">
+                                <strong>Negligible / Balanced Impact:</strong> Background noise or routine disclosures that produce balanced or immaterial price movement (&lt;1.0%). Prefixed with <code class="text-cyan-300 font-bold">~</code> in cyan/slate.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Card 2: Urgency vs Direction (P0 Critical Decoupling) -->
+                <div class="bg-dark-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+                    <div class="flex items-center space-x-2 border-b border-slate-800/80 pb-3">
+                        <span class="text-base">⚡</span>
+                        <h3 class="text-sm font-bold text-white">Alert Urgency Tiers & The "P0 Critical" Badge</h3>
+                    </div>
+                    <p class="text-xs text-slate-400 leading-relaxed">
+                        <strong class="text-white">Important: Urgency is independent of Direction!</strong> A stock can have an urgent bullish breakout catalyst or an urgent bearish crash risk. Alert priority reflects the magnitude and required attention level:
+                    </p>
+
+                    <div class="space-y-3">
+                        <!-- P0 Critical -->
+                        <div class="p-3.5 rounded-xl border border-red-900/50 bg-dark-950 space-y-2">
+                            <div class="flex items-center justify-between">
+                                <div class="flex items-center space-x-2">
+                                    <span class="px-2 py-0.5 rounded text-[10px] font-black bg-red-600/30 text-red-300 border border-red-500/50 animate-pulse flex items-center space-x-1">
+                                        <span>⚡</span>
+                                        <span>P0 CRITICAL</span>
+                                    </span>
+                                    <span class="text-xs font-bold text-red-400">Immediate Action Required</span>
+                                </div>
+                                <span class="text-[10px] font-mono text-slate-400">Impact Magnitude &gt; 3.0%</span>
+                            </div>
+                            <p class="text-[11px] text-slate-300 leading-relaxed">
+                                High-magnitude catalyst requiring immediate portfolio evaluation. Triggered when expected price movement exceeds <strong class="text-white">3.0%</strong> or directly impacts a concentrated holding (&gt;15% portfolio weight).
+                            </p>
+                            <div class="p-2.5 rounded-lg bg-dark-900 border border-slate-800 text-[10px] text-slate-400 space-y-1">
+                                <div class="text-slate-300 font-semibold">Examples of How It Appears:</div>
+                                <div>&bull; <span class="text-emerald-400 font-bold">Bullish P0:</span> <span class="px-1.5 py-0.5 rounded text-[9px] font-black bg-red-600/30 text-red-300 border border-red-500/50">⚡ P0 CRITICAL</span> + <span class="text-emerald-300 font-semibold bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-500/30">BULLISH (+4.8%)</span> &rarr; Urgent positive earnings surge.</div>
+                                <div>&bull; <span class="text-rose-400 font-bold">Bearish P0:</span> <span class="px-1.5 py-0.5 rounded text-[9px] font-black bg-red-600/30 text-red-300 border border-red-500/50">⚡ P0 CRITICAL</span> + <span class="text-rose-300 font-semibold bg-rose-950/60 px-1.5 py-0.5 rounded border border-rose-500/30">BEARISH (-5.2%)</span> &rarr; Urgent downside collapse risk.</div>
+                            </div>
+                        </div>
+
+                        <!-- P1 Notable -->
+                        <div class="p-3 rounded-xl border border-slate-800 bg-dark-950 space-y-1">
+                            <div class="flex items-center justify-between">
+                                <span class="text-xs font-bold text-cyan-400">📌 P1 NOTABLE</span>
+                                <span class="text-[10px] font-mono text-slate-400">Impact Magnitude: 1.5% – 3.0%</span>
+                            </div>
+                            <p class="text-[11px] text-slate-300">
+                                Substantial development affecting a holding, sector competitor, or supply chain partner. Worth reviewing during standard market hours.
+                            </p>
+                        </div>
+
+                        <!-- P2 Watchlist -->
+                        <div class="p-3 rounded-xl border border-slate-800 bg-dark-950 space-y-1">
+                            <div class="flex items-center justify-between">
+                                <span class="text-xs font-bold text-slate-400">📋 P2 WATCHLIST</span>
+                                <span class="text-[10px] font-mono text-slate-400">Impact Magnitude: &lt; 1.5%</span>
+                            </div>
+                            <p class="text-[11px] text-slate-300">
+                                Background trend, peripheral commentary, or long-dated macro theme monitored by the discovery radar.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Card 3: Info Source & Catalyst Vectors -->
+                <div class="bg-dark-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+                    <div class="flex items-center space-x-2 border-b border-slate-800/80 pb-3">
+                        <span class="text-base">ℹ️</span>
+                        <h3 class="text-sm font-bold text-white">"Info Source" Catalyst Vectors</h3>
+                    </div>
+                    <p class="text-xs text-slate-400 leading-relaxed">
+                        The <code class="text-cyan-400 font-mono">ℹ️ Info Source</code> badge displayed on each ticker card explains the transmission vector through which an economic shock or news catalyst influences your holding:
+                    </p>
+
+                    <div class="space-y-2.5 text-xs">
+                        <div class="p-3 rounded-xl bg-dark-950 border border-slate-800/80 space-y-1">
+                            <div class="font-bold text-cyan-300 flex items-center space-x-1.5">
+                                <span>📰</span>
+                                <span>Direct Market News</span>
+                            </div>
+                            <p class="text-[11px] text-slate-300 leading-relaxed">
+                                Primary source filings directly from the company: SEC filings (10-K, 10-Q, 8-K), official press releases, earnings conference call transcripts, or major financial wire dispatches.
+                            </p>
+                        </div>
+
+                        <div class="p-3 rounded-xl bg-dark-950 border border-slate-800/80 space-y-1">
+                            <div class="font-bold text-cyan-300 flex items-center space-x-1.5">
+                                <span>🔗</span>
+                                <span>Supply Chain Ripple</span>
+                            </div>
+                            <p class="text-[11px] text-slate-300 leading-relaxed">
+                                Indirect upstream supplier or downstream customer catalysts. For example, wafer pricing changes at TSMC impacting Nvidia/Apple margins, or ASML export curbs impacting semiconductor equipment.
+                            </p>
+                        </div>
+
+                        <div class="p-3 rounded-xl bg-dark-950 border border-slate-800/80 space-y-1">
+                            <div class="font-bold text-cyan-300 flex items-center space-x-1.5">
+                                <span>📈</span>
+                                <span>Macro Multiple / Rates</span>
+                            </div>
+                            <p class="text-[11px] text-slate-300 leading-relaxed">
+                                Broader economic variables: Federal Reserve interest rate expectations, 10-year Treasury yield moves, CPI/PPI inflation surprises, oil prices, or currency fluctuations that reset market valuation multiples.
+                            </p>
+                        </div>
+
+                        <div class="p-3 rounded-xl bg-dark-950 border border-slate-800/80 space-y-1">
+                            <div class="font-bold text-cyan-300 flex items-center space-x-1.5">
+                                <span>🤖</span>
+                                <span>Quant Engine / Factor Alert</span>
+                            </div>
+                            <p class="text-[11px] text-slate-300 leading-relaxed">
+                                Algorithmic triggers generated by quantitative risk models: statistical correlation breaks, beta expansion, volatility regime switches, or sudden volume and options open-interest anomalies.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Card 4: Feedback Buttons & Human-in-the-Loop -->
+                <div class="bg-dark-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+                    <div class="flex items-center space-x-2 border-b border-slate-800/80 pb-3">
+                        <span class="text-base">👍</span>
+                        <h3 class="text-sm font-bold text-white">Analyst Feedback Mechanics</h3>
+                    </div>
+                    <p class="text-xs text-slate-400 leading-relaxed">
+                        Each catalyst card features interactive feedback buttons to calibrate signal precision and record human analyst validation:
+                    </p>
+
+                    <div class="space-y-3">
+                        <div class="p-3.5 rounded-xl bg-dark-950 border border-emerald-900/40 space-y-1.5">
+                            <div class="flex items-center justify-between">
+                                <span class="text-xs font-bold text-emerald-400">👍 Accurate (High Signal)</span>
+                                <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">Actionable</span>
+                            </div>
+                            <p class="text-[11px] text-slate-300 leading-relaxed">
+                                Confirms that the AI agents accurately diagnosed the holding's exposure, directional impact, and rationale. Signals that this type of catalyst is high-value for your portfolio decision-making.
+                            </p>
+                        </div>
+
+                        <div class="p-3.5 rounded-xl bg-dark-950 border border-rose-900/40 space-y-1.5">
+                            <div class="flex items-center justify-between">
+                                <span class="text-xs font-bold text-rose-400">👎 Noise (False Alarm / Irrelevant)</span>
+                                <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">Low Value</span>
+                            </div>
+                            <p class="text-[11px] text-slate-300 leading-relaxed">
+                                Flags the catalyst as unhelpful, exaggerated, repetitive, or irrelevant. Used to track false-positive rates and fine-tune signal-to-noise ratios.
+                            </p>
+                        </div>
+
+                        <div class="p-3 rounded-xl bg-slate-800/50 border border-slate-700/60 text-xs space-y-1 text-slate-300">
+                            <div class="font-bold text-cyan-300 flex items-center space-x-1">
+                                <span>🔒</span>
+                                <span>Feedback Storage & Architecture</span>
+                            </div>
+                            <p class="text-[11px] text-slate-400 leading-relaxed">
+                                Feedback submissions are logged directly into your private SQLite database (<code class="text-cyan-300">audit_feedback</code> table) along with the timestamp, ticker, and news ID. They are preserved for analyst reporting without altering automated trade pipelines unless explicitly enabled.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Card 5: Quantitative Risk Metrics -->
+                <div class="bg-dark-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+                    <div class="flex items-center space-x-2 border-b border-slate-800/80 pb-3">
+                        <span class="text-base">📐</span>
+                        <h3 class="text-sm font-bold text-white">Quantitative Risk Metrics Guide</h3>
+                    </div>
+                    <p class="text-xs text-slate-400 leading-relaxed">
+                        Real-time mathematical risk metrics computed across your holdings and cash balances using historical covariance matrices:
+                    </p>
+
+                    <div class="space-y-2.5 text-xs">
+                        <div class="p-3 rounded-xl bg-dark-950 border border-slate-800/80 space-y-1">
+                            <div class="flex items-center justify-between font-bold text-cyan-300">
+                                <span>📉 Value at Risk (VaR 95%, 1-Day)</span>
+                                <span class="text-[10px] font-mono text-slate-400">Parametric Covariance</span>
+                            </div>
+                            <p class="text-[11px] text-slate-300 leading-relaxed">
+                                The maximum dollar and percentage loss expected over a single trading day at a 95% statistical confidence interval under normal market conditions. (e.g., a $1,500 VaR means there is only a 5% chance the 1-day drop exceeds $1,500).
+                            </p>
+                        </div>
+
+                        <div class="p-3 rounded-xl bg-dark-950 border border-slate-800/80 space-y-1">
+                            <div class="flex items-center justify-between font-bold text-cyan-300">
+                                <span>⚖️ Portfolio Beta</span>
+                                <span class="text-[10px] font-mono text-slate-400">Benchmark: S&P 500 (1.0)</span>
+                            </div>
+                            <p class="text-[11px] text-slate-300 leading-relaxed">
+                                Measures systematic sensitivity relative to the broader market. A beta of 1.25 indicates the portfolio is expected to move 25% more aggressively than the S&P 500; a beta of 0.8 indicates defensive, lower-volatility behavior.
+                            </p>
+                        </div>
+
+                        <div class="p-3 rounded-xl bg-dark-950 border border-slate-800/80 space-y-1">
+                            <div class="flex items-center justify-between font-bold text-cyan-300">
+                                <span>📊 Sharpe Ratio</span>
+                                <span class="text-[10px] font-mono text-slate-400">Risk-Adjusted Return</span>
+                            </div>
+                            <p class="text-[11px] text-slate-300 leading-relaxed">
+                                Evaluates excess portfolio return generated per unit of total risk (standard deviation) above the risk-free rate. <strong class="text-white">&gt;1.0</strong> is considered solid; <strong class="text-white">&gt;2.0</strong> indicates exceptional risk-adjusted performance.
+                            </p>
+                        </div>
+
+                        <div class="p-3 rounded-xl bg-dark-950 border border-slate-800/80 space-y-1">
+                            <div class="flex items-center justify-between font-bold text-cyan-300">
+                                <span>🎯 Herfindahl-Hirschman Index (HHI)</span>
+                                <span class="text-[10px] font-mono text-slate-400">Concentration Metric</span>
+                            </div>
+                            <p class="text-[11px] text-slate-300 leading-relaxed">
+                                Measures asset concentration by summing the squared percentage weights of all holdings. <strong class="text-white">&lt;1,500</strong> reflects healthy diversification; <strong class="text-white">&gt;2,500</strong> flags heavy single-stock exposure risk.
+                            </p>
+                        </div>
+
+                        <div class="p-3 rounded-xl bg-dark-950 border border-slate-800/80 space-y-1">
+                            <div class="flex items-center justify-between font-bold text-cyan-300">
+                                <span>🌊 Max Historical Drawdown</span>
+                                <span class="text-[10px] font-mono text-slate-400">Peak-to-Trough Decline</span>
+                            </div>
+                            <p class="text-[11px] text-slate-300 leading-relaxed">
+                                The largest percentage decline experienced by the weighted portfolio from peak to subsequent trough over the lookback window. Represents historical stress-test tolerance.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Card 6: Market Intelligence Briefings Schedule -->
+                <div class="bg-dark-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+                    <div class="flex items-center space-x-2 border-b border-slate-800/80 pb-3">
+                        <span class="text-base">📅</span>
+                        <h3 class="text-sm font-bold text-white">Daily & Weekly Briefing Schedule (PST)</h3>
+                    </div>
+                    <p class="text-xs text-slate-400 leading-relaxed">
+                        Automated executive market intelligence generated by Gemini 3.8 Flash and Cloud Scheduler, calibrated to US Pacific Standard Time (PST):
+                    </p>
+
+                    <div class="space-y-2.5 text-xs">
+                        <div class="p-3 rounded-xl bg-dark-950 border border-slate-800/80 flex items-start space-x-3">
+                            <span class="text-xl mt-0.5">🌅</span>
+                            <div class="space-y-1 flex-1">
+                                <div class="flex items-center justify-between font-bold text-cyan-300">
+                                    <span>Pre-Market Briefing</span>
+                                    <span class="px-2 py-0.5 rounded bg-cyan-950/60 border border-cyan-800/40 text-[10px] font-mono text-cyan-300">6:30 AM PST</span>
+                                </div>
+                                <p class="text-[11px] text-slate-300 leading-relaxed">
+                                    Overnight European and Asian market wrap, S&P/Nasdaq futures, overnight corporate earnings releases, pre-market catalyst alerts, and key opening bell priorities.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div class="p-3 rounded-xl bg-dark-950 border border-slate-800/80 flex items-start space-x-3">
+                            <span class="text-xl mt-0.5">☀️</span>
+                            <div class="space-y-1 flex-1">
+                                <div class="flex items-center justify-between font-bold text-cyan-300">
+                                    <span>Mid-Market Update</span>
+                                    <span class="px-2 py-0.5 rounded bg-cyan-950/60 border border-cyan-800/40 text-[10px] font-mono text-cyan-300">10:00 AM PST</span>
+                                </div>
+                                <p class="text-[11px] text-slate-300 leading-relaxed">
+                                    Intraday sector rotations, volume surges, breakout alerts, institutional order flows, and real-time news developments during the active trading session.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div class="p-3 rounded-xl bg-dark-950 border border-slate-800/80 flex items-start space-x-3">
+                            <span class="text-xl mt-0.5">🌆</span>
+                            <div class="space-y-1 flex-1">
+                                <div class="flex items-center justify-between font-bold text-cyan-300">
+                                    <span>Post-Market Wrap</span>
+                                    <span class="px-2 py-0.5 rounded bg-cyan-950/60 border border-cyan-800/40 text-[10px] font-mono text-cyan-300">3:00 PM PST</span>
+                                </div>
+                                <p class="text-[11px] text-slate-300 leading-relaxed">
+                                    Closing bell performance analysis, portfolio daily P&L summary, after-hours earnings prints, and tactical setup for the next trading day.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div class="p-3 rounded-xl bg-dark-950 border border-slate-800/80 flex items-start space-x-3">
+                            <span class="text-xl mt-0.5">🌌</span>
+                            <div class="space-y-1 flex-1">
+                                <div class="flex items-center justify-between font-bold text-cyan-300">
+                                    <span>Weekend Strategy Deep-Dive</span>
+                                    <span class="px-2 py-0.5 rounded bg-cyan-950/60 border border-cyan-800/40 text-[10px] font-mono text-cyan-300">Sun 9:00 PM PST</span>
+                                </div>
+                                <p class="text-[11px] text-slate-300 leading-relaxed">
+                                    Weekly strategic macroeconomic outlook, upcoming central bank decisions (Fed/ECB), CPI inflation prints, geopolitical updates, and portfolio risk positioning.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div class="p-3 rounded-xl bg-dark-950 border border-slate-800/80 flex items-start space-x-3">
+                            <span class="text-xl mt-0.5">📅</span>
+                            <div class="space-y-1 flex-1">
+                                <div class="flex items-center justify-between font-bold text-cyan-300">
+                                    <span>7-Day Earnings Calendar</span>
+                                    <span class="px-2 py-0.5 rounded bg-cyan-950/60 border border-cyan-800/40 text-[10px] font-mono text-cyan-300">Rolling 7-Day Window</span>
+                                </div>
+                                <p class="text-[11px] text-slate-300 leading-relaxed">
+                                    Forward-looking schedule of confirmed quarterly earnings calls, Wall Street consensus EPS/revenue estimates, and implied options volatility moves for portfolio and watchlisted tickers.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Card 7: Technical Momentum & Trend Indicators Guide (Lay Definitions) -->
+                <div class="bg-dark-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+                    <div class="flex items-center space-x-2 border-b border-slate-800/80 pb-3">
+                        <span class="text-base">📈</span>
+                        <h3 class="text-sm font-bold text-white">Technical Momentum & Trend Indicators (Lay Guide)</h3>
+                    </div>
+                    <p class="text-xs text-slate-400 leading-relaxed">
+                        Deterministic mathematical indicators calculated directly from 250 daily price bars in pure Python to ground analysis in price reality rather than LLM guesswork:
+                    </p>
+
+                    <div class="space-y-2.5 text-xs">
+                        <div class="p-3 rounded-xl bg-dark-950 border border-slate-800/80 space-y-1">
+                            <div class="flex items-center justify-between font-bold text-cyan-300">
+                                <span>🎯 Relative Strength Index (RSI, 14-Day)</span>
+                                <span class="text-[10px] font-mono text-slate-400">Scale: 0 to 100</span>
+                            </div>
+                            <p class="text-[11px] text-slate-300 leading-relaxed">
+                                Measures price velocity and momentum. <strong class="text-rose-400">&gt;70 (Overbought):</strong> The stock has rallied too fast; buyers are exhausted and the price is overdue for a rest or pullback. High risk for new buying. <strong class="text-emerald-400">&lt;30 (Oversold):</strong> Heavy panic selling; often marks potential bargain bottoming territory. <strong class="text-slate-300">30–70:</strong> Healthy equilibrium.
+                            </p>
+                        </div>
+
+                        <div class="p-3 rounded-xl bg-dark-950 border border-slate-800/80 space-y-1">
+                            <div class="flex items-center justify-between font-bold text-cyan-300">
+                                <span>🌊 MACD (Moving Average Convergence Divergence)</span>
+                                <span class="text-[10px] font-mono text-slate-400">12, 26, 9 EMA</span>
+                            </div>
+                            <p class="text-[11px] text-slate-300 leading-relaxed">
+                                Compares short-term momentum (12-day EMA) to medium-term momentum (26-day EMA). <strong class="text-emerald-400">Bullish Crossover:</strong> MACD line cuts up through the signal line—buyers taking aggressive control. <strong class="text-rose-400">Bearish Divergence:</strong> Stock makes a higher high, but MACD fails to confirm—early warning that upward momentum is exhausting.
+                            </p>
+                        </div>
+
+                        <div class="p-3 rounded-xl bg-dark-950 border border-slate-800/80 space-y-1">
+                            <div class="flex items-center justify-between font-bold text-cyan-300">
+                                <span>⚡ Bollinger Bands & Volatility Squeeze</span>
+                                <span class="text-[10px] font-mono text-slate-400">20 SMA ± 2 StdDev</span>
+                            </div>
+                            <p class="text-[11px] text-slate-300 leading-relaxed">
+                                Dynamic volatility envelopes. <strong class="text-amber-400">Volatility Squeeze:</strong> When the upper and lower bands pinch tightly together (bandwidth &lt; 4.5%), volatility has collapsed to extreme lows—historically preceding an explosive breakout move. <strong class="text-slate-300">%B Indicator:</strong> 1.0 = at upper band (stretched), 0.0 = at lower band (discounted).
+                            </p>
+                        </div>
+
+                        <div class="p-3 rounded-xl bg-dark-950 border border-slate-800/80 space-y-1">
+                            <div class="flex items-center justify-between font-bold text-cyan-300">
+                                <span>📏 50-Day & 200-Day Moving Averages</span>
+                                <span class="text-[10px] font-mono text-slate-400">Institutional Trendlines</span>
+                            </div>
+                            <p class="text-[11px] text-slate-300 leading-relaxed">
+                                The benchmarks used by institutional funds. <strong class="text-slate-200">50 DMA:</strong> Intermediate trend health (price trading &gt;10% above 50 DMA indicates short-term overextension). <strong class="text-slate-200">200 DMA:</strong> Long-term dividing line between secular bull and bear markets.
+                            </p>
+                        </div>
+
+                        <div class="p-3 rounded-xl bg-dark-950 border border-slate-800/80 space-y-1">
+                            <div class="flex items-center justify-between font-bold text-cyan-300">
+                                <span>🛡️ ATR-14 & Dynamic Trailing Stop Floor</span>
+                                <span class="text-[10px] font-mono text-slate-400">Average True Range</span>
+                            </div>
+                            <p class="text-[11px] text-slate-300 leading-relaxed">
+                                Measures normal daily dollar price fluctuation. Sentinel calculates a mathematically grounded trailing stop floor at <code>Current Price - (2.0 × ATR)</code> so that normal intraday volatility doesn't trigger false-alarm exits.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Card 8: Retail Social Sentiment & Activity Velocity Guide -->
+                <div class="bg-dark-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+                    <div class="flex items-center space-x-2 border-b border-slate-800/80 pb-3">
+                        <span class="text-base">💬</span>
+                        <h3 class="text-sm font-bold text-white">Retail Social Sentiment & Volume Velocity (Lay Guide)</h3>
+                    </div>
+                    <p class="text-xs text-slate-400 leading-relaxed">
+                        Real-time intelligence from retail investor message streams (StockTwits & Reddit) combined with institutional trading volume to detect hype bubbles before mainstream financial media writes about them:
+                    </p>
+
+                    <div class="space-y-2.5 text-xs">
+                        <div class="p-3 rounded-xl bg-dark-950 border border-slate-800/80 space-y-1">
+                            <div class="flex items-center justify-between font-bold text-cyan-300">
+                                <span>📱 StockTwits Retail Bullish %</span>
+                                <span class="text-[10px] font-mono text-slate-400">Direct Retail Stance</span>
+                            </div>
+                            <p class="text-[11px] text-slate-300 leading-relaxed">
+                                Directly calculates the ratio of retail posts tagged as <em>Bullish</em> vs. <em>Bearish</em>. <strong class="text-emerald-400">&gt;80% (Extreme Euphoria):</strong> Retail optimism is crowded. Often indicates a near-term top if unaccompanied by real institutional volume. <strong class="text-rose-400">&lt;25% (Extreme Capitulation):</strong> Retail panic selling; often marks short-term counter-trend reversal opportunities.
+                            </p>
+                        </div>
+
+                        <div class="p-3 rounded-xl bg-dark-950 border border-slate-800/80 space-y-1">
+                            <div class="flex items-center justify-between font-bold text-cyan-300">
+                                <span>🔥 Reddit Discussion Velocity</span>
+                                <span class="text-[10px] font-mono text-slate-400">r/wallstreetbets & r/stocks</span>
+                            </div>
+                            <p class="text-[11px] text-slate-300 leading-relaxed">
+                                Ingests recent discussion threads and velocity across Reddit investor communities. A sudden surge in thread mentions detects viral meme runs, gamma squeezes, or viral boycotts hours before they reach mainstream financial wires.
+                            </p>
+                        </div>
+
+                        <div class="p-3 rounded-xl bg-dark-950 border border-slate-800/80 space-y-1">
+                            <div class="flex items-center justify-between font-bold text-cyan-300">
+                                <span>📊 Relative Volume (RVOL)</span>
+                                <span class="text-[10px] font-mono text-slate-400">Smart Money Confirmation</span>
+                            </div>
+                            <p class="text-[11px] text-slate-300 leading-relaxed">
+                                Compares live trading volume to the 20-day average volume (1.0x = normal). <strong class="text-emerald-300">RVOL &gt; 1.5x + High Bullish Sentiment:</strong> Confirms genuine institutional capital accumulation. <strong class="text-amber-400">RVOL &lt; 0.7x + High Bullish Sentiment:</strong> Dangerous divergence—retail hype without institutional capital backing (bull trap warning).
+                            </p>
+                        </div>
+
+                        <div class="p-3 rounded-xl bg-dark-950 border border-slate-800/80 space-y-1">
+                            <div class="flex items-center justify-between font-bold text-cyan-300">
+                                <span>⚖️ Dialectic Catalyst Examination</span>
+                                <span class="text-[10px] font-mono text-slate-400">Grounded Decision Logic</span>
+                            </div>
+                            <p class="text-[11px] text-slate-300 leading-relaxed">
+                                Sentinel forces every analysis to pit <strong>Fundamental Growth Drivers (Bull Case)</strong> against <strong>Technical Support Floors & Valuation Traps (Bear Case)</strong>. Even if a business is fundamentally great, if RSI is overbought (&gt;75) and retail hype is euphoric, the system warns you to <em>Hold for a Pullback</em> rather than chasing at resistance.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+    </main>
+
+    <!-- Manage Holdings & Cash Modal -->
+    <div id="holdings-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-dark-900 border border-slate-700 rounded-2xl max-w-4xl w-full p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div>
+                    <h3 class="text-base font-bold text-white flex items-center space-x-2">
+                        <span>✏️ Manage Portfolio Holdings & Cash</span>
+                    </h3>
+                    <p class="text-xs text-slate-400">Directly adjust your deployable cash balance and stock positions.</p>
+                </div>
+                <button onclick="closeHoldingsModal()" class="text-slate-400 hover:text-white text-lg font-bold">&times;</button>
+            </div>
+
+            <!-- Deployable Cash Input Card -->
+            <div class="p-3 bg-dark-950 border border-cyan-900/50 rounded-xl flex items-center justify-between">
+                <div class="flex items-center space-x-2.5 text-xs">
+                    <span class="text-lg">💰</span>
+                    <div>
+                        <span class="font-bold text-cyan-300">Deployable Cash / Dry Powder ($):</span>
+                        <span class="text-slate-400 block text-[11px]">Unallocated cash reserves available to deploy into newly discovered alpha opportunities.</span>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-1.5">
+                    <span class="text-slate-400 font-mono text-xs font-bold">$</span>
+                    <input type="number" step="any" min="0" id="modal-cash-input" class="w-36 px-3 py-1.5 bg-dark-900 border border-cyan-700/80 rounded-lg text-cyan-300 font-mono font-bold text-xs focus:ring-1 focus:ring-cyan-500 outline-none" placeholder="0.00">
+                </div>
+            </div>
+
+            <div class="overflow-y-auto flex-1 pr-1">
+                <table class="w-full text-left text-xs">
+                    <thead class="text-[11px] uppercase text-slate-400 border-b border-slate-800">
+                        <tr>
+                            <th class="pb-2">Ticker</th>
+                            <th class="pb-2">Name</th>
+                            <th class="pb-2">Sector</th>
+                            <th class="pb-2 text-right">Shares</th>
+                            <th class="pb-2 text-right">Avg Cost ($)</th>
+                            <th class="pb-2 text-right">Cur Price ($)</th>
+                            <th class="pb-2 text-center">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="holdings-modal-tbody" class="divide-y divide-slate-800/60 font-mono">
+                        <!-- Populated by JS -->
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="pt-3 border-t border-slate-800 flex items-center justify-between">
+                <button onclick="addHoldingRow()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 flex items-center space-x-1">
+                    <span>➕ Add Position</span>
+                </button>
+                <div class="space-x-2">
+                    <button onclick="closeHoldingsModal()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg">
+                        Cancel
+                    </button>
+                    <button onclick="saveHoldingsModal()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg shadow-md shadow-emerald-700/20">
+                        💾 Save & Apply
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Client Script -->
+
+    <!-- Settings & BYOK Gemini Key Modal -->
+    <div id="settings-modal" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-md hidden flex items-center justify-center p-4">
+        <div class="bg-dark-900 border border-slate-700/90 rounded-2xl w-full max-w-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <!-- Header -->
+            <div class="p-4 border-b border-slate-800 flex items-center justify-between bg-dark-950/60">
+                <div class="flex items-center space-x-2">
+                    <span class="text-xl">⚙️</span>
+                    <div>
+                        <h3 class="text-sm font-bold text-white">Investor Account & API Settings</h3>
+                        <p class="text-[11px] text-slate-400">Manage your BYOK Gemini API key, Telegram integration, and portfolio cash</p>
+                    </div>
+                </div>
+                <button onclick="closeSettingsModal()" class="text-slate-400 hover:text-white text-lg">&times;</button>
+            </div>
+
+            <!-- Content -->
+            <div class="p-5 space-y-4 overflow-y-auto flex-1 text-xs">
+                <!-- User Profile Pill -->
+                <div class="p-3 bg-dark-950 border border-slate-800 rounded-xl flex items-center justify-between">
+                    <div>
+                        <div class="text-[10px] text-slate-400 uppercase font-semibold">Active Account</div>
+                        <div class="text-sm font-bold text-white flex items-center space-x-2">
+                            <span>{{ user.username if user else "Investor" }}</span>
+                            <span class="px-2 py-0.5 text-[10px] rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 uppercase font-bold">{{ user.role if user else "user" }}</span>
+                        </div>
+                        <div class="text-[11px] text-slate-400">{{ user.email if user else "" }}</div>
+                    </div>
+                    <button onclick="lockSession()" class="px-3 py-1.5 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border border-rose-800/60 rounded-lg font-semibold transition">
+                        Sign Out
+                    </button>
+                </div>
+
+                <!-- Security & Password Management -->
+                <div class="p-4 bg-dark-950 border border-slate-800 rounded-xl space-y-3">
+                    <div class="flex items-center space-x-2">
+                        <span class="text-base">🔐</span>
+                        <h4 class="font-bold text-white text-xs uppercase tracking-wider">Change Password</h4>
+                    </div>
+
+                    <p class="text-[11px] text-slate-300 leading-relaxed">
+                        Update your account password (minimum 6 characters).
+                    </p>
+
+                    <div class="space-y-2">
+                        <div class="relative">
+                            <input 
+                                type="password" 
+                                id="settings-new-password" 
+                                placeholder="Enter new password (leave blank to keep current)" 
+                                class="w-full px-3 py-2 bg-dark-900 border border-slate-700 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 font-mono pr-10"
+                            />
+                            <button type="button" onclick="togglePassVisibility('settings-new-password')" class="absolute right-3 top-2 text-slate-400 hover:text-white text-[10px]">
+                                👁️
+                            </button>
+                        </div>
+                        <div class="relative">
+                            <input 
+                                type="password" 
+                                id="settings-confirm-password" 
+                                placeholder="Confirm new password" 
+                                class="w-full px-3 py-2 bg-dark-900 border border-slate-700 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 font-mono pr-10"
+                            />
+                            <button type="button" onclick="togglePassVisibility('settings-confirm-password')" class="absolute right-3 top-2 text-slate-400 hover:text-white text-[10px]">
+                                👁️
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Gemini API Key (BYOK) Section -->
+                <div class="p-4 bg-dark-950 border border-purple-900/50 rounded-xl space-y-3">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center space-x-2">
+                            <span class="text-base">🧠</span>
+                            <h4 class="font-bold text-white text-xs uppercase tracking-wider">Personal Gemini API Key (BYOK)</h4>
+                        </div>
+                        <a href="https://aistudio.google.com/" target="_blank" class="text-[11px] text-cyan-400 hover:underline flex items-center space-x-1 font-semibold">
+                            <span>Get Free Key</span>
+                            <span>↗</span>
+                        </a>
+                    </div>
+
+                    <p class="text-[11px] text-slate-300 leading-relaxed">
+                        Connect your personal Gemini API key so all AI market scans, thesis evaluations, and Telegram conversations use your free Google AI Studio quota.
+                    </p>
+
+                    <div>
+                        <div class="relative">
+                            <input 
+                                type="password" 
+                                id="settings-gemini-key" 
+                                value="{{ masked_gemini_key }}"
+                                placeholder="Enter AIzaSy..." 
+                                class="w-full px-3 py-2 bg-dark-900 border border-slate-700 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 font-mono pr-20"
+                            />
+                            <div class="absolute right-1 top-1 flex items-center space-x-1">
+                                <button type="button" onclick="togglePassVisibility('settings-gemini-key')" class="px-2 py-1 text-slate-400 hover:text-white text-[10px]">
+                                    👁️
+                                </button>
+                                <button type="button" onclick="testGeminiKey()" id="btn-test-key" class="px-2.5 py-1 bg-purple-600 hover:bg-purple-500 text-white text-[10px] font-bold rounded">
+                                    Test
+                                </button>
+                            </div>
+                        </div>
+                        <div id="key-test-feedback" class="mt-1.5 text-[11px] hidden font-semibold"></div>
+                    </div>
+
+                    <!-- AES-256 Encryption Notice -->
+                    <div class="p-2.5 bg-emerald-950/40 border border-emerald-800/60 rounded-lg text-[11px] text-emerald-300 flex items-start space-x-2">
+                        <span class="text-sm">🔒</span>
+                        <div class="leading-relaxed">
+                            <strong class="text-emerald-200 font-bold">AES-256 Encrypted at Rest:</strong> Your API key is encrypted using AES-256 Fernet with salted keys. It is used exclusively to execute your analyses and is strictly isolated from other users.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Telegram Integration Section -->
+                <div class="p-4 bg-dark-950 border border-blue-900/50 rounded-xl space-y-3">
+                    <div class="flex items-center space-x-2">
+                        <span class="text-base">📱</span>
+                        <h4 class="font-bold text-white text-xs uppercase tracking-wider">Telegram Notifications & Bot</h4>
+                    </div>
+
+                    <p class="text-[11px] text-slate-300 leading-relaxed">
+                        Designate your Telegram username to receive automated 6:30 AM PST Pre-Market intelligence, post-market briefs, and execute commands (<code>/portfolio</code>, <code>/add</code>, <code>/rm</code>) from mobile.
+                    </p>
+
+                    <div>
+                        <label class="block text-[10px] uppercase font-semibold text-slate-400 mb-1" for="settings-telegram">
+                            Your Telegram Username
+                        </label>
+                        <input 
+                            type="text" 
+                            id="settings-telegram" 
+                            value="{{ user.telegram_username if user and user.telegram_username else '' }}"
+                            placeholder="@your_username" 
+                            class="w-full px-3 py-2 bg-dark-900 border border-slate-700 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 font-mono"
+                        />
+                    </div>
+                    
+                    <div class="text-[10px] text-slate-400">
+                        💡 Once saved, send <code>/start</code> to your bot to link and activate your mobile commands.
+                    </div>
+                </div>
+
+                <!-- Cash & Capital Management -->
+                <div class="p-4 bg-dark-950 border border-slate-800 rounded-xl space-y-3">
+                    <div class="flex items-center space-x-2">
+                        <span class="text-base">💰</span>
+                        <h4 class="font-bold text-white text-xs uppercase tracking-wider">Deployable Cash Reserve</h4>
+                    </div>
+
+                    <div>
+                        <div class="relative">
+                            <span class="absolute left-3 top-2 text-slate-400 font-mono text-xs">$</span>
+                            <input 
+                                type="number" 
+                                step="0.01" 
+                                id="settings-cash" 
+                                value="{{ portfolio.cash }}"
+                                placeholder="0.00" 
+                                class="w-full pl-6 pr-3 py-2 bg-dark-900 border border-slate-700 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 font-mono"
+                            />
+                        </div>
+                    </div>
+                </div>
+
+                <div id="settings-status-msg" class="hidden p-3 rounded-xl text-xs font-semibold text-center"></div>
+
+            </div>
+
+            <!-- Footer Buttons -->
+            <div class="p-4 border-t border-slate-800 flex items-center justify-end space-x-2 bg-dark-950/80">
+                <button onclick="closeSettingsModal()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold transition">
+                    Cancel
+                </button>
+                <button onclick="saveUserSettings()" id="btn-save-settings" class="px-5 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl text-xs font-bold transition shadow-lg shadow-cyan-950/50 flex items-center space-x-1.5">
+                    <span>Save Settings</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modular Static JavaScript Architecture -->
+    <script src="/static/js/tabs.js?v=2.3.0"></script>
+    <script src="/static/js/portfolio.js?v=2.3.0"></script>
+    <script src="/static/js/deepdive.js?v=2.3.0"></script>
+    <script src="/static/js/scans.js?v=2.3.0"></script>
+
+    <!-- Application Bootstrap & Lifecycle Initialization -->
+    <script>
+        window.INITIAL_BRIEFING = {% if latest_briefing_json and latest_briefing_json != "null" %}{{ latest_briefing_json | safe }}{% else %}null{% endif %};
+
+        window.addEventListener('DOMContentLoaded', () => {
+            // 1. Initialize PST Clock
+            updateHeaderPstClock();
+            setInterval(updateHeaderPstClock, 1000);
+
+            // 2. Hydrate server-side pre-computed briefing if available
+            if (window.INITIAL_BRIEFING) {
+                try {
+                    renderBriefing(window.INITIAL_BRIEFING);
+                } catch(e) {
+                    console.warn("Initial briefing parse error:", e);
+                }
+            }
+
+            // 3. Fetch portfolio data & render sector allocation
+            fetchPortfolio().then(p => {
+                if (p) renderSectorDistribution(p);
+            });
+
+            // 4. Preload market briefings & deep dives archives
+            if (typeof loadMarketBriefings === 'function') loadMarketBriefings();
+            if (typeof loadDeepDivesArchive === 'function') loadDeepDivesArchive();
+
+            // 5. URL query parameters synchronization (e.g. ?tab=deepdive&ticker=NVDA)
+            const urlParams = new URLSearchParams(window.location.search);
+            const targetTab = urlParams.get('tab');
+            const targetTicker = urlParams.get('ticker');
+
+            if (targetTab) {
+                const fullTabId = targetTab.startsWith('tab-') ? targetTab : 'tab-' + targetTab;
+                if (document.getElementById(fullTabId)) {
+                    switchTab(fullTabId, false);
+                }
+            } else {
+                updateHudVisibility('tab-portfolio');
+            }
+
+            if (targetTicker) {
+                const input = document.getElementById('single-ticker-input');
+                if (input) input.value = targetTicker.toUpperCase();
+            }
+        });
+    </script>
+</body>
+</html>

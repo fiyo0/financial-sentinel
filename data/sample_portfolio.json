@@ -1,0 +1,62 @@
+{
+  "name": "Sample Benchmark Portfolio",
+  "cash": 10000.0,
+  "holdings": [
+    {
+      "ticker": "SPY",
+      "name": "SPDR S&P 500 ETF Trust",
+      "shares": 25.0,
+      "avg_price": 510.0,
+      "current_price": 545.20,
+      "daily_change_pct": 0.45,
+      "sector": "Diversified Index",
+      "asset_class": "Equity",
+      "thematic_tags": ["Broad Market", "Core ETF"]
+    },
+    {
+      "ticker": "BND",
+      "name": "Vanguard Total Bond Market ETF",
+      "shares": 60.0,
+      "avg_price": 71.50,
+      "current_price": 73.80,
+      "daily_change_pct": 0.12,
+      "sector": "Fixed Income",
+      "asset_class": "Bond",
+      "thematic_tags": ["Fixed Income", "Defensive"]
+    },
+    {
+      "ticker": "GLD",
+      "name": "SPDR Gold Shares",
+      "shares": 15.0,
+      "avg_price": 215.0,
+      "current_price": 232.40,
+      "daily_change_pct": 0.28,
+      "sector": "Commodities",
+      "asset_class": "Commodity",
+      "thematic_tags": ["Gold", "Inflation Hedge"]
+    },
+    {
+      "ticker": "DIS",
+      "name": "Walt Disney Co",
+      "shares": 30.0,
+      "avg_price": 92.0,
+      "current_price": 96.50,
+      "daily_change_pct": -0.35,
+      "sector": "Communication Services",
+      "asset_class": "Equity",
+      "thematic_tags": ["Media", "Entertainment"]
+    },
+    {
+      "ticker": "JNJ",
+      "name": "Johnson & Johnson",
+      "shares": 20.0,
+      "avg_price": 156.0,
+      "current_price": 164.10,
+      "daily_change_pct": 0.18,
+      "sector": "Healthcare",
+      "asset_class": "Equity",
+      "thematic_tags": ["Defensive", "Healthcare"]
+    }
+  ],
+  "last_updated": "2026-09-08T12:00:00.000000"
+}

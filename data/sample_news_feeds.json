@@ -1,0 +1,57 @@
+[
+  {
+    "id": "news_nvda_probe_001",
+    "title": "SEC and DOJ Expand Antitrust Subpoenas Over NVIDIA GPU Distribution & Bundling",
+    "source": "reuters.com",
+    "url": "https://www.reuters.com/technology/nvda-antitrust-investigation-2026",
+    "category": "SEC_FILING",
+    "reliability": 0.95,
+    "summary": "Federal regulators have escalated inquiry into NVIDIA (NVDA) market practices, issuing civil subpoenas concerning AI chip allocations and software lock-in clauses.",
+    "related_tickers": ["NVDA"],
+    "related_sectors": ["Semiconductors", "Technology"]
+  },
+  {
+    "id": "news_tsmc_packaging_002",
+    "title": "Taiwan Semiconductor (TSMC) Flags Advanced CoWoS Packaging Bottleneck",
+    "source": "bloomberg.com",
+    "url": "https://www.bloomberg.com/news/tsmc-cowos-capacity-update",
+    "category": "SECTOR",
+    "reliability": 0.92,
+    "summary": "TSMC Chairman stated that advanced packaging supply will remain constrained through Q3, causing minor delivery delay risks for key customers including Apple and Broadcom.",
+    "related_tickers": ["TSM", "AAPL", "AVGO"],
+    "related_sectors": ["Semiconductors"]
+  },
+  {
+    "id": "news_fed_fomc_003",
+    "title": "Federal Reserve Holds Benchmark Rate Steady, Signals Neutral Policy Stance",
+    "source": "federalreserve.gov",
+    "url": "https://www.federalreserve.gov/newsevents/pressreleases/monetary20260828a.htm",
+    "category": "MACRO",
+    "reliability": 0.99,
+    "summary": "The FOMC voted unanimously to maintain target federal funds rate, observing steady inflation moderation and solid labor market trends.",
+    "related_tickers": [],
+    "related_sectors": ["Financials", "Technology"]
+  },
+  {
+    "id": "news_nuclear_power_004",
+    "title": "Constellation Energy and Hyperscalers Sign Landmark 20-Year Nuclear Power Agreement",
+    "source": "wsj.com",
+    "url": "https://www.wsj.com/business/energy-oil/constellation-nuclear-datacenter-contract",
+    "category": "SECTOR",
+    "reliability": 0.90,
+    "summary": "Constellation Energy (CEG) announced a multibillion-dollar contract to supply 1.2 GW of dedicated zero-carbon baseload nuclear energy to next-generation AI datacenter clusters.",
+    "related_tickers": ["CEG", "OKLO", "CCJ"],
+    "related_sectors": ["Energy", "Utilities"]
+  },
+  {
+    "id": "news_vktx_trial_005",
+    "title": "Viking Therapeutics Reports Phase 2 Oral GLP-1 Obesity Trial Exceeds Efficacy Targets",
+    "source": "cnbc.com",
+    "url": "https://www.cnbc.com/2026/08/28/viking-therapeutics-oral-glp1-trial-results.html",
+    "category": "BREAKING",
+    "reliability": 0.85,
+    "summary": "Viking Therapeutics (VKTX) reported statistically significant weight reduction in its oral dual agonist tablet trial, positioning the company as a key competitor to subcutaneous injectables.",
+    "related_tickers": ["VKTX", "LLY", "NVO"],
+    "related_sectors": ["Healthcare"]
+  }
+]

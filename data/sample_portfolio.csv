@@ -1,0 +1,6 @@
+ticker,name,shares,avg_price,current_price,sector,thematic_tags
+NVDA,NVIDIA Corporation,150,115.00,128.50,Semiconductors,"AI Hardware,Data Center"
+AAPL,Apple Inc.,100,185.00,224.00,Technology,"Consumer Tech,Services"
+MSFT,Microsoft Corporation,80,405.00,425.00,Technology,"Cloud,Enterprise AI"
+XOM,Exxon Mobil Corporation,120,110.00,118.00,Energy,"Oil,LNG"
+LLY,Eli Lilly and Company,40,820.00,940.00,Healthcare,"GLP-1,Biopharma"

@@ -1,0 +1,15 @@
+.venv
+__pycache__
+*.pyc
+.git
+.gitignore
+tests
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+storage/*.db
+storage/*.db*
+storage/*.db-wal
+storage/*.db-shm
+storage/*.db-journal

@@ -1,0 +1,49 @@
+# Environment & Secrets (CRITICAL)
+.env
+.env.*
+*.env
+!*.env.example
+
+# Python & Virtual Environments
+.venv/
+venv/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+
+# Local SQLite databases & logs (CRITICAL: Never commit database files)
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+**/*.db
+**/*.db-*
+**/*.sqlite*
+storage/*.db*
+storage/legacy_archive/
+*.log
+
+# User-specific private portfolio and runtime identity files (CRITICAL)
+data/my_portfolio.csv
+data/my_portfolio*
+data/active_portfolio.json
+data/telegram_chat_id.txt
+
+# OS Specific
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE / Editor folders
+.vscode/
+.idea/
+*.swp
+*.swo
