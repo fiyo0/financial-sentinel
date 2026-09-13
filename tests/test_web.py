@@ -7,7 +7,16 @@ from web.app import app
 
 
 @pytest.fixture
-def client():
+def client(tmp_path, monkeypatch):
+    import os
+    import shutil
+    from storage.state_store import StateStore
+    from web.app import orchestrator
+    test_db = str(tmp_path / "test_state.db")
+    if os.path.exists("storage/state.db"):
+        shutil.copyfile("storage/state.db", test_db)
+    test_store = StateStore(test_db)
+    monkeypatch.setattr(orchestrator, "state_store", test_store)
     return TestClient(app)
 
 

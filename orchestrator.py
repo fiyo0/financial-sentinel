@@ -73,17 +73,65 @@ class FinancialSentinelOrchestrator:
         """
         if user_id:
             user_p = self.state_store.get_user_portfolio(user_id)
-            if user_p and isinstance(user_p, dict):
+            if user_p is not None and isinstance(user_p, dict):
                 try:
                     p = Portfolio.model_validate(user_p)
                     p.deduplicate_and_aggregate()
                     return p
                 except Exception:
                     pass
-            # Fresh empty user portfolio (starts off with nothing)
+
+            # Check if this user is admin
+            user_obj = self.state_store.get_user_by_id(user_id)
+            is_admin = bool(user_obj and user_obj.get("role") == "admin")
+            admin = self.state_store.get_or_create_default_admin()
+            if is_admin or (admin and user_id == admin["id"]):
+                # Intelligently seed admin from system active_portfolio / CSV / JSON
+                saved = self.state_store.get_kv("active_portfolio")
+                if saved and isinstance(saved, dict) and saved.get("holdings"):
+                    try:
+                        p = Portfolio.model_validate(saved)
+                        p.deduplicate_and_aggregate()
+                        self.persist_active_portfolio(p, user_id=user_id)
+                        return p
+                    except Exception:
+                        pass
+
+                data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+                active_json = os.path.join(data_dir, "active_portfolio.json")
+                if os.path.exists(active_json):
+                    try:
+                        p = self.load_portfolio_from_file(active_json)
+                        p.deduplicate_and_aggregate()
+                        self.persist_active_portfolio(p, user_id=user_id)
+                        return p
+                    except Exception:
+                        pass
+
+                my_csv = os.path.join(data_dir, "my_portfolio.csv")
+                if os.path.exists(my_csv):
+                    try:
+                        p = self.load_portfolio_from_file(my_csv)
+                        p.cash = 12500.0
+                        p.deduplicate_and_aggregate()
+                        self.persist_active_portfolio(p, user_id=user_id)
+                        return p
+                    except Exception:
+                        pass
+
+                sample_json = os.path.join(data_dir, "sample_portfolio.json")
+                if os.path.exists(sample_json):
+                    try:
+                        p = self.load_portfolio_from_file(sample_json)
+                        p.deduplicate_and_aggregate()
+                        self.persist_active_portfolio(p, user_id=user_id)
+                        return p
+                    except Exception:
+                        pass
+
+            # Fresh empty user portfolio (starts off with nothing for non-admin tenants)
             p = Portfolio(name="User Portfolio", cash=0.0, holdings=[])
             return p
-
 
         # Default admin flow
         admin = self.state_store.get_or_create_default_admin()
@@ -138,14 +186,16 @@ class FinancialSentinelOrchestrator:
             self.state_store.set_kv("active_portfolio", dumped)
             self.state_store.set_kv("portfolio_cash", portfolio.cash)
 
-            data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-            active_json = os.path.join(data_dir, "active_portfolio.json")
-            os.makedirs(data_dir, exist_ok=True)
-            try:
-                with open(active_json, "w") as f:
-                    json.dump(dumped, f, indent=2)
-            except Exception:
-                pass
+            # Guard writing active_portfolio.json during pytest execution
+            if not os.environ.get("PYTEST_CURRENT_TEST"):
+                data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+                active_json = os.path.join(data_dir, "active_portfolio.json")
+                os.makedirs(data_dir, exist_ok=True)
+                try:
+                    with open(active_json, "w") as f:
+                        json.dump(dumped, f, indent=2)
+                except Exception:
+                    pass
         return dumped
 
 
