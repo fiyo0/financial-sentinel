@@ -12,7 +12,7 @@ load_dotenv()
 class SystemConfig(BaseModel):
     # App Metadata
     app_name: str = "Financial Sentinel & Alpha Multi-Agent System"
-    version: str = "2.3.0"
+    version: str = "2.4.0"
 
     # LLM Settings
     gemini_api_key: str = Field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
