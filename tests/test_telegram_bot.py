@@ -183,3 +183,39 @@ def test_unrecognized_ticker_aborts_without_llm(telegram_test_setup):
         assert any("Ticker 'FOOBAR' Not Recognized" in m["text"] for m in sent)
         assert any("Unable to verify live trade data" in m["text"] for m in sent)
 
+
+def test_setup_webhook_secret_token(telegram_test_setup, monkeypatch):
+    """Ensure setup_webhook passes secret_token to Telegram setWebhook endpoint."""
+    bot, _, _, _, _ = telegram_test_setup
+    bot.bot_token = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+
+    posted_payload = {}
+
+    def mock_post(url, json=None, timeout=None):
+        nonlocal posted_payload
+        posted_payload = json
+        class MockResp:
+            status_code = 200
+            text = '{"ok": true}'
+            def json(self):
+                return {"ok": True}
+        return MockResp()
+
+    from config import config
+    # 1. With configured telegram_webhook_secret
+    monkeypatch.setattr(config, "telegram_webhook_secret", "custom_secret_abc")
+    with patch("httpx.post", side_effect=mock_post):
+        res = bot.setup_webhook("https://example.run.app")
+        assert res is True
+        assert posted_payload.get("url") == "https://example.run.app/api/telegram/webhook"
+        assert posted_payload.get("secret_token") == "custom_secret_abc"
+
+    # 2. With fallback derived from APP_SECRET_KEY
+    monkeypatch.setattr(config, "telegram_webhook_secret", "")
+    monkeypatch.setenv("APP_SECRET_KEY", "test_app_secret_123")
+    with patch("httpx.post", side_effect=mock_post):
+        res = bot.setup_webhook("https://example.run.app")
+        assert res is True
+        assert posted_payload.get("url") == "https://example.run.app/api/telegram/webhook"
+        assert len(posted_payload.get("secret_token")) == 64
+

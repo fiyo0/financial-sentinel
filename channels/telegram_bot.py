@@ -245,14 +245,18 @@ class FinancialSentinelTelegramBot:
             return False
         clean_base = base_url.rstrip("/")
         webhook_url = f"{clean_base}/api/telegram/webhook"
-        token_to_use = secret_token or config.telegram_webhook_secret
-        url = f"https://api.telegram.org/bot{self.bot_token}/setWebhook?url={webhook_url}"
+        token_to_use = secret_token or config.resolved_telegram_webhook_secret
+        url = f"https://api.telegram.org/bot{self.bot_token}/setWebhook"
+        payload: Dict[str, Any] = {
+            "url": webhook_url,
+            "drop_pending_updates": False,
+        }
         if token_to_use:
-            url += f"&secret_token={token_to_use}"
+            payload["secret_token"] = token_to_use
         try:
-            resp = httpx.get(url, timeout=10.0)
+            resp = httpx.post(url, json=payload, timeout=10.0)
             if resp.status_code == 200 and resp.json().get("ok"):
-                logger.info(f"Telegram Webhook configured: {webhook_url}")
+                logger.info(f"Telegram Webhook configured: {webhook_url} (secret_token: {bool(token_to_use)})")
                 return True
             else:
                 logger.warning(f"Telegram setWebhook returned: {resp.text}")

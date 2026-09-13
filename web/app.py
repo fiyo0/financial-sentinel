@@ -8,7 +8,6 @@ import json
 import csv
 import io
 import time
-import hashlib
 import secrets
 import re
 from datetime import datetime
@@ -1181,11 +1180,7 @@ async def api_discover_moonshots(count: int = 4, user: Dict[str, Any] = Depends(
 
 @app.post("/api/telegram/webhook")
 async def api_telegram_webhook(request: Request):
-    expected_secret = config.telegram_webhook_secret
-    if not expected_secret:
-        app_sec = os.getenv("APP_SECRET_KEY", "")
-        if app_sec:
-            expected_secret = hashlib.sha256(f"tg_webhook_{app_sec}".encode("utf-8")).hexdigest()
+    expected_secret = config.resolved_telegram_webhook_secret
 
     if expected_secret:
         received_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")

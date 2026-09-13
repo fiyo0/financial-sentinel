@@ -67,5 +67,15 @@ class SystemConfig(BaseModel):
     telegram_webhook_secret: str = Field(default_factory=lambda: os.getenv("TELEGRAM_WEBHOOK_SECRET", ""))
     cron_secret: str = Field(default_factory=lambda: os.getenv("CRON_SECRET", ""))
 
+    @property
+    def resolved_telegram_webhook_secret(self) -> str:
+        if self.telegram_webhook_secret:
+            return self.telegram_webhook_secret
+        app_sec = os.getenv("APP_SECRET_KEY", "")
+        if app_sec:
+            import hashlib
+            return hashlib.sha256(f"tg_webhook_{app_sec}".encode("utf-8")).hexdigest()
+        return ""
+
 
 config = SystemConfig()
