@@ -28,7 +28,7 @@ gcloud run deploy "$SERVICE_NAME" \
     --max-instances=1 \
     --no-cpu-throttling \
     --set-env-vars "PORT=8000,DASHBOARD_AUTH_ENABLED=true" \
-    --set-secrets "GEMINI_API_KEY=gemini-api-key:latest,TELEGRAM_BOT_TOKEN=telegram-bot-token:latest,DASHBOARD_PASSWORD=dashboard-password:latest,APP_SECRET_KEY=app-secret-key:latest" \
+    --set-secrets "GEMINI_API_KEY=gemini-api-key:latest,TELEGRAM_BOT_TOKEN=telegram-bot-token:latest,DASHBOARD_PASSWORD=dashboard-password:latest,APP_SECRET_KEY=app-secret-key:latest,CRON_SECRET=cron-secret:latest" \
     --memory 1Gi \
     --cpu 1
 
