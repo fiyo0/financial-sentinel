@@ -42,10 +42,20 @@ def get_current_user_optional(request: Request) -> Optional[Dict[str, Any]]:
         if payload and payload.get("uid"):
             user = store.get_user_by_id(payload["uid"])
             if user:
-                return user
+                # Invalidate stale session tokens across credential rotations (R-1)
+                token_epoch = int(payload.get("epoch", 1))
+                user_epoch = int(user.get("token_epoch") or 1)
+                if token_epoch == user_epoch:
+                    return user
 
-    # 2. If auth is completely disabled in config (local dev only)
+    # 2. If auth is completely disabled in config (local dev only, strictly rejected in production) (R-7)
     if not config.dashboard_auth_enabled and store:
+        import os
+        if os.getenv("K_SERVICE") or os.getenv("ENVIRONMENT") == "production":
+            raise RuntimeError(
+                "CRITICAL SECURITY CONFIGURATION ERROR: DASHBOARD_AUTH_ENABLED cannot be disabled in production. "
+                "Refusing to execute unauthenticated in production."
+            )
         return store.get_or_create_default_admin()
 
     return None

@@ -2,7 +2,7 @@
 Quantitative Risk & Portfolio Concentration Matrix.
 Computes quantitative stress scenarios, sector weight distributions, and estimated beta exposures.
 """
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional, Tuple
 
 from models import Portfolio, PortfolioStressMetric
 
@@ -86,7 +86,9 @@ class QuantRiskEngine:
         # adhering strictly to data provenance and avoiding misleading affine-beta approximations.
         sharpe = None
         fields_unavailable = [
-            "sharpe_ratio: Requires historical portfolio return time-series; synthetic affine beta mapping omitted"
+            "sharpe_ratio: Requires historical portfolio return time-series; synthetic affine beta mapping omitted",
+            "annualized_volatility_pct: Derived from static SECTOR_MACRO_SENSITIVITIES lookup, not from a realized return series. Not a statistical volatility estimate.",
+            "var_95_daily_pct / var_95_daily_usd: Inherits the synthetic volatility above. Indicative scale only; not a validated risk measure.",
         ]
 
         total_portfolio_wealth = total_equity + max(0.0, portfolio.cash)
@@ -121,6 +123,117 @@ class QuantRiskEngine:
             fields_unavailable=fields_unavailable,
             provenance_note="Parametric sector-beta stress testing. Empirical returns required for realized Sharpe and CVaR."
         )
+
+
+def apply_data_quality_ceiling(
+    conviction_pct: float,
+    tech_snapshot: Optional[Any] = None,
+    stress_metrics: Optional[Any] = None,
+    missing_technical_fields: Optional[List[str]] = None,
+) -> Tuple[float, List[str]]:
+    """
+    Enforces deterministic data quality ceilings on investment conviction scores (R-4).
+    - If core technical indicators (RSI-14, MACD, or ATR-14) are missing/unavailable, conviction is capped at 55.0%.
+    - If macro/portfolio stress metrics are missing or unavailable, conviction is capped at 75.0%.
+    """
+    capped_conviction = float(conviction_pct)
+    reasons: List[str] = []
+
+    # Check technical indicators
+    tech_unavailable = list(missing_technical_fields or [])
+    if tech_snapshot is not None:
+        unavail = getattr(tech_snapshot, "fields_unavailable", None)
+        if isinstance(unavail, list):
+            tech_unavailable.extend(unavail)
+        has_macd = getattr(tech_snapshot, "macd_line", None) is not None or getattr(tech_snapshot, "macd", None) is not None
+        if not has_macd:
+            tech_unavailable.append("macd")
+        if getattr(tech_snapshot, "rsi_14", None) is None:
+            tech_unavailable.append("rsi_14")
+        if getattr(tech_snapshot, "atr_14", None) is None:
+            tech_unavailable.append("atr_14")
+
+    missing_core_tech = any(
+        k in " ".join(tech_unavailable).lower()
+        for k in ["rsi", "macd", "atr"]
+    )
+    if missing_core_tech:
+        if capped_conviction > 55.0:
+            capped_conviction = 55.0
+            reasons.append("Capped conviction at 55.0% due to missing or degraded technical indicators (RSI-14/MACD/ATR-14).")
+
+    # Check macro / stress metrics
+    if stress_metrics is None:
+        if capped_conviction > 75.0:
+            capped_conviction = 75.0
+            reasons.append("Capped conviction at 75.0% due to missing portfolio stress/macro risk metrics.")
+
+    return round(capped_conviction, 1), reasons
+
+
+def compute_deterministic_position_size(
+    portfolio_equity: float,
+    portfolio_cash: float,
+    current_price: float,
+    atr_14: Optional[float] = None,
+    conviction_pct: float = 70.0,
+    median_adv_shares_30d: float = 0.0,
+    risk_budget_pct: float = 0.75,
+    max_position_pct: float = 10.0,
+) -> Dict[str, Any]:
+    """
+    Deterministic volatility- and liquidity-adjusted position sizing engine (§2B).
+    1. Volatility Stop Distance: 2x ATR-14.
+    2. Dollar Risk Budget: portfolio_equity * (risk_budget_pct / 100.0).
+    3. Volatility Sized Shares: dollar_risk_budget / (2 * atr_14) if atr_14 > 0, else default 8% stop.
+    4. Conviction Scaling: conviction_pct / 100.0 multiplier.
+    5. ADV Turnover Cap: Maximum 1.0% of 30-day median dollar turnover (compute_adv_liquidity_constraints).
+    6. Portfolio Equity Cap: Max max_position_pct% of total portfolio equity.
+    7. Cash Limit: Max available cash.
+    """
+    current_price = max(0.01, float(current_price))
+    portfolio_equity = max(100.0, float(portfolio_equity))
+    conviction_factor = max(0.1, min(1.0, float(conviction_pct) / 100.0))
+    dollar_risk_budget = portfolio_equity * (risk_budget_pct / 100.0)
+
+    stop_distance = (2.0 * atr_14) if (atr_14 and atr_14 > 0) else (current_price * 0.08)
+    vol_shares = dollar_risk_budget / stop_distance
+    raw_target_usd = vol_shares * current_price * conviction_factor
+
+    # Max equity allocation cap (default 10% of portfolio)
+    equity_cap_usd = portfolio_equity * (max_position_pct / 100.0)
+    capped_target_usd = min(raw_target_usd, equity_cap_usd)
+
+    # Cash constraint
+    cash_cap_usd = max(0.0, float(portfolio_cash))
+    if cash_cap_usd > 0:
+        capped_target_usd = min(capped_target_usd, cash_cap_usd)
+
+    # ADV turnover liquidity constraints (1% median ADV 30d turnover)
+    adv_constraints = compute_adv_liquidity_constraints(
+        position_shares=capped_target_usd / current_price,
+        current_price=current_price,
+        median_adv_shares_30d=median_adv_shares_30d,
+        conviction_sized_usd=capped_target_usd,
+    )
+    final_target_usd = adv_constraints["recommended_max_usd"]
+    final_shares = round(final_target_usd / current_price, 4) if current_price > 0 else 0.0
+
+    return {
+        "target_position_usd": round(final_target_usd, 2),
+        "target_shares": final_shares,
+        "stop_loss_price": round(max(0.01, current_price - stop_distance), 2),
+        "stop_distance_usd": round(stop_distance, 2),
+        "stop_distance_pct": round((stop_distance / current_price) * 100.0, 2),
+        "raw_target_usd": round(raw_target_usd, 2),
+        "equity_cap_usd": round(equity_cap_usd, 2),
+        "adv_constraints": adv_constraints,
+        "sizing_notes": (
+            f"Risk budget {risk_budget_pct}% (${round(dollar_risk_budget, 2)}), "
+            f"stop distance ${round(stop_distance, 2)} (2x ATR-14), "
+            f"conviction {round(conviction_pct, 1)}%."
+        ),
+    }
 
 
 def compute_adv_liquidity_constraints(

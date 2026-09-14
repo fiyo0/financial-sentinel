@@ -141,7 +141,7 @@ async function triggerScan(live=true, useDemo=false) {
                         const pct = event.percent || 0;
                         if (typeof showBanner === 'function') showBanner(`⏳ [${pct}%] ${msg}`);
                         if (summaryElem) {
-                            summaryElem.innerHTML = `<span class="text-cyan-400 pulse-subtle"><b>[${pct}%]</b> ${msg}</span>`;
+                            summaryElem.innerHTML = `<span class="text-cyan-400 pulse-subtle"><b>[${pct}%]</b> ${esc(msg)}</span>`;
                         }
                     } else if (event.type === 'complete') {
                         scanData = event;
@@ -377,16 +377,16 @@ function renderBriefing(b) {
                             <div class="p-3 bg-dark-950 border border-slate-800/90 rounded-xl text-xs space-y-2 shadow-md">
                                 <div class="flex items-center justify-between">
                                     <span class="px-2 py-0.5 rounded text-[10px] font-bold border ${verdictBadgeBg}">
-                                        ⚖️ ${(c.verdict || '').replace('_', ' ')}
+                                        ⚖️ ${esc((c.verdict || '').replace(/_/g, ' '))}
                                     </span>
                                     <span class="px-2 py-0.5 rounded text-[10px] font-mono border ${gradeColor}">
-                                        Grade: ${grade} (${c.calibrated_confidence_pct || 85}%)
+                                        Grade: ${esc(grade)} (${esc(c.calibrated_confidence_pct || 85)}%)
                                     </span>
                                 </div>
-                                <p class="text-slate-200 text-xs leading-relaxed">${c.review_summary || ''}</p>
+                                <p class="text-slate-200 text-xs leading-relaxed">${esc(c.review_summary || '')}</p>
                                 ${c.counter_thesis_questions && c.counter_thesis_questions.length > 0 ? `
                                     <div class="text-[11px] text-amber-300/90 font-mono bg-amber-950/30 p-2 rounded-lg border border-amber-900/40">
-                                        <span class="font-bold text-amber-400">❓ Devil's Advocate:</span> ${c.counter_thesis_questions[0]}
+                                        <span class="font-bold text-amber-400">❓ Devil's Advocate:</span> ${esc(c.counter_thesis_questions[0])}
                                     </div>
                                 ` : ''}
                             </div>
@@ -546,6 +546,9 @@ function renderMoonshots(moonshots, criticReviews) {
     container.innerHTML = moonshots.map(m => {
         const critic = criticMap[`opp_${m.ticker}_${m.news_item_id}`] || {};
         const question = (critic.counter_thesis_questions && critic.counter_thesis_questions[0]) || '';
+        const riskFactorsStr = (m.risk_factors && m.risk_factors.length > 0)
+            ? m.risk_factors.map(r => esc(r)).join(' &bull; ')
+            : 'Regulatory delay or commercial adoption bottleneck.';
 
         return `
             <div class="p-4 bg-dark-950 border border-purple-900/60 hover:border-purple-500/80 rounded-2xl text-xs space-y-3 shadow-xl transition-all flex flex-col justify-between group">
@@ -553,38 +556,38 @@ function renderMoonshots(moonshots, criticReviews) {
                     <div class="flex items-center justify-between">
                         <div>
                             <div class="font-bold text-sm text-purple-300 group-hover:text-purple-200 transition-colors flex items-center space-x-1.5">
-                                <span>${m.ticker}</span>
-                                <span class="text-xs text-slate-400 font-normal truncate max-w-[140px]">(${m.name})</span>
+                                <span>${esc(m.ticker)}</span>
+                                <span class="text-xs text-slate-400 font-normal truncate max-w-[140px]">(${esc(m.name)})</span>
                             </div>
-                            <div class="text-[10px] text-purple-400/90 font-semibold">${m.theme}</div>
+                            <div class="text-[10px] text-purple-400/90 font-semibold">${esc(m.theme)}</div>
                         </div>
                         <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                            ${m.asymmetric_ratio}:1 R/R
+                            ${esc(m.asymmetric_ratio)}:1 R/R
                         </span>
                     </div>
 
-                    <p class="text-slate-300 text-xs leading-relaxed">${m.upside_thesis}</p>
+                    <p class="text-slate-300 text-xs leading-relaxed">${esc(m.upside_thesis)}</p>
 
                     <div class="p-2.5 bg-dark-900/90 rounded-xl border border-purple-900/40 space-y-1 text-[11px] font-mono">
                         <div class="text-emerald-400 font-bold flex items-center justify-between">
                             <span>🚀 Potential Upside:</span>
-                            <span>+${m.estimated_upside_pct}%</span>
+                            <span>+${esc(m.estimated_upside_pct)}%</span>
                         </div>
                         <div class="text-rose-400 font-bold flex items-center justify-between">
                             <span>🛑 Risk Threshold:</span>
-                            <span>-${m.suggested_stop_loss_pct}%</span>
+                            <span>-${esc(m.suggested_stop_loss_pct)}%</span>
                         </div>
                     </div>
 
                     <div class="p-2.5 bg-rose-950/20 border border-rose-900/40 rounded-xl text-[10px] space-y-1 text-rose-300/90">
                         <span class="font-bold text-rose-400">⚠️ Key Binary Failure Mode:</span>
-                        <div>${(m.risk_factors && m.risk_factors.length > 0) ? m.risk_factors.join(' &bull; ') : 'Regulatory delay or commercial adoption bottleneck.'}</div>
+                        <div>${riskFactorsStr}</div>
                     </div>
                 </div>
 
                 ${question ? `
                     <div class="pt-2 border-t border-purple-950 text-[10px] text-amber-300/90 font-mono">
-                        <span class="text-amber-400 font-bold">🔍 Devil's Advocate:</span> ${question}
+                        <span class="text-amber-400 font-bold">🔍 Devil's Advocate:</span> ${esc(question)}
                     </div>
                 ` : ''}
             </div>
@@ -803,7 +806,7 @@ async function loadEarningsCalendar() {
             container.innerHTML = '<div class="p-4 bg-dark-950 border border-slate-800 rounded-xl text-xs text-slate-400">No corporate earnings calls found for the upcoming 7 calendar days.</div>';
         }
     } catch (err) {
-        container.innerHTML = `<div class="p-4 bg-rose-950/30 border border-rose-800 rounded-xl text-xs text-rose-400">Error loading earnings feed: ${err.message}</div>`;
+        container.innerHTML = `<div class="p-4 bg-rose-950/30 border border-rose-800 rounded-xl text-xs text-rose-400">Error loading earnings feed: ${esc(err.message)}</div>`;
     } finally {
         if (btn) btn.innerHTML = '<span>🔄 Refresh Calendar</span>';
     }
@@ -873,7 +876,7 @@ async function loadMarketBriefings() {
                 const parsed = JSON.parse(text);
                 if (parsed && parsed.detail) errMsg = parsed.detail;
             } catch(_) {}
-            listCont.innerHTML = `<div class="p-4 text-center text-xs text-rose-400">Briefings unavailable: ${errMsg}</div>`;
+            listCont.innerHTML = `<div class="p-4 text-center text-xs text-rose-400">Briefings unavailable: ${esc(errMsg)}</div>`;
             return;
         }
         const data = await res.json();
@@ -891,7 +894,7 @@ async function loadMarketBriefings() {
         }
     } catch (err) {
         console.error("loadMarketBriefings error:", err);
-        listCont.innerHTML = `<div class="p-4 text-xs text-rose-400">Failed to load briefings: ${err.message || err}</div>`;
+        listCont.innerHTML = `<div class="p-4 text-xs text-rose-400">Failed to load briefings: ${esc(err.message || err)}</div>`;
     }
 }
 
@@ -933,19 +936,19 @@ function renderBriefingsArchiveList() {
         const preview = (b.executive_summary || '').replace(/<[^>]*>/g, '').slice(0, 110);
 
         return `
-            <div onclick="selectBriefing('${b.report_id}')" class="p-3 bg-dark-950 hover:bg-slate-800/80 cursor-pointer rounded-xl border transition-all ${isSelected ? 'border-cyan-500/80 bg-slate-800/60 shadow-md' : 'border-slate-800/80 hover:border-slate-700'}">
+            <div onclick="selectBriefing('${esc(b.report_id)}')" class="p-3 bg-dark-950 hover:bg-slate-800/80 cursor-pointer rounded-xl border transition-all ${isSelected ? 'border-cyan-500/80 bg-slate-800/60 shadow-md' : 'border-slate-800/80 hover:border-slate-700'}">
                 <div class="flex items-center justify-between">
                     <div class="flex items-center space-x-1.5 font-bold text-xs ${isSelected ? 'text-cyan-300' : 'text-slate-200'}">
                         <span>${style.icon}</span>
-                        <span class="capitalize">${b.slot_title || b.slot}</span>
+                        <span class="capitalize">${esc(b.slot_title || b.slot)}</span>
                     </div>
-                    <span class="text-[10px] font-mono text-slate-500">${timeStr}</span>
+                    <span class="text-[10px] font-mono text-slate-500">${esc(timeStr)}</span>
                 </div>
                 <div class="text-[11px] text-slate-400 mt-1 line-clamp-2 leading-snug">
-                    ${preview || 'Executive briefing report...'}
+                    ${esc(preview || 'Executive briefing report...')}
                 </div>
                 <div class="flex items-center justify-between mt-2 pt-1.5 border-t border-slate-800/60 text-[10px] text-slate-500">
-                    <span class="font-mono">${b.report_id.slice(0, 18)}...</span>
+                    <span class="font-mono">${esc(b.report_id.slice(0, 18))}...</span>
                     ${b.dispatched_channels && b.dispatched_channels.length > 0 ? '<span class="text-cyan-400 font-semibold">✈️ Telegram</span>' : '<span class="text-slate-500">Web</span>'}
                 </div>
             </div>

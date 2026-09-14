@@ -98,11 +98,11 @@ async function runSingleTickerAnalysis() {
             loadDeepDivesArchive();
         } else {
             if (title) title.textContent = `Analysis Failed for ${ticker}`;
-            if (body) body.innerHTML = `<div class="text-rose-400 text-xs">${data.detail || 'Unable to generate analysis.'}</div>`;
+            if (body) body.innerHTML = `<div class="text-rose-400 text-xs">${esc(data.detail || 'Unable to generate analysis.')}</div>`;
         }
     } catch (e) {
         if (title) title.textContent = `Error Analyzing ${ticker}`;
-        if (body) body.innerHTML = `<div class="text-rose-400 text-xs">Failed to reach analysis endpoint: ${e.message}</div>`;
+        if (body) body.innerHTML = `<div class="text-rose-400 text-xs">Failed to reach analysis endpoint: ${esc(e.message)}</div>`;
     } finally {
         if (btn) {
             btn.disabled = false;
@@ -145,8 +145,8 @@ function renderDeepDiveResult(data) {
     const provBadge = document.getElementById('st-provenance-badge');
     if (provBadge) {
         if (prov && prov.source) {
-            const srcName = prov.source === 'robinhood' ? 'Robinhood' : (prov.source === 'yahoo' ? 'Yahoo Finance' : prov.source);
-            const barsText = prov.bar_count ? `${prov.bar_count} daily bars` : 'live';
+            const srcName = prov.source === 'robinhood' ? 'Robinhood' : (prov.source === 'yahoo' ? 'Yahoo Finance' : esc(prov.source));
+            const barsText = prov.bar_count ? `${esc(prov.bar_count)} daily bars` : 'live';
             provBadge.innerHTML = `
                 <span class="inline-flex items-center space-x-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono bg-emerald-950/70 text-emerald-300 border border-emerald-800/60" title="Ground truth data source: ${srcName} (${barsText})">
                     <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
@@ -257,9 +257,9 @@ function renderDeepDiveResult(data) {
                     <div class="text-[10px] uppercase font-semibold tracking-wider text-slate-400">Institutional Verdict</div>
                     <div class="text-sm font-extrabold ${verdictColor} flex items-center space-x-1 truncate">
                         <span>${verdictEmoji}</span>
-                        <span>${data.verdict || 'ANALYZED'}</span>
+                        <span>${esc(data.verdict || 'ANALYZED')}</span>
                     </div>
-                    <div class="text-[10px] text-slate-400 font-mono">Conviction: ${data.conviction_score ? data.conviction_score + '%' : '—'}</div>
+                    <div class="text-[10px] text-slate-400 font-mono">Conviction: ${data.conviction_score ? esc(data.conviction_score) + '%' : '—'}</div>
                 </div>
                 <div class="p-3 bg-dark-950 border border-slate-800 rounded-xl space-y-1">
                     <div class="text-[10px] uppercase font-semibold tracking-wider text-slate-400">12M Target Price</div>
@@ -278,7 +278,7 @@ function renderDeepDiveResult(data) {
                 </div>
                 <div class="p-3 bg-dark-950 border border-slate-800 rounded-xl space-y-1">
                     <div class="text-[10px] uppercase font-semibold tracking-wider text-slate-400">Core Thesis</div>
-                    <div class="text-xs text-slate-200 line-clamp-2 leading-tight font-sans" title="${(data.thesis || '').replace(/"/g, '&quot;')}">${data.thesis || 'Structured model synthesis'}</div>
+                    <div class="text-xs text-slate-200 line-clamp-2 leading-tight font-sans" title="${esc(data.thesis || '')}">${esc(data.thesis || 'Structured model synthesis')}</div>
                 </div>
             `;
             kpiRow.classList.remove('hidden');
@@ -380,18 +380,18 @@ function renderDeepDivesList(items) {
         }
 
         return `
-            <div class="p-2.5 bg-dark-950 hover:bg-slate-800/70 border border-slate-800/90 rounded-xl cursor-pointer transition group flex items-center justify-between" onclick="selectArchivedDeepDive('${d.id}')">
+            <div class="p-2.5 bg-dark-950 hover:bg-slate-800/70 border border-slate-800/90 rounded-xl cursor-pointer transition group flex items-center justify-between" onclick="selectArchivedDeepDive('${esc(d.id)}')">
                 <div class="space-y-0.5">
                     <div class="flex items-center space-x-2">
-                        <span class="font-bold font-mono text-sm text-white group-hover:text-cyan-300 transition">${d.ticker}</span>
-                        <span class="px-1.5 py-0.5 rounded text-[9px] font-bold border ${badgeColor}">${d.verdict || 'NEUTRAL'}${d.conviction_score ? ` · ${d.conviction_score}%` : ''}</span>
+                        <span class="font-bold font-mono text-sm text-white group-hover:text-cyan-300 transition">${esc(d.ticker)}</span>
+                        <span class="px-1.5 py-0.5 rounded text-[9px] font-bold border ${badgeColor}">${esc(d.verdict || 'NEUTRAL')}${d.conviction_score ? ` · ${esc(d.conviction_score)}%` : ''}</span>
                     </div>
-                    <div class="text-[11px] text-slate-400 truncate max-w-[150px]">${d.company_name || d.ticker}</div>
-                    <div class="text-[10px] font-mono text-slate-500">${dateStr}</div>
+                    <div class="text-[11px] text-slate-400 truncate max-w-[150px]">${esc(d.company_name || d.ticker)}</div>
+                    <div class="text-[10px] font-mono text-slate-500">${esc(dateStr)}</div>
                 </div>
                 <div class="text-right space-y-1">
                     <div class="text-xs font-bold text-slate-200">$${d.current_price ? Number(d.current_price).toFixed(2) : '--'}</div>
-                    <button onclick="event.stopPropagation(); deleteArchivedDeepDive('${d.id}', event)" class="text-[10px] text-slate-500 hover:text-rose-400 p-1 transition" title="Delete from archive">🗑️</button>
+                    <button onclick="event.stopPropagation(); deleteArchivedDeepDive('${esc(d.id)}', event)" class="text-[10px] text-slate-500 hover:text-rose-400 p-1 transition" title="Delete from archive">🗑️</button>
                 </div>
             </div>
         `;

@@ -159,7 +159,7 @@ class OpportunityDiscoveryAgent(BaseAgent):
         Generate {count} unique, high-conviction asymmetric investment opportunities that are NOT in the investor's current portfolio.
         
         CRITICAL SELECTION RULES:
-        1. Avoid random, speculative, or low-liquidity tickers. Select companies with durable business models, secular growth drivers, or recent credible institutional analyst upgrades.
+        1. Avoid random, speculative, or low-liquidity tickers. Choose companies with durable business models, secular growth drivers, or recent credible institutional analyst upgrades.
         2. Ensure genuine asymmetry: upside potential must be at least 2.5x to 3x the suggested stop-loss risk.
         3. Avoid unwarranted puffery or hyperbole; describe theses objectively and with concrete rationale.
 

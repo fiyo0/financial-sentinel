@@ -165,8 +165,9 @@ function toPstDate(isoStr) {
 
 /**
  * Markdown & HTML sanitization and styling helpers.
+ * Delegates to centralized escaper.js primitive (R-3).
  */
-function escapeHtml(string) {
+const escapeHtml = (typeof window !== 'undefined' && window.esc) ? window.esc : function (string) {
     if (!string) return '';
     return String(string)
         .replace(/&/g, '&amp;')
@@ -174,7 +175,7 @@ function escapeHtml(string) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
-}
+};
 
 function formatMarkdown(text) {
     if (!text) return '';

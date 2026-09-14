@@ -411,3 +411,145 @@ def test_h20_portfolio_save_live_price_update_no_nameerror():
     with patch("analytics.market_data.fetch_live_quote", return_value={"name": "Apple", "current_price": 200.0, "sector": "Tech", "is_live": True}):
         updated_p, _ = update_portfolio_live_prices(p)
         assert updated_p.holdings[0].current_price == 200.0
+
+
+# =====================================================================
+# Phase 5: External Review Follow-Up Audit Remediations (R-1, R-2, R-3, R-4, R-5, R-7)
+# =====================================================================
+
+def test_r1_legacy_admin_credential_is_rotated_on_migration(monkeypatch):
+    """R-1: Startup migration detects published default hash, rotates it to DASHBOARD_PASSWORD, and increments epoch."""
+    store = orchestrator.state_store
+    admin = store.get_or_create_default_admin()
+    orig_hash = admin["password_hash"]
+    orig_epoch = int(admin.get("token_epoch") or 1)
+
+    try:
+        # Manually plant legacy published default password hash into admin row
+        legacy_hash = hash_password("sentinel_admin")
+        with store._get_connection() as conn:
+            conn.execute("UPDATE users SET password_hash = ?, token_epoch = 1 WHERE id = ?", (legacy_hash, admin["id"]))
+            conn.commit()
+
+        # Ensure DASHBOARD_PASSWORD is configured
+        test_new_pw = "SecureTestPassword2026!#"
+        monkeypatch.setattr(config, "dashboard_password", test_new_pw)
+
+        # Run migration
+        store.rotate_legacy_admin_credentials()
+
+        # Verify old default no longer verifies
+        refetched = store.get_user_by_id(admin["id"])
+        assert not verify_password("sentinel_admin", refetched["password_hash"])
+        assert verify_password(test_new_pw, refetched["password_hash"])
+        assert int(refetched["token_epoch"]) >= 2
+    finally:
+        # Restore clean original admin state for subsequent tests
+        with store._get_connection() as conn:
+            conn.execute("UPDATE users SET password_hash = ?, token_epoch = ? WHERE id = ?", (orig_hash, orig_epoch, admin["id"]))
+            conn.commit()
+
+
+def test_r1_token_epoch_rejects_stale_sessions():
+    """R-1: Session token generated before credential rotation is rejected once token_epoch increments."""
+    store = orchestrator.state_store
+    admin = store.get_or_create_default_admin()
+    current_epoch = int(admin.get("token_epoch") or 1)
+
+    # Create token matching current epoch
+    valid_token = create_session_token(admin["id"], admin["username"], admin["role"], epoch=current_epoch)
+    verified = verify_session_token(valid_token, expected_epoch=current_epoch)
+    assert verified is not None
+
+    # Stale token from earlier epoch (epoch - 1)
+    stale_token = create_session_token(admin["id"], admin["username"], admin["role"], epoch=current_epoch - 1)
+    stale_verified = verify_session_token(stale_token, expected_epoch=current_epoch)
+    assert stale_verified is None, "Token from previous epoch must be rejected"
+
+
+def test_r2_get_client_ip_rightmost_parsing_and_spoof_defense():
+    """R-2: Client IP is parsed from the right past trusted proxy hops, rejecting client-forged leftmost IPs."""
+    from web.app import get_client_ip
+    from starlette.requests import Request
+
+    # Single proxy hop: client appends forged "127.0.0.1", proxy appends real IP "198.51.100.42"
+    scope = {
+        "type": "http",
+        "headers": [
+            (b"x-forwarded-for", b"127.0.0.1, 198.51.100.42"),
+        ],
+        "client": ("10.0.0.1", 12345),
+    }
+    req = Request(scope)
+    parsed_ip = get_client_ip(req)
+    assert parsed_ip == "198.51.100.42", f"Expected real proxy-appended IP '198.51.100.42', got '{parsed_ip}'"
+
+
+def test_r4_quant_risk_disclosures_and_quality_ceiling():
+    """R-4: Synthetic volatility proxy is disclosed, and data quality ceiling caps conviction deterministically."""
+    from analytics.quant_risk import QuantRiskEngine, apply_data_quality_ceiling
+
+    p = Portfolio(name="Test", cash=5000.0, holdings=[
+        PortfolioHolding(ticker="AAPL", name="Apple Inc.", current_price=150.0, shares=10, avg_price=150.0, sector="Technology", weight_pct=100.0)
+    ])
+    engine = QuantRiskEngine()
+    stress = engine.analyze_portfolio(p)
+
+    # 1. Honest disclosure of synthetic sector proxies
+    unavail = " ".join(stress.fields_unavailable)
+    assert "annualized_volatility_pct" in unavail
+    assert "var_95_daily_pct" in unavail
+
+    # 2. Data quality ceiling when technical indicators missing
+    capped_conv, reasons = apply_data_quality_ceiling(
+        conviction_pct=88.0,
+        missing_technical_fields=["rsi_14", "macd_missing"]
+    )
+    assert capped_conv == 55.0
+    assert len(reasons) > 0
+
+    # 3. Data quality ceiling when macro metrics missing
+    capped_macro, m_reasons = apply_data_quality_ceiling(
+        conviction_pct=85.0,
+        missing_technical_fields=[],
+        stress_metrics=None
+    )
+    assert capped_macro == 75.0
+
+
+def test_r4_deterministic_position_sizing_engine():
+    """§2B: Deterministic sizing engine calculates 2x ATR-14 stop distance and respects ADV turnover cap."""
+    from analytics.quant_risk import compute_deterministic_position_size
+
+    # Given equity $100,000, cash $20,000, price $100, ATR-14 $5.00
+    res = compute_deterministic_position_size(
+        portfolio_equity=100_000.0,
+        portfolio_cash=20_000.0,
+        current_price=100.0,
+        atr_14=5.0,
+        conviction_pct=80.0,
+        median_adv_shares_30d=10_000_000.0,  # Highly liquid
+        risk_budget_pct=0.75,
+    )
+    # Stop distance = 2 * 5.0 = $10.0 (10%)
+    assert res["stop_distance_usd"] == 10.0
+    assert res["stop_loss_price"] == 90.0
+    # Risk budget = 0.75% of 100k = $750. Sized shares = 750 / 10 = 75 shares * 0.8 conviction = 60 shares ($6,000)
+    assert res["target_shares"] == 60.0
+    assert res["target_position_usd"] == 6000.0
+
+
+def test_r7_dashboard_auth_disabled_fails_closed_in_production(monkeypatch):
+    """R-7: Disabling authentication in production (K_SERVICE set) must immediately raise RuntimeError."""
+    from web.auth_deps import get_current_user_optional
+    from starlette.requests import Request
+
+    monkeypatch.setattr(config, "dashboard_auth_enabled", False)
+    monkeypatch.setenv("K_SERVICE", "financial-sentinel")
+
+    scope = {"type": "http", "headers": [], "client": ("127.0.0.1", 80)}
+    req = Request(scope)
+
+    with pytest.raises(RuntimeError, match="CRITICAL SECURITY CONFIGURATION ERROR"):
+        get_current_user_optional(req)
+

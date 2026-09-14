@@ -20,12 +20,16 @@ ignore = [
 
     "W293", # Blank line contains whitespace
     "S104", # Possible binding to 0.0.0.0 (required for Cloud Run / Docker containers)
-    "S110", # Try-except-pass in fallback routines
-    "S112", # Try-except-continue in fallback routines
-    "S608", # Dynamically constructed UPDATE column list from hardcoded schema keys in state_store
 ]
 
 [lint.per-file-ignores]
 "tests/*" = ["F841", "S101", "S105", "S106"]
+"agents/*" = ["S110", "S112"]
+"analytics/*" = ["S110", "S112"]
+"channels/*" = ["S110", "S112"]
+"orchestrator.py" = ["S110", "S112"]
+"scheduler.py" = ["S110", "S112"]
+"storage/state_store.py" = ["S110", "S112"]
+"web/app.py" = ["S110", "S112"]
 
 

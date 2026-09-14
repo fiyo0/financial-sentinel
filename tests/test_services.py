@@ -196,7 +196,11 @@ def test_analysis_service_execution_and_provenance(service_env):
         telegram_html="🔬 <b>STOCK ANALYSIS: MSFT</b>"
     )
 
+    from analytics.technical_indicators import TechnicalSnapshot
+    mock_tech = TechnicalSnapshot(ticker="MSFT", current_price=430.0, rsi_14=58.5, macd_line=2.1, atr_14=5.2, is_live=True)
+
     with patch("analytics.market_data.fetch_live_quote", return_value={"name": "Microsoft", "current_price": 430.0, "sector": "Technology"}), \
+         patch("analytics.technical_indicators.compute_technical_snapshot", return_value=mock_tech), \
          patch.object(orch.analysis_agent, "analyze_single_ticker_structured", return_value=mock_analysis):
 
         res = analysis_svc.run_single_ticker_analysis(

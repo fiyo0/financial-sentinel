@@ -287,7 +287,8 @@ class FinancialSentinelTelegramBot:
                     logger.info(f"Duplicate Telegram update {update_id} already claimed. Skipping.")
                     return {"status": "already_processed", "update_id": update_id}
             except Exception as e:
-                logger.warning(f"Error checking Telegram update idempotency: {e}")
+                logger.error(f"Error checking Telegram update idempotency for {update_id}: {e}")
+                return {"status": "error", "detail": "Idempotency check failed", "update_id": update_id}
 
         msg = update.get("message") or update.get("edited_message") or {}
         text = msg.get("text", "").strip()

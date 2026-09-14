@@ -236,8 +236,10 @@ async def security_and_auth_middleware(request: Request, call_next):
         "font-src 'self' https://fonts.gstatic.com; "
         "img-src 'self' data: https:; "
         "connect-src 'self'; "
+        "object-src 'none'; "
         "frame-ancestors 'none'; "
-        "base-uri 'self';"
+        "base-uri 'self'; "
+        "form-action 'self';"
     )
     if path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
@@ -253,11 +255,19 @@ async def login_view(request: Request):
     return templates.TemplateResponse(request=request, name="login.html", context={"config": config})
 
 
+TRUSTED_PROXY_HOPS = int(os.getenv("TRUSTED_PROXY_HOPS", "1"))
+
 def get_client_ip(request: Request) -> str:
-    """Extracts client IP behind Cloud Run / proxy from X-Forwarded-For."""
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[0].strip()
+    """Return client IP, counting from the right past trusted proxy hops (R-2).
+    The leftmost XFF entry is client-supplied and must never be trusted.
+    """
+    xff = request.headers.get("x-forwarded-for", "")
+    parts = [p.strip() for p in xff.split(",") if p.strip()]
+    if parts:
+        idx = len(parts) - TRUSTED_PROXY_HOPS
+        if 0 <= idx < len(parts):
+            return parts[idx]
+        return parts[-1]
     return request.client.host if request.client else "unknown"
 
 
@@ -308,7 +318,7 @@ async def api_register(payload: UserRegisterRequest, request: Request, response:
 
     # Create session token
     is_https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https" or bool(os.getenv("K_SERVICE"))
-    token = create_session_token(user["id"], user["username"], role="user")
+    token = create_session_token(user["id"], user["username"], role="user", epoch=user.get("token_epoch", 1))
     response.set_cookie(
         key="sentinel_token",
         value=token,
@@ -353,7 +363,7 @@ async def api_login(payload: UserLoginRequest, request: Request, response: Respo
     if user:
         login_attempts.pop(client_ip, None)
         is_https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https" or bool(os.getenv("K_SERVICE"))
-        token = create_session_token(user["id"], user["username"], role=user.get("role", "user"))
+        token = create_session_token(user["id"], user["username"], role=user.get("role", "user"), epoch=user.get("token_epoch", 1))
         response.set_cookie(
             key="sentinel_token",
             value=token,

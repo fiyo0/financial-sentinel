@@ -95,6 +95,30 @@ class AnalysisService:
         conviction_score = analysis_obj.conviction_score
         analysis_text = analysis_obj.telegram_html
 
+        # Enforce deterministic data quality ceiling on conviction score (R-4)
+        from analytics.quant_risk import QuantRiskEngine, apply_data_quality_ceiling, compute_deterministic_position_size
+        stress_metrics = QuantRiskEngine().analyze_portfolio(portfolio) if portfolio else None
+        capped_conviction, ceiling_reasons = apply_data_quality_ceiling(
+            conviction_pct=conviction_score,
+            tech_snapshot=tech_snap,
+            stress_metrics=stress_metrics
+        )
+        if capped_conviction != conviction_score:
+            logger.info(f"Data quality ceiling applied to {clean_sym}: {conviction_score}% -> {capped_conviction}% ({ceiling_reasons})")
+            conviction_score = capped_conviction
+
+        # Compute institutional volatility- and liquidity-adjusted deterministic position size (§2B)
+        atr_14_val = getattr(tech_snap, "atr_14", None) if tech_snap else None
+        median_adv_val = float(quote.get("volume", 0.0) or 0.0)
+        deterministic_sizing = compute_deterministic_position_size(
+            portfolio_equity=portfolio.total_equity(),
+            portfolio_cash=portfolio.cash,
+            current_price=current_price,
+            atr_14=atr_14_val,
+            conviction_pct=conviction_score,
+            median_adv_shares_30d=median_adv_val,
+        )
+
         deepdive_payload = {
             "status": "success",
             "ticker": clean_sym,
@@ -112,6 +136,9 @@ class AnalysisService:
             "target_price": analysis_obj.target_price,
             "stop_floor": analysis_obj.stop_floor,
             "suggested_allocation_usd": analysis_obj.suggested_allocation_usd,
+            "data_quality_ceiling_applied": capped_conviction != analysis_obj.conviction_score,
+            "data_quality_reasons": ceiling_reasons,
+            "deterministic_sizing": deterministic_sizing,
         }
 
         # Step 6: State persistence in user's Deep Dive archive
@@ -132,6 +159,22 @@ class AnalysisService:
             deepdive_payload["deepdive_id"] = deepdive_id
         except Exception as e:
             logger.error(f"Failed to persist deepdive analysis for {clean_sym}: {e}")
+
+        # Step 7: Record thesis outcome into ground truth ledger for forward return tracking (§4A)
+        if deepdive_id:
+            try:
+                self.orchestrator.state_store.record_thesis_outcome(
+                    thesis_id=str(deepdive_id),
+                    user_id=user_id or "default_user",
+                    ticker=clean_sym,
+                    stance=verdict,
+                    conviction_pct=conviction_score,
+                    entry_price=current_price,
+                    critic_verdict=None,
+                    critic_conf_pct=None,
+                )
+            except Exception as e:
+                logger.error(f"Failed to record thesis outcome for {clean_sym}: {e}")
 
         if progress_callback:
             progress_callback(100, f"Analysis complete for {clean_sym}.")

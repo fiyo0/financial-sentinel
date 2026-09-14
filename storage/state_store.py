@@ -67,7 +67,16 @@ class StateStore:
                             except Exception:
                                 pass
                     blob.download_to_filename(self.db_path)
-                    logger.info("Successfully restored state.db from GCS. Running migrations...")
+                    logger.info("Successfully restored state.db from GCS. Running integrity check & migrations...")
+                    try:
+                        with sqlite3.connect(self.db_path) as check_conn:
+                            res = check_conn.execute("PRAGMA integrity_check;").fetchone()
+                            if not res or res[0] != "ok":
+                                logger.critical(f"Corrupted state.db snapshot restored from GCS: {res}")
+                                raise RuntimeError(f"Corrupted state.db snapshot: {res}")
+                    except Exception as err:
+                        logger.error(f"State store integrity check failed on restore: {err}")
+                        raise
                     try:
                         with self._get_connection() as conn:
                             conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
@@ -252,6 +261,7 @@ class StateStore:
                     telegram_chat_id TEXT,
                     encrypted_gemini_key TEXT,
                     role TEXT DEFAULT 'user',
+                    token_epoch INTEGER DEFAULT 1,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
@@ -305,10 +315,12 @@ class StateStore:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     agent_name TEXT,
                     prompt_tokens INTEGER,
+                    cached_tokens INTEGER DEFAULT 0,
                     completion_tokens INTEGER,
                     total_tokens INTEGER,
                     cost_usd REAL,
                     model_name TEXT,
+                    user_id TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
@@ -321,10 +333,42 @@ class StateStore:
                 )
             """)
 
-            # Multi-tenant migration for token_usage user_id
+            # Ground truth thesis outcomes ledger for critic calibration (§4A)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS thesis_outcomes (
+                    thesis_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    ticker TEXT NOT NULL,
+                    stance TEXT NOT NULL,
+                    conviction_pct REAL NOT NULL,
+                    critic_verdict TEXT,
+                    critic_conf_pct REAL,
+                    entry_price REAL NOT NULL,
+                    entry_date TEXT NOT NULL,
+                    return_5d REAL,
+                    return_21d REAL,
+                    return_63d REAL,
+                    benchmark_21d REAL,
+                    resolved_at TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            """)
+
+            # Schema migrations
+            try:
+                cursor.execute("ALTER TABLE users ADD COLUMN token_epoch INTEGER DEFAULT 1;")
+            except Exception:  # noqa: S110
+                pass
+
             try:
                 cursor.execute("ALTER TABLE token_usage ADD COLUMN user_id TEXT;")
-            except Exception:
+            except Exception:  # noqa: S110
+                pass
+
+            try:
+                cursor.execute("ALTER TABLE token_usage ADD COLUMN cached_tokens INTEGER DEFAULT 0;")
+            except Exception:  # noqa: S110
                 pass
 
             # High-performance indexes for historical scalability
@@ -335,8 +379,13 @@ class StateStore:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_token_usage_created ON token_usage(created_at DESC);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_token_usage_user ON token_usage(user_id, created_at DESC);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_ingested_news_created ON ingested_news(created_at DESC);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_thesis_outcomes_user ON thesis_outcomes(user_id, created_at DESC);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_thesis_outcomes_ticker ON thesis_outcomes(ticker);")
 
             conn.commit()
+
+        # Run one-time forced credential rotation migration on boot (R-1)
+        self.rotate_legacy_admin_credentials()
 
 
 
@@ -687,15 +736,19 @@ class StateStore:
     def claim_telegram_update(self, update_id: int) -> bool:
         """
         Atomically claims a Telegram update_id using SQLite INSERT OR IGNORE.
-        Returns True if update was claimed (first time seen), False if duplicate.
+        Returns True if update was claimed (first time seen), False if duplicate or on error (fails closed).
         """
         if not update_id:
             return True
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("INSERT OR IGNORE INTO processed_updates (update_id) VALUES (?)", (int(update_id),))
-            conn.commit()
-            return cursor.rowcount > 0
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("INSERT OR IGNORE INTO processed_updates (update_id) VALUES (?)", (int(update_id),))
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"Failed to claim telegram update {update_id}: {e}")
+            return False
 
     def record_token_usage(
         self,
@@ -704,17 +757,86 @@ class StateStore:
         completion_tokens: int,
         cost_usd: float,
         model_name: str,
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        cached_tokens: int = 0
     ):
         total = prompt_tokens + completion_tokens
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO token_usage (
-                    agent_name, prompt_tokens, completion_tokens, total_tokens, cost_usd, model_name, user_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (agent_name, prompt_tokens, completion_tokens, total, cost_usd, model_name, user_id))
+                    agent_name, prompt_tokens, cached_tokens, completion_tokens, total_tokens, cost_usd, model_name, user_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (agent_name, prompt_tokens, cached_tokens, completion_tokens, total, cost_usd, model_name, user_id))
             conn.commit()
+
+    def record_thesis_outcome(
+        self,
+        thesis_id: str,
+        user_id: str,
+        ticker: str,
+        stance: str,
+        conviction_pct: float,
+        entry_price: float,
+        critic_verdict: Optional[str] = None,
+        critic_conf_pct: Optional[float] = None
+    ) -> None:
+        """Records an investment recommendation into the ground truth outcome ledger for forward return tracking (§4A)."""
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        with self._get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT OR REPLACE INTO thesis_outcomes (
+                    thesis_id, user_id, ticker, stance, conviction_pct,
+                    critic_verdict, critic_conf_pct, entry_price, entry_date
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (thesis_id, user_id, ticker.upper(), stance, conviction_pct, critic_verdict, critic_conf_pct, entry_price, today))
+            conn.commit()
+
+    LEGACY_DEFAULT_PASSWORDS = ("sentinel_admin",)
+
+    def rotate_legacy_admin_credentials(self) -> None:
+        """One-time migration: rotates any admin account holding a published legacy default credential.
+        Also increments token_epoch to immediately invalidate all pre-existing sessions (R-1).
+        """
+        from auth.crypto import verify_password, hash_password
+        from config import config
+        import secrets
+
+        try:
+            with self._get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT id, username, password_hash, token_epoch FROM users WHERE role = 'admin'")
+                rows = cur.fetchall()
+        except Exception as e:
+            logger.debug(f"rotate_legacy_admin_credentials skipped (table not initialized yet): {e}")
+            return
+
+        for row in rows:
+            user_dict = dict(row)
+            if not any(verify_password(p, user_dict["password_hash"]) for p in self.LEGACY_DEFAULT_PASSWORDS):
+                continue
+
+            new_pw = config.dashboard_password
+            if not new_pw:
+                if os.getenv("K_SERVICE") or os.getenv("ENVIRONMENT") == "production":
+                    raise RuntimeError(
+                        "CRITICAL SECURITY ALERT: Admin account holds a published default credential ('sentinel_admin') "
+                        "and DASHBOARD_PASSWORD is not configured. Refusing to start."
+                    )
+                new_pw = secrets.token_urlsafe(24)
+                logger.warning("Rotated legacy admin credential for %s. Ephemeral passcode: %s", user_dict["username"], new_pw)
+
+            new_epoch = int(user_dict.get("token_epoch") or 1) + 1
+            with self._get_connection() as conn:
+                conn.execute(
+                    "UPDATE users SET password_hash = ?, token_epoch = ? WHERE id = ?",
+                    (hash_password(new_pw), new_epoch, user_dict["id"]),
+                )
+                conn.commit()
+            logger.critical("SECURITY AUDIT: Successfully rotated legacy default credential for admin user '%s' (token_epoch=%d).", user_dict["username"], new_epoch)
+
 
     def get_today_token_usage(self, user_id: Optional[str] = None) -> Dict[str, Any]:
         with self._get_connection() as conn:
@@ -957,7 +1079,7 @@ class StateStore:
         params.append(user_id)
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            query = f"UPDATE users SET {', '.join(updates)} WHERE id = ?"
+            query = f"UPDATE users SET {', '.join(updates)} WHERE id = ?"  # noqa: S608 — fragment is built exclusively from hardcoded schema literals; values are bound
             cursor.execute(query, tuple(params))
             conn.commit()
 

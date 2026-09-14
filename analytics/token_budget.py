@@ -25,6 +25,7 @@ class TokenUsageRecord(BaseModel):
     completion_tokens: int
     total_tokens: int
     estimated_cost_usd: float
+    cached_tokens: int = 0
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -55,11 +56,20 @@ class TokenBudgetManager:
         """Rough estimation: ~4 chars per token for English text."""
         return max(1, len(text) // 4)
 
-    def calculate_cost(self, prompt_tokens: int, completion_tokens: int, model_name: str) -> float:
+    def calculate_cost(
+        self,
+        prompt_tokens: int,
+        completion_tokens: int,
+        model_name: str,
+        cached_tokens: int = 0
+    ) -> float:
         pricing = PRICING_PER_1M_TOKENS.get(model_name.lower(), PRICING_PER_1M_TOKENS["default"])
-        input_cost = (prompt_tokens / 1_000_000.0) * pricing["input"]
+        # Standard input price for non-cached tokens; cached tokens discounted at 25% of standard rate
+        non_cached_prompt = max(0, prompt_tokens - cached_tokens)
+        input_cost = (non_cached_prompt / 1_000_000.0) * pricing["input"]
+        cached_cost = (cached_tokens / 1_000_000.0) * (pricing["input"] * 0.25)
         output_cost = (completion_tokens / 1_000_000.0) * pricing["output"]
-        return round(input_cost + output_cost, 6)
+        return round(input_cost + cached_cost + output_cost, 6)
 
     def record_usage(
         self,
@@ -67,17 +77,19 @@ class TokenBudgetManager:
         prompt_tokens: int,
         completion_tokens: int,
         model_name: str,
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        cached_tokens: int = 0
     ) -> TokenUsageRecord:
         total = prompt_tokens + completion_tokens
-        cost = self.calculate_cost(prompt_tokens, completion_tokens, model_name)
+        cost = self.calculate_cost(prompt_tokens, completion_tokens, model_name, cached_tokens=cached_tokens)
 
         record = TokenUsageRecord(
             agent_name=agent_name,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total,
-            estimated_cost_usd=cost
+            estimated_cost_usd=cost,
+            cached_tokens=cached_tokens
         )
 
         # Persist in state database with tenant isolation
@@ -87,7 +99,8 @@ class TokenBudgetManager:
             completion_tokens=completion_tokens,
             cost_usd=cost,
             model_name=model_name,
-            user_id=user_id
+            user_id=user_id,
+            cached_tokens=cached_tokens
         )
         return record
 

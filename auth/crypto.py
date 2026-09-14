@@ -14,7 +14,7 @@ import secrets
 import logging
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 import httpx
 
 logger = logging.getLogger("AuthCrypto")
@@ -90,8 +90,8 @@ def decrypt_api_key(encrypted_key: str) -> str:
     try:
         f = _get_fernet_for_context(b"financial-sentinel-byok-encryption")
         return f.decrypt(clean_enc).decode("utf-8")
-    except Exception:
-        pass
+    except (InvalidToken, ValueError) as err:
+        logger.debug("Primary key decryption attempt failed: %s", err)
 
     # 2. Key Rotation Fallback: Check previous keys if configured
     prev_keys = [k.strip() for k in os.getenv("APP_SECRET_KEY_PREVIOUS", "").split(",") if k.strip()]
@@ -99,16 +99,16 @@ def decrypt_api_key(encrypted_key: str) -> str:
         try:
             f_prev = _get_fernet_for_context(b"financial-sentinel-byok-encryption", secret=pk)
             return f_prev.decrypt(clean_enc).decode("utf-8")
-        except Exception:
-            pass
+        except (InvalidToken, ValueError) as err:
+            logger.debug("Rotated key decryption attempt failed: %s", err)
 
     # 3. Migration fallback: direct SHA256 of active APP_SECRET_KEY
     try:
         f_leg = _get_legacy_fernet()
         if f_leg:
             return f_leg.decrypt(clean_enc).decode("utf-8")
-    except Exception:
-        pass
+    except (InvalidToken, ValueError) as err:
+        logger.debug("Legacy key decryption attempt failed: %s", err)
 
     return ""
 
@@ -152,13 +152,29 @@ def verify_password(password: str, stored_hash: str) -> bool:
         return False
 
 
-def create_session_token(user_id: str, username: str, role: str = "user") -> str:
-    """Generates an encrypted, tamper-proof session token using HKDF-derived session Fernet."""
+def create_session_token(user_id: str, username: str, role: str = "user", epoch: Optional[int] = None) -> str:
+    """Generates an encrypted, tamper-proof session token using HKDF-derived session Fernet with token_epoch support.
+    If epoch is omitted, looks up the active token_epoch for user_id from the state store (defaulting to 1).
+    """
     f = _get_fernet_for_context(b"financial-sentinel-session-token")
+    if epoch is None:
+        try:
+            from storage.state_store import StateStore
+            from config import config
+            store = StateStore(config.db_path)
+            u = store.get_user_by_id(user_id)
+            if u:
+                epoch = int(u.get("token_epoch") or 1)
+        except Exception:
+            epoch = 1
+    if epoch is None:
+        epoch = 1
+
     payload = {
         "uid": user_id,
         "usr": username,
         "rol": role,
+        "epoch": int(epoch),
         "iat": datetime.now(timezone.utc).timestamp()
     }
     raw_json = json.dumps(payload)
@@ -166,8 +182,8 @@ def create_session_token(user_id: str, username: str, role: str = "user") -> str
     return token
 
 
-def verify_session_token(token: str, max_age_days: int = 30) -> Optional[Dict[str, Any]]:
-    """Verifies and extracts payload from a session token with TTL enforcement and strict key derivation."""
+def verify_session_token(token: str, max_age_days: int = 30, expected_epoch: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    """Verifies and extracts payload from a session token with TTL enforcement, strict key derivation, and token_epoch checks."""
     if not token or not token.strip():
         return None
     clean_token = token.strip().encode("utf-8")
@@ -179,9 +195,11 @@ def verify_session_token(token: str, max_age_days: int = 30) -> Optional[Dict[st
         decrypted = f.decrypt(clean_token, ttl=max_age_seconds)
         data = json.loads(decrypted.decode("utf-8"))
         if data and "uid" in data:
+            if expected_epoch is not None and int(data.get("epoch", 1)) != int(expected_epoch):
+                return None
             return data
-    except Exception:
-        pass
+    except (InvalidToken, ValueError) as err:
+        logger.debug("Primary session token verification failed: %s", err)
 
     # 2. Migration fallback: direct SHA256 of APP_SECRET_KEY (strictly no hardcoded secrets)
     try:
@@ -190,9 +208,11 @@ def verify_session_token(token: str, max_age_days: int = 30) -> Optional[Dict[st
             decrypted = f_leg.decrypt(clean_token, ttl=max_age_seconds)
             data = json.loads(decrypted.decode("utf-8"))
             if data and "uid" in data:
+                if expected_epoch is not None and int(data.get("epoch", 1)) != int(expected_epoch):
+                    return None
                 return data
-    except Exception:
-        pass
+    except (InvalidToken, ValueError) as err:
+        logger.debug("Legacy session token verification failed: %s", err)
 
     return None
 

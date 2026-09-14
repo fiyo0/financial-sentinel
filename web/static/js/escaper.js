@@ -53,6 +53,7 @@
 
   // Expose globally to window
   window.esc = esc;
+  window.escapeHtml = esc;
   window.html = html;
   window.raw = raw;
 })(typeof window !== 'undefined' ? window : this);

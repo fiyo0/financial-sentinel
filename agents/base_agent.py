@@ -5,6 +5,7 @@ Base agent infrastructure supporting Gemini 3.8 / 3.7 / 3.5 LLM inference with a
 import json
 import time
 import logging
+import copy
 from typing import Dict, Any, Optional
 import httpx
 from config import config
@@ -56,10 +57,13 @@ class BaseAgent:
         prompt: str,
         system_instruction: Optional[str] = None,
         temperature: float = 0.2,
-        api_key: Optional[str] = None
+        api_key: Optional[str] = None,
+        thinking_budget: Optional[int] = None,
+        thinking_level: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Sends a prompt to Gemini requesting a JSON object with resilient candidate failover.
+        Supports split systemInstruction (§1A), thinkingConfig (§1B), and cachedContentTokenCount.
         """
         active_key = api_key if api_key is not None else self.api_key
         if not active_key:
@@ -82,21 +86,28 @@ class BaseAgent:
         degraded_models = [m for m in candidate_models if MODEL_CIRCUIT_BREAKER.get(m, 0.0) > now]
         ordered_models = healthy_models + degraded_models
 
-        full_prompt = prompt
-        if system_instruction:
-            full_prompt = f"SYSTEM INSTRUCTIONS:\n{system_instruction}\n\nUSER PROMPT:\n{prompt}\n\nIMPORTANT: Respond ONLY with valid JSON."
-        else:
-            full_prompt = f"{prompt}\n\nIMPORTANT: Respond ONLY with valid JSON."
-
-        prompt_tokens_est = self.token_manager.estimate_tokens(full_prompt)
-
-        payload_standard = {
-            "contents": [{"parts": [{"text": full_prompt}]}],
-            "generationConfig": {
-                "responseMimeType": "application/json",
-                "temperature": temperature
-            }
+        gen_config: Dict[str, Any] = {
+            "responseMimeType": "application/json",
+            "temperature": temperature,
         }
+        effective_thinking_budget = thinking_budget
+        if effective_thinking_budget is None and thinking_level:
+            level_map = {"low": 512, "medium": 1024, "high": 2048}
+            effective_thinking_budget = level_map.get(thinking_level.lower())
+
+        if effective_thinking_budget is not None:
+            gen_config["thinkingConfig"] = {"thinkingBudget": effective_thinking_budget}
+
+        prompt_tokens_est = self.token_manager.estimate_tokens(prompt + (system_instruction or ""))
+
+        payload_standard: Dict[str, Any] = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": gen_config,
+        }
+        if system_instruction:
+            payload_standard["systemInstruction"] = {
+                "parts": [{"text": f"{system_instruction}\n\nIMPORTANT: Respond ONLY with valid JSON."}]
+            }
         headers = {
             "Content-Type": "application/json",
             "x-goog-api-key": active_key
@@ -108,6 +119,12 @@ class BaseAgent:
             try:
                 client = get_agent_http_client()
                 resp = client.post(url, json=payload_standard, headers=headers, timeout=25.0)
+                if resp.status_code == 400 and "thinkingConfig" in payload_standard.get("generationConfig", {}):
+                    # Fallback if specific model candidate rejects thinkingConfig
+                    payload_no_thinking = copy.deepcopy(payload_standard)
+                    payload_no_thinking["generationConfig"].pop("thinkingConfig", None)
+                    resp = client.post(url, json=payload_no_thinking, headers=headers, timeout=25.0)
+
                 if resp.status_code == 200:
                     MODEL_CIRCUIT_BREAKER.pop(model_to_try, None)
                     data = resp.json()
@@ -118,16 +135,18 @@ class BaseAgent:
                     text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
                     completion_tokens_est = self.token_manager.estimate_tokens(text)
 
-                    # Record token usage including reasoning thinking tokens
+                    # Record token usage including reasoning thinking tokens and cached tokens (§1A)
                     usage_meta = data.get("usageMetadata", {})
                     p_tok = usage_meta.get("promptTokenCount", prompt_tokens_est)
                     c_tok = usage_meta.get("candidatesTokenCount", completion_tokens_est) + usage_meta.get("thoughtsTokenCount", 0)
+                    cached_tok = usage_meta.get("cachedContentTokenCount", 0)
 
                     self.token_manager.record_usage(
                         agent_name=self.name,
                         prompt_tokens=p_tok,
                         completion_tokens=c_tok,
-                        model_name=model_to_try
+                        model_name=model_to_try,
+                        cached_tokens=cached_tok,
                     )
 
                     # Clean markdown code blocks if any
@@ -191,18 +210,18 @@ class BaseAgent:
         degraded_models = [m for m in candidate_models if MODEL_CIRCUIT_BREAKER.get(m, 0.0) > now]
         ordered_models = healthy_models + degraded_models
 
-        full_prompt = prompt
-        if system_instruction:
-            full_prompt = f"SYSTEM INSTRUCTIONS:\n{system_instruction}\n\nUSER PROMPT:\n{prompt}"
-
-        prompt_tokens_est = self.token_manager.estimate_tokens(full_prompt)
+        prompt_tokens_est = self.token_manager.estimate_tokens(prompt + (system_instruction or ""))
 
         payload_standard: Dict[str, Any] = {
-            "contents": [{"parts": [{"text": full_prompt}]}],
+            "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": 0.4
             }
         }
+        if system_instruction:
+            payload_standard["systemInstruction"] = {
+                "parts": [{"text": system_instruction}]
+            }
         if enable_grounding:
             payload_standard["tools"] = [{"googleSearch": {}}]
 
@@ -235,9 +254,13 @@ class BaseAgent:
                         if enable_grounding:
                             try:
                                 ungrounded = {
-                                    "contents": [{"parts": [{"text": full_prompt}]}],
+                                    "contents": [{"parts": [{"text": prompt}]}],
                                     "generationConfig": {"temperature": 0.4}
                                 }
+                                if system_instruction:
+                                    ungrounded["systemInstruction"] = {
+                                        "parts": [{"text": system_instruction}]
+                                    }
                                 fb_resp = client.post(url, json=ungrounded, headers=headers, timeout=25.0)
                                 if fb_resp.status_code == 200:
                                     fb_data = fb_resp.json()
@@ -256,12 +279,14 @@ class BaseAgent:
                     usage_meta = data.get("usageMetadata", {})
                     p_tok = usage_meta.get("promptTokenCount", prompt_tokens_est)
                     c_tok = usage_meta.get("candidatesTokenCount", completion_tokens_est) + usage_meta.get("thoughtsTokenCount", 0)
+                    cached_tok = usage_meta.get("cachedContentTokenCount", 0)
 
                     self.token_manager.record_usage(
                         agent_name=self.name,
                         prompt_tokens=p_tok,
                         completion_tokens=c_tok,
-                        model_name=model_to_try
+                        model_name=model_to_try,
+                        cached_tokens=cached_tok,
                     )
 
                     return text
