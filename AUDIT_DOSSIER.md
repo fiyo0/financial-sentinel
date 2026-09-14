@@ -237,3 +237,48 @@ ruff check .
 * **Pass Rate:** 100% (0 failures, 0 errors)
 * **Execution Time:** ~5.7 seconds
 * **Static Analysis:** Clean (`All checks passed!`)
+
+---
+
+## 8. Strategic Optimization & Architectural Evolution (Auditor Feedback Targets)
+
+We invite the external reviewer to critique, evaluate, and provide architectural feedback on the following technical dimensions:
+
+### A. LLM Inference Latency & Cost Optimization
+1. **Context Caching with Gemini 3.8 Flash**:
+   - *Current State*: The agent pipeline injects system prompts, portfolio holdings, and prompt guidelines on every cycle.
+   - *Review Question*: Would pre-caching the system instruction and static portfolio state via the Google GenAI Context Caching API provide meaningful latency reductions (aiming for sub-3s single-ticker responses) and input token cost reductions (>50%) without risking state staleness?
+2. **Dynamic Reasoning & Thinking Budget Allocation**:
+   - *Current State*: Gemini operates with standard generative parameters across all commands.
+   - *Review Question*: How should thinking budgets be dynamically scaled based on market regime (e.g. higher thinking budget during binary earnings prints / macro CPI releases, lower budget on routine mid-day checks)?
+3. **Semantic Ingestion Deduplication**:
+   - *Current State*: News deduplication uses SHA-256 hashes of headline titles (`raw_hash`).
+   - *Review Question*: What is the recommended balance between embedding-based cosine similarity deduplication (detecting paraphrased wire stories from Bloomberg/Reuters) versus our fast string hash approach given Cloud Run memory constraints?
+
+### B. Concurrency & Serverless Database Scaling
+1. **Cloud Run Single-Writer Architecture (`maxScale=1`)**:
+   - *Current State*: Deployed with `--max-instances=1` so that exactly one container mounts SQLite in WAL mode and writes checkpointed snapshots to GCS (`PRAGMA wal_checkpoint(TRUNCATE);`).
+   - *Review Question*: At what concurrency or tenant threshold does this pattern become a bottleneck? What is the optimal migration path: (a) Litestream continuous streaming replication, (b) Turso / libsql serverless edge database, or (c) Managed Cloud SQL (PostgreSQL)?
+2. **Telegram Webhook Idempotency under Heavy LLM Inference**:
+   - *Current State*: Long-running ticker analyses execute in worker threads while FastAPI immediately acknowledges or streams progress.
+   - *Review Question*: If an upstream LLM call encounters high latency (>15s), Telegram may re-deliver the webhook update. What is the most resilient, zero-overhead idempotency lock pattern within SQLite to guarantee zero duplicate dispatch?
+
+### C. Quantitative Risk & Financial Precision
+1. **Fat-Tail Modeling: Parametric VaR vs. Cornish-Fisher or Monte Carlo**:
+   - *Current State*: `quant_engine.py` employs a parametric 95% 1-day Value at Risk (VaR) assuming normal distribution: $\text{VaR} = Z_{0.95} \times \sigma \times \text{Equity}$.
+   - *Review Question*: Tech-heavy portfolios exhibit pronounced negative skewness and excess kurtosis (fat tails). Would incorporating the **Cornish-Fisher expansion** (adjusting for skewness and kurtosis) or **Conditional VaR (CVaR / Expected Shortfall)** offer superior capital protection during tail-risk drawdowns?
+2. **Liquidity & Average Daily Volume (ADV) Constraints**:
+   - *Current State*: Single-ticker sizing recommendations (`suggested_allocation_usd`) deploy from available cash reserves ($12,500.00) based on conviction score and volatility stop distance.
+   - *Review Question*: How should average daily volume (ADV) and market liquidity constraints be formalized so that speculative micro-cap or moonshot recommendations automatically cap position sizes at $\le 1.0\%$ of 30-day median turnover?
+3. **Multi-Factor Look-Through Decomposition**:
+   - *Current State*: The system checks direct ticker overlap in ETFs (e.g. Apple's weighting in VOO and SFY).
+   - *Review Question*: Would integrating a Barra or Fama-French 5-factor regression model yield actionable risk insights beyond direct ticker look-through?
+
+### D. Multi-Agent Coordination & Feedback Loops
+1. **Closing the Feedback Loop from User Annotations**:
+   - *Current State*: `/api/feedback` stores user ratings and qualitative notes in `user_feedback`.
+   - *Review Question*: How can user feedback be synthesized into automated dynamic few-shot negative prompts for the Adversarial Critic Agent, penalizing recurring analytical blind spots?
+2. **Parallel Sub-Agent Dispatch vs. Sequential Pipelines**:
+   - *Current State*: Analysis pipeline queries quotes, technical indicators, and sentiment streams concurrently via `asyncio.to_thread`.
+   - *Review Question*: Are there opportunities to decouple the Opportunity Hunter and Risk Agent into event-driven pub/sub actors for faster compilation?
+
