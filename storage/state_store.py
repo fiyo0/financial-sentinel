@@ -18,8 +18,15 @@ logger = logging.getLogger(__name__)
 _GCS_RESTORED = False
 _GCS_RESTORE_LOCK = threading.Lock()
 
+# Serialized, debounced GCS backup worker state
+_GCS_BACKUP_LOCK = threading.Lock()
+_GCS_BACKUP_WORKER_LOCK = threading.Lock()
+_GCS_BACKUP_PENDING = False
+_GCS_BACKUP_THREAD: Optional[threading.Thread] = None
+
 
 class StateStore:
+
     def __init__(self, db_path: str = "storage/state.db"):
         self.db_path = db_path
         os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
@@ -75,11 +82,11 @@ class StateStore:
         return False
 
     def backup_to_gcs(self, blocking: bool = False) -> bool:
-        """Backs up state.db to Google Cloud Storage on Cloud Run mutations.
+        """Backs up state.db to Google Cloud Storage on Cloud Run mutations with serialized debouncing.
         
         Args:
-            blocking: If True, executes upload synchronously inline so that
-                      Cloud Run CPU throttling does not freeze or drop the upload.
+            blocking: If True, executes upload synchronously inline.
+                      If False, queues a debounced background upload ensuring exactly one upload runs at a time.
         """
         is_cloud_run = bool(os.getenv("K_SERVICE") or os.getenv("GCS_SYNC_ENABLED") == "true")
         if not is_cloud_run:
@@ -88,43 +95,55 @@ class StateStore:
         if not bucket_name or not os.path.exists(self.db_path):
             return False
 
-        def _do_upload():
-            import tempfile
-            tmp_fd, tmp_path = tempfile.mkstemp(suffix=".db")
-            os.close(tmp_fd)
-            try:
-                # 1. Take a consistent, atomic snapshot using SQLite Online Backup API
-                src = sqlite3.connect(self.db_path)
-                dst = sqlite3.connect(tmp_path)
-                with dst:
-                    src.backup(dst)
-                dst.close()
-                src.close()
-
-                # 2. Upload the consistent point-in-time snapshot to GCS
-                from google.cloud import storage
-                client = storage.Client()
-                bucket = client.bucket(bucket_name)
-                blob = bucket.blob("state.db")
-                blob.upload_from_filename(tmp_path)
-                logger.info("Successfully backed up consistent state.db snapshot to GCS.")
-            except Exception as e:
-                logger.warning(f"Failed to snapshot and upload state.db to GCS: {e}")
-            finally:
-                if os.path.exists(tmp_path):
+        def _do_upload_cycle():
+            global _GCS_BACKUP_PENDING
+            with _GCS_BACKUP_LOCK:
+                while True:
+                    _GCS_BACKUP_PENDING = False
+                    import tempfile
+                    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".db")
+                    os.close(tmp_fd)
                     try:
-                        os.remove(tmp_path)
-                    except Exception:
-                        pass
+                        # 1. Take a consistent, atomic snapshot using SQLite Online Backup API
+                        src = sqlite3.connect(self.db_path)
+                        dst = sqlite3.connect(tmp_path)
+                        with dst:
+                            src.backup(dst)
+                        dst.close()
+                        src.close()
+
+                        # 2. Upload the consistent point-in-time snapshot to GCS
+                        from google.cloud import storage
+                        client = storage.Client()
+                        bucket = client.bucket(bucket_name)
+                        blob = bucket.blob("state.db")
+                        blob.upload_from_filename(tmp_path)
+                        logger.info("Successfully backed up consistent state.db snapshot to GCS.")
+                    except Exception as e:
+                        logger.warning(f"Failed to snapshot and upload state.db to GCS: {e}")
+                    finally:
+                        if os.path.exists(tmp_path):
+                            try:
+                                os.remove(tmp_path)
+                            except Exception:
+                                pass
+
+                    # If another mutation arrived while this upload was in flight, coalesce and run once more
+                    if not _GCS_BACKUP_PENDING:
+                        break
 
         if blocking:
-            _do_upload()
+            _do_upload_cycle()
             return True
         else:
-            import threading
-            t = threading.Thread(target=_do_upload, daemon=True)
-            t.start()
+            global _GCS_BACKUP_PENDING, _GCS_BACKUP_THREAD
+            _GCS_BACKUP_PENDING = True
+            with _GCS_BACKUP_WORKER_LOCK:
+                if _GCS_BACKUP_THREAD is None or not _GCS_BACKUP_THREAD.is_alive():
+                    _GCS_BACKUP_THREAD = threading.Thread(target=_do_upload_cycle, daemon=True)
+                    _GCS_BACKUP_THREAD.start()
             return True
+
 
     def _get_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=30.0)
@@ -294,15 +313,31 @@ class StateStore:
                 )
             """)
 
+            # Telegram processed updates deduplication table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS processed_updates (
+                    update_id INTEGER PRIMARY KEY,
+                    received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # Multi-tenant migration for token_usage user_id
+            try:
+                cursor.execute("ALTER TABLE token_usage ADD COLUMN user_id TEXT;")
+            except Exception:
+                pass
+
             # High-performance indexes for historical scalability
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_briefings_user_slot ON briefing_history(user_id, slot, generated_at DESC);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_scans_user ON user_scans(user_id, created_at DESC);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_deepdives_user ON user_deepdives(user_id, created_at DESC);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_deepdives_ticker ON user_deepdives(user_id, ticker);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_token_usage_created ON token_usage(created_at DESC);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_token_usage_user ON token_usage(user_id, created_at DESC);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_ingested_news_created ON ingested_news(created_at DESC);")
 
             conn.commit()
+
 
 
     @staticmethod
@@ -649,36 +684,61 @@ class StateStore:
                 return json.loads(row["value_json"])
             return default
 
+    def claim_telegram_update(self, update_id: int) -> bool:
+        """
+        Atomically claims a Telegram update_id using SQLite INSERT OR IGNORE.
+        Returns True if update was claimed (first time seen), False if duplicate.
+        """
+        if not update_id:
+            return True
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT OR IGNORE INTO processed_updates (update_id) VALUES (?)", (int(update_id),))
+            conn.commit()
+            return cursor.rowcount > 0
+
     def record_token_usage(
         self,
         agent_name: str,
         prompt_tokens: int,
         completion_tokens: int,
         cost_usd: float,
-        model_name: str
+        model_name: str,
+        user_id: Optional[str] = None
     ):
         total = prompt_tokens + completion_tokens
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO token_usage (
-                    agent_name, prompt_tokens, completion_tokens, total_tokens, cost_usd, model_name
-                ) VALUES (?, ?, ?, ?, ?, ?)
-            """, (agent_name, prompt_tokens, completion_tokens, total, cost_usd, model_name))
+                    agent_name, prompt_tokens, completion_tokens, total_tokens, cost_usd, model_name, user_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (agent_name, prompt_tokens, completion_tokens, total, cost_usd, model_name, user_id))
             conn.commit()
 
-    def get_today_token_usage(self) -> Dict[str, Any]:
+    def get_today_token_usage(self, user_id: Optional[str] = None) -> Dict[str, Any]:
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                SELECT 
-                    COALESCE(SUM(total_tokens), 0) as total_tokens,
-                    COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
-                    COALESCE(SUM(completion_tokens), 0) as completion_tokens,
-                    COALESCE(SUM(cost_usd), 0.0) as total_cost_usd
-                FROM token_usage
-                WHERE DATE(created_at) = DATE('now')
-            """)
+            if user_id:
+                cursor.execute("""
+                    SELECT 
+                        COALESCE(SUM(total_tokens), 0) as total_tokens,
+                        COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
+                        COALESCE(SUM(completion_tokens), 0) as completion_tokens,
+                        COALESCE(SUM(cost_usd), 0.0) as total_cost_usd
+                    FROM token_usage
+                    WHERE DATE(created_at) = DATE('now') AND user_id = ?
+                """, (user_id,))
+            else:
+                cursor.execute("""
+                    SELECT 
+                        COALESCE(SUM(total_tokens), 0) as total_tokens,
+                        COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
+                        COALESCE(SUM(completion_tokens), 0) as completion_tokens,
+                        COALESCE(SUM(cost_usd), 0.0) as total_cost_usd
+                    FROM token_usage
+                    WHERE DATE(created_at) = DATE('now')
+                """)
             row = cursor.fetchone()
             if row:
                 return {
@@ -688,6 +748,7 @@ class StateStore:
                     "total_cost_usd": float(row["total_cost_usd"])
                 }
             return {"total_tokens": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_cost_usd": 0.0}
+
 
     # -------------------------------------------------------------
     # Multi-User & Account Management
@@ -715,14 +776,27 @@ class StateStore:
             if not admin:
                 admin = self.get_user_by_telegram("forello0")
 
-        admin_pass = config.dashboard_password or "sentinel_admin"
-        pw_hash = hash_password(admin_pass)
-        enc_key = encrypt_api_key(config.gemini_api_key) if config.gemini_api_key else ""
-
         with self._get_connection() as conn:
             cursor = conn.cursor()
             if not admin:
+                import secrets
                 import uuid
+
+                admin_pass = config.dashboard_password
+                if not admin_pass:
+                    if os.getenv("K_SERVICE") or os.getenv("ENVIRONMENT") == "production":
+                        raise RuntimeError(
+                            "CRITICAL SECURITY CONFIGURATION ERROR: DASHBOARD_PASSWORD must be configured in production. "
+                            "Refusing to start with insecure or default credentials."
+                        )
+                    admin_pass = secrets.token_urlsafe(24)
+                    logger.warning(
+                        "No DASHBOARD_PASSWORD configured in environment. Generated ephemeral admin passcode: %s",
+                        admin_pass,
+                    )
+
+                pw_hash = hash_password(admin_pass)
+                enc_key = encrypt_api_key(config.gemini_api_key) if config.gemini_api_key else ""
                 user_id = f"usr_{uuid.uuid4().hex[:12]}"
                 cursor.execute("""
                     INSERT INTO users (id, username, email, password_hash, telegram_username, telegram_chat_id, encrypted_gemini_key, role)
@@ -733,6 +807,7 @@ class StateStore:
 
             else:
                 user_id = admin["id"]
+                enc_key = encrypt_api_key(config.gemini_api_key) if config.gemini_api_key else ""
                 if not admin.get("encrypted_gemini_key") and enc_key:
                     cursor.execute("UPDATE users SET encrypted_gemini_key = ? WHERE id = ?", (enc_key, user_id))
                     conn.commit()
@@ -740,6 +815,7 @@ class StateStore:
                     cursor.execute("UPDATE users SET role = 'admin' WHERE id = ?", (user_id,))
                     conn.commit()
                 admin = self.get_user_by_id(user_id)
+
 
         # Initialize Admin portfolio if empty
         if admin:

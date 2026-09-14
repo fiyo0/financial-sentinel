@@ -4,7 +4,6 @@ Unit and integration tests for Deep Dive Archive & Repository.
 import pytest
 from fastapi.testclient import TestClient
 from web.app import app, orchestrator
-from config import config
 
 @pytest.fixture
 def client():
@@ -56,9 +55,11 @@ def test_statestore_deepdive_crud():
     assert store.get_deepdive_by_id(dd_id, user_id=user_id) is None
 
 def test_api_deepdives_endpoints(client, monkeypatch):
-    correct_pwd = config.dashboard_password or 'sentinel_admin'
-    headers = {'X-Sentinel-Auth': correct_pwd}
-    cookies = {'sentinel_auth': correct_pwd}
+    from web.app import orchestrator, create_session_token
+    admin = orchestrator.state_store.get_or_create_default_admin()
+    token = create_session_token(admin["id"], admin["username"], role="admin")
+    headers = {"Authorization": f"Bearer {token}"}
+    cookies = {"sentinel_token": token}
 
     # 1. Mock analyze single ticker
     def mock_analyze_single_ticker(*args, **kwargs):

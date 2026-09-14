@@ -429,7 +429,9 @@ def compute_technical_snapshot(ticker: str, custom_bars: Optional[List[Dict[str,
         ema_12 = _calc_ema(closes, 12)
         ema_26 = _calc_ema(closes, 26)
         offset = len(ema_12) - len(ema_26)
-        macd_series = [e12 - e26 for e12, e26 in zip(ema_12[offset:], ema_26)]
+        macd_series = [e12 - e26 for e12, e26 in zip(ema_12[offset:], ema_26)]  # noqa: B905
+
+
         signal_series = _calc_ema(macd_series, 9)
 
         if len(signal_series) >= 2:

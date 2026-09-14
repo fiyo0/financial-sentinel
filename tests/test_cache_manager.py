@@ -64,9 +64,10 @@ def test_cache_manager_clear():
 
 def test_web_cache_endpoints():
     client = TestClient(app)
-    from config import config
-    correct_pwd = config.dashboard_password or "sentinel_admin"
-    auth_headers = {"X-Sentinel-Auth": correct_pwd}
+    from web.app import orchestrator, create_session_token
+    admin = orchestrator.state_store.get_or_create_default_admin()
+    token = create_session_token(admin["id"], admin["username"], role="admin")
+    auth_headers = {"Authorization": f"Bearer {token}"}
 
     # Pre-populate some cache
     from analytics.market_data import PRICE_CACHE

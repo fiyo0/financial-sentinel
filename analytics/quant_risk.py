@@ -2,7 +2,8 @@
 Quantitative Risk & Portfolio Concentration Matrix.
 Computes quantitative stress scenarios, sector weight distributions, and estimated beta exposures.
 """
-from typing import Dict
+from typing import Dict, Any
+
 from models import Portfolio, PortfolioStressMetric
 
 
@@ -38,8 +39,9 @@ class QuantRiskEngine:
                 macro_shock_scenarios={}
             )
 
-        # 1. Sector Concentrations
+        # 1. Sector Concentrations & Herfindahl-Hirschman Index (HHI)
         sector_totals: Dict[str, float] = {}
+        holdings_equity = sum(h.market_value for h in portfolio.holdings)
         for h in portfolio.holdings:
             sector = h.sector or "Unclassified"
             sector_totals[sector] = sector_totals.get(sector, 0.0) + h.market_value
@@ -48,6 +50,10 @@ class QuantRiskEngine:
             sector: round((val / total_equity) * 100.0, 2)
             for sector, val in sector_totals.items()
         }
+
+        # Sector HHI: sum of squared decimal weights in [0.0, 1.0] across equity holdings
+        sector_hhi = round(sum((val / holdings_equity) ** 2 for val in sector_totals.values()), 4) if holdings_equity > 0 else 0.0
+
 
         # 2. Top-3 Concentration
         sorted_weights = sorted([h.weight_pct for h in portfolio.holdings], reverse=True)
@@ -76,9 +82,12 @@ class QuantRiskEngine:
         var_95_pct = round(1.645 * daily_vol * 100.0, 2)
         var_95_usd = round((var_95_pct / 100.0) * total_equity, 2)
 
-        # Sharpe Ratio (Assumes 4.5% Risk-Free Rate, 6.0% Equity Risk Premium * Beta)
-        est_excess_return = weighted_beta * 6.5
-        sharpe = round(est_excess_return / ann_vol, 2) if ann_vol > 0 else 1.0
+        # Sharpe ratio is withheld (None) when no realized portfolio return time-series is available,
+        # adhering strictly to data provenance and avoiding misleading affine-beta approximations.
+        sharpe = None
+        fields_unavailable = [
+            "sharpe_ratio: Requires historical portfolio return time-series; synthetic affine beta mapping omitted"
+        ]
 
         total_portfolio_wealth = total_equity + max(0.0, portfolio.cash)
         cash_pct = round((portfolio.cash / total_portfolio_wealth) * 100.0, 2) if total_portfolio_wealth > 0 else 0.0
@@ -101,11 +110,49 @@ class QuantRiskEngine:
             sector_concentrations=sector_concentrations,
             top_3_concentration_pct=top_3_concentration,
             high_concentration_warning=has_high_concentration,
+            sector_herfindahl_index=sector_hhi,
             estimated_portfolio_beta=round(weighted_beta, 2),
             annualized_volatility_pct=ann_vol,
             var_95_daily_pct=var_95_pct,
             var_95_daily_usd=var_95_usd,
             sharpe_ratio=sharpe,
             cash_allocation_pct=cash_pct,
-            macro_shock_scenarios=macro_scenarios
+            macro_shock_scenarios=macro_scenarios,
+            fields_unavailable=fields_unavailable,
+            provenance_note="Parametric sector-beta stress testing. Empirical returns required for realized Sharpe and CVaR."
         )
+
+
+def compute_adv_liquidity_constraints(
+    position_shares: float,
+    current_price: float,
+    median_adv_shares_30d: float,
+    conviction_sized_usd: float,
+    max_participation_rate: float = 0.10,
+) -> Dict[str, Any]:
+    """
+    Computes institutional Average Daily Volume (ADV) turnover constraints.
+    - Caps recommended maximum position size at 1% of 30-day median dollar turnover.
+    - Calculates days to liquidate assuming a 10% volume participation ceiling.
+    - Flags moonshot/opportunity recommendations if days_to_liquidate > 3 days.
+    """
+    position_usd = round(position_shares * current_price, 2)
+    median_adv_usd = round(median_adv_shares_30d * current_price, 2) if median_adv_shares_30d > 0 else 0.0
+
+    # 1% median ADV dollar turnover limit
+    adv_cap_usd = round(0.01 * median_adv_usd, 2) if median_adv_usd > 0 else 0.0
+    recommended_max_usd = min(conviction_sized_usd, adv_cap_usd) if adv_cap_usd > 0 else conviction_sized_usd
+
+    # Days to liquidate under max 10% daily volume participation
+    daily_participation_usd = max_participation_rate * median_adv_usd if median_adv_usd > 0 else 0.0
+    days_to_liquidate = round(position_usd / daily_participation_usd, 2) if daily_participation_usd > 0 else 999.0
+
+    return {
+        "position_usd": position_usd,
+        "median_adv_30d_usd": median_adv_usd,
+        "adv_cap_usd": adv_cap_usd,
+        "recommended_max_usd": round(recommended_max_usd, 2),
+        "days_to_liquidate": days_to_liquidate,
+        "exceeds_exit_horizon_gate": days_to_liquidate > 3.0
+    }
+

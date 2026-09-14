@@ -49,7 +49,7 @@ class AnalysisService:
             logger.warning(f"Error fetching live quote for {clean_sym}: {e}")
             quote = {}
 
-        current_price = float(quote.get("current_price", 0.0) or 0.0)
+        current_price = float(quote.get("current_price") or quote.get("price") or 0.0)
         portfolio = self.orchestrator.get_active_portfolio(user_id=user_id)
         is_portfolio_holding = any(h.ticker.upper() == clean_sym for h in portfolio.holdings)
 

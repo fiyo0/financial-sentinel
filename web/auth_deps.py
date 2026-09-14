@@ -44,18 +44,12 @@ def get_current_user_optional(request: Request) -> Optional[Dict[str, Any]]:
             if user:
                 return user
 
-    # 2. Check legacy password cookie / header for default admin
-    cookie_auth = request.cookies.get("sentinel_auth")
-    header_auth = request.headers.get("X-Sentinel-Auth")
-    if config.dashboard_password and (cookie_auth == config.dashboard_password or header_auth == config.dashboard_password):
-        if store:
-            return store.get_or_create_default_admin()
-
-    # 3. If auth is completely disabled in config (local dev only)
+    # 2. If auth is completely disabled in config (local dev only)
     if not config.dashboard_auth_enabled and store:
         return store.get_or_create_default_admin()
 
     return None
+
 
 
 async def require_user(request: Request) -> Dict[str, Any]:

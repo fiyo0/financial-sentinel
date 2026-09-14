@@ -8,41 +8,44 @@ from web.app import app
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
-    import os
-    import shutil
     from storage.state_store import StateStore
     from web.app import orchestrator
     test_db = str(tmp_path / "test_state.db")
-    if os.path.exists("storage/state.db"):
-        shutil.copyfile("storage/state.db", test_db)
     test_store = StateStore(test_db)
     monkeypatch.setattr(orchestrator, "state_store", test_store)
     return TestClient(app)
 
 
 from config import config
+from web.app import orchestrator, create_session_token
+
+def get_auth_context():
+    admin = orchestrator.state_store.get_or_create_default_admin()
+    token = create_session_token(admin["id"], admin["username"], role="admin")
+    return {"Authorization": f"Bearer {token}"}, {"sentinel_token": token}
 
 def test_login_and_auth_flow(client):
+    admin = orchestrator.state_store.get_or_create_default_admin()
     # Unauthenticated access to / with auth enabled should redirect or show login
     resp = client.get("/", follow_redirects=False)
     assert resp.status_code in (200, 302, 307)
 
     # Post invalid password via JSON API
-    resp = client.post("/api/auth/login", json={"password": "wrongpassword"})
+    resp = client.post("/api/auth/login", json={"username_or_email": admin["username"], "password": "wrongpassword"})
     assert resp.status_code == 401
     assert "Invalid" in resp.text
 
     # Post correct password via JSON API
-    correct_pwd = config.dashboard_password or "sentinel_admin"
-    resp = client.post("/api/auth/login", json={"password": correct_pwd})
+    correct_pwd = config.dashboard_password
+    resp = client.post("/api/auth/login", json={"username_or_email": admin["username"], "password": correct_pwd})
     assert resp.status_code == 200
-    assert "sentinel_token" in resp.cookies or "sentinel_auth" in resp.cookies
+    assert "sentinel_token" in resp.cookies
 
 
 
 def test_dashboard_authenticated(client):
-    correct_pwd = config.dashboard_password or "sentinel_admin"
-    resp = client.get("/", headers={"X-Sentinel-Auth": correct_pwd}, cookies={"sentinel_auth": correct_pwd})
+    headers, cookies = get_auth_context()
+    resp = client.get("/", headers=headers, cookies=cookies)
     assert resp.status_code == 200
     assert "Financial Sentinel" in resp.text
     assert "Portfolio & Risk" in resp.text
@@ -71,8 +74,8 @@ def test_api_earnings_calendar(client, monkeypatch):
     }
     monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: mock_resp)
 
-    correct_pwd = config.dashboard_password or "sentinel_admin"
-    resp = client.get("/api/earnings/calendar", headers={"X-Sentinel-Auth": correct_pwd}, cookies={"sentinel_auth": correct_pwd})
+    headers, cookies = get_auth_context()
+    resp = client.get("/api/earnings/calendar", headers=headers, cookies=cookies)
     assert resp.status_code == 200
     data = resp.json()
     assert "schedule" in data
@@ -80,8 +83,8 @@ def test_api_earnings_calendar(client, monkeypatch):
 
 
 def test_api_portfolio_cash_update(client):
-    correct_pwd = config.dashboard_password or "sentinel_admin"
-    resp = client.post("/api/portfolio/cash", json={"cash": 12500.0}, headers={"X-Sentinel-Auth": correct_pwd}, cookies={"sentinel_auth": correct_pwd})
+    headers, cookies = get_auth_context()
+    resp = client.post("/api/portfolio/cash", json={"cash": 12500.0}, headers=headers, cookies=cookies)
     assert resp.status_code == 200
     data = resp.json()
     assert data["portfolio"]["cash"] == 12500.0
@@ -89,9 +92,7 @@ def test_api_portfolio_cash_update(client):
 
 
 def test_api_portfolio_save_and_add(client):
-    correct_pwd = config.dashboard_password or "sentinel_admin"
-    headers = {"X-Sentinel-Auth": correct_pwd}
-    cookies = {"sentinel_auth": correct_pwd}
+    headers, cookies = get_auth_context()
 
     # 1. Test /api/quote/{ticker}
     resp = client.get("/api/quote/NVDA", headers=headers, cookies=cookies)
@@ -159,9 +160,7 @@ def test_api_trigger_scan_structure(client, monkeypatch):
     from models import BriefingReport, PortfolioStressMetric
     from datetime import datetime
 
-    correct_pwd = config.dashboard_password or "sentinel_admin"
-    headers = {"X-Sentinel-Auth": correct_pwd}
-    cookies = {"sentinel_auth": correct_pwd}
+    headers, cookies = get_auth_context()
 
     # Ensure admin key is available for test
     monkeypatch.setattr(orchestrator, "resolve_user_api_key", lambda uid: "mock_test_key")
@@ -210,9 +209,7 @@ def test_api_trigger_scan_stream_sse(client, monkeypatch):
     from models import BriefingReport, PortfolioStressMetric
     from datetime import datetime
 
-    correct_pwd = config.dashboard_password or "sentinel_admin"
-    headers = {"X-Sentinel-Auth": correct_pwd}
-    cookies = {"sentinel_auth": correct_pwd}
+    headers, cookies = get_auth_context()
 
     monkeypatch.setattr(orchestrator, "resolve_user_api_key", lambda uid: "mock_test_key")
 
@@ -274,9 +271,7 @@ def test_api_trigger_scan_stream_sse(client, monkeypatch):
 def test_api_market_briefings_endpoints(client, monkeypatch):
     from web.app import daily_scheduler, orchestrator
 
-    correct_pwd = config.dashboard_password or "sentinel_admin"
-    headers = {"X-Sentinel-Auth": correct_pwd}
-    cookies = {"sentinel_auth": correct_pwd}
+    headers, cookies = get_auth_context()
 
     # 1. Test GET /api/briefings returns slots and list
     resp = client.get("/api/briefings", headers=headers, cookies=cookies)
@@ -411,14 +406,12 @@ def test_api_analyze_ticker(client, monkeypatch):
         is_live=True
     )
 
-    monkeypatch.setattr("analytics.market_data.fetch_live_quote", lambda t: {"price": 220.0, "change_pct": 1.2})
+    monkeypatch.setattr("analytics.market_data.fetch_live_quote", lambda t: {"ticker": "AAPL", "current_price": 220.0, "price": 220.0, "change_pct": 1.2})
     monkeypatch.setattr("analytics.technical_indicators.compute_technical_snapshot", lambda t: fake_tech)
     monkeypatch.setattr("analytics.sentiment_stream.fetch_social_sentiment_snapshot", lambda t, **kw: fake_sent)
     monkeypatch.setattr(orchestrator.analysis_agent, "analyze_single_ticker", lambda **kw: "Mocked Analysis for AAPL")
 
-    correct_pwd = config.dashboard_password or "sentinel_admin"
-    headers = {"X-Sentinel-Auth": correct_pwd}
-    cookies = {"sentinel_auth": correct_pwd}
+    headers, cookies = get_auth_context()
 
     resp = client.post("/api/analyze/AAPL", headers=headers, cookies=cookies)
     assert resp.status_code == 200

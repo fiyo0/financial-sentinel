@@ -107,7 +107,7 @@ The codebase adheres to a strict 5-tier architecture. Channels never perform dir
 │ • sentiment_stream.py: StockTwits arrival velocity, RVOL, Bayesian smoothing      │
 │ • market_data.py: Robinhood/Yahoo quote fetching, circuit breaker telemetry       │
 │ • provenance.py: Immutable Provenance envelope tracking data source & bar count   │
-│ • quant_engine.py: Parametric 95% daily VaR, Beta, HHI, macro stress scenarios    │
+│ • quant_risk.py: Parametric 95% daily VaR, Beta, HHI, macro stress scenarios      │
 └────────────────────────────────────────┬──────────────────────────────────────────┘
                                          │ persists
                                          ▼
@@ -233,10 +233,10 @@ ruff check .
 ```
 
 ### Current Test Suite Health:
-* **Total Automated Tests:** 109
+* **Total Automated Tests:** 111 (100% hermetic, zero `.env` dependency)
 * **Pass Rate:** 100% (0 failures, 0 errors)
-* **Execution Time:** ~5.7 seconds
-* **Static Analysis:** Clean (`All checks passed!`)
+* **Execution Time:** ~3.3 seconds
+* **Static Analysis:** Clean (`All checks passed!` with `E, F, W, B, S`)
 
 ---
 
@@ -265,7 +265,7 @@ We invite the external reviewer to critique, evaluate, and provide architectural
 
 ### C. Quantitative Risk & Financial Precision
 1. **Fat-Tail Modeling: Parametric VaR vs. Cornish-Fisher or Monte Carlo**:
-   - *Current State*: `quant_engine.py` employs a parametric 95% 1-day Value at Risk (VaR) assuming normal distribution: $\text{VaR} = Z_{0.95} \times \sigma \times \text{Equity}$.
+   - *Current State*: `analytics/quant_risk.py` employs a parametric 95% 1-day Value at Risk (VaR) assuming normal distribution: $\text{VaR} = Z_{0.95} \times \sigma \times \text{Equity}$.
    - *Review Question*: Tech-heavy portfolios exhibit pronounced negative skewness and excess kurtosis (fat tails). Would incorporating the **Cornish-Fisher expansion** (adjusting for skewness and kurtosis) or **Conditional VaR (CVaR / Expected Shortfall)** offer superior capital protection during tail-risk drawdowns?
 2. **Liquidity & Average Daily Volume (ADV) Constraints**:
    - *Current State*: Single-ticker sizing recommendations (`suggested_allocation_usd`) deploy from available cash reserves ($12,500.00) based on conviction score and volatility stop distance.

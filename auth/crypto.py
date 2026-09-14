@@ -20,68 +20,89 @@ import httpx
 logger = logging.getLogger("AuthCrypto")
 
 
+_EPHEMERAL_DEV_SECRET: Optional[str] = None
+
+
 def _get_app_secret() -> str:
     secret = os.getenv("APP_SECRET_KEY")
     if not secret:
-        if os.getenv("ALLOW_INSECURE_LOCAL") == "1" or os.getenv("PYTEST_CURRENT_TEST"):
-            return "test-insecure-local-dev-secret-key-32b"
-        raise RuntimeError(
-            "CRITICAL SECURITY CONFIGURATION ERROR: APP_SECRET_KEY is not set in environment. "
-            "Refusing to start with insecure or default keys."
-        )
+        if os.getenv("K_SERVICE") or os.getenv("ENVIRONMENT") == "production":
+            raise RuntimeError(
+                "CRITICAL SECURITY CONFIGURATION ERROR: APP_SECRET_KEY is not set in environment. "
+                "Refusing to start with insecure or default keys."
+            )
+        global _EPHEMERAL_DEV_SECRET
+        if not _EPHEMERAL_DEV_SECRET:
+            _EPHEMERAL_DEV_SECRET = secrets.token_hex(32)
+            logger.warning("No APP_SECRET_KEY configured in environment. Generated ephemeral in-memory key.")
+        return _EPHEMERAL_DEV_SECRET
     return secret.strip()
 
 
-def _get_fernet_for_context(context_info: bytes) -> Fernet:
+def _get_fernet_for_context(context_info: bytes, secret: Optional[str] = None) -> Fernet:
     from cryptography.hazmat.primitives.kdf.hkdf import HKDF
     from cryptography.hazmat.primitives import hashes
-    secret = _get_app_secret()
+    sec = secret or _get_app_secret()
     hkdf = HKDF(
         algorithm=hashes.SHA256(),
         length=32,
         salt=b"financial-sentinel-v2-hkdf-salt",
         info=context_info,
     )
-    key_bytes = hkdf.derive(secret.encode("utf-8"))
+    key_bytes = hkdf.derive(sec.encode("utf-8"))
     return Fernet(base64.urlsafe_b64encode(key_bytes))
 
 
 def _get_legacy_fernet() -> Optional[Fernet]:
-    """Fallback legacy Fernet derived strictly from APP_SECRET_KEY for transparent migration."""
-    secret = os.getenv("APP_SECRET_KEY")
-    if not secret:
-        if os.getenv("ALLOW_INSECURE_LOCAL") == "1" or os.getenv("PYTEST_CURRENT_TEST"):
-            secret = "test-insecure-local-dev-secret-key-32b"
-        else:
-            return None
-    digest = hashlib.sha256(secret.strip().encode("utf-8")).digest()
-    return Fernet(base64.urlsafe_b64encode(digest))
+    """Fallback legacy Fernet derived strictly from active APP_SECRET_KEY."""
+    try:
+        secret = _get_app_secret()
+        digest = hashlib.sha256(secret.encode("utf-8")).digest()
+        return Fernet(base64.urlsafe_b64encode(digest))
+    except Exception:
+        return None
 
 
-def encrypt_api_key(raw_key: str) -> str:
-    """Encrypts a raw Gemini API key using Fernet (AES-128-CBC + HMAC-SHA256) with HKDF key derivation."""
+def encrypt_api_key(raw_key: str, key_version: str = "v1") -> str:
+    """Encrypts a raw Gemini API key using Fernet with HKDF key derivation and key version prefix."""
     if not raw_key or not raw_key.strip():
         return ""
     clean_key = raw_key.strip()
     f = _get_fernet_for_context(b"financial-sentinel-byok-encryption")
     encrypted_bytes = f.encrypt(clean_key.encode("utf-8"))
-    return encrypted_bytes.decode("utf-8")
+    return f"{key_version}:{encrypted_bytes.decode('utf-8')}"
 
 
 def decrypt_api_key(encrypted_key: str) -> str:
-    """Decrypts an encrypted Gemini API key using HKDF-derived key with single APP_SECRET_KEY legacy fallback."""
+    """Decrypts an encrypted Gemini API key supporting version prefix and APP_SECRET_KEY_PREVIOUS rotation."""
     if not encrypted_key or not encrypted_key.strip():
         return ""
-    clean_enc = encrypted_key.strip().encode("utf-8")
+    raw = encrypted_key.strip()
 
-    # 1. Primary: HKDF-derived BYOK Fernet
+    # Strip version prefix if present
+    cipher_text = raw
+    if raw.startswith("v1:"):
+        cipher_text = raw[3:]
+
+    clean_enc = cipher_text.encode("utf-8")
+
+    # 1. Primary: Current active APP_SECRET_KEY with HKDF
     try:
         f = _get_fernet_for_context(b"financial-sentinel-byok-encryption")
         return f.decrypt(clean_enc).decode("utf-8")
     except Exception:
         pass
 
-    # 2. Migration fallback: direct SHA256 of APP_SECRET_KEY (strictly no hardcoded secrets)
+    # 2. Key Rotation Fallback: Check previous keys if configured
+    prev_keys = [k.strip() for k in os.getenv("APP_SECRET_KEY_PREVIOUS", "").split(",") if k.strip()]
+    for pk in prev_keys:
+        try:
+            f_prev = _get_fernet_for_context(b"financial-sentinel-byok-encryption", secret=pk)
+            return f_prev.decrypt(clean_enc).decode("utf-8")
+        except Exception:
+            pass
+
+    # 3. Migration fallback: direct SHA256 of active APP_SECRET_KEY
     try:
         f_leg = _get_legacy_fernet()
         if f_leg:
@@ -90,6 +111,7 @@ def decrypt_api_key(encrypted_key: str) -> str:
         pass
 
     return ""
+
 
 
 

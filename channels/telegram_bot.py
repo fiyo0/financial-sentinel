@@ -279,15 +279,24 @@ class FinancialSentinelTelegramBot:
         return False
 
     def process_webhook_update(self, update: Dict[str, Any]) -> Dict[str, Any]:
+        update_id = update.get("update_id")
+        if update_id:
+            try:
+                claimed = self.orchestrator.state_store.claim_telegram_update(int(update_id))
+                if not claimed:
+                    logger.info(f"Duplicate Telegram update {update_id} already claimed. Skipping.")
+                    return {"status": "already_processed", "update_id": update_id}
+            except Exception as e:
+                logger.warning(f"Error checking Telegram update idempotency: {e}")
+
         msg = update.get("message") or update.get("edited_message") or {}
         text = msg.get("text", "").strip()
         chat = msg.get("chat", {})
         from_user = msg.get("from", {})
         username = str(from_user.get("username", "")).lower().replace("@", "")
         chat_id = str(chat.get("id", ""))
-        logger.info(f"Received Telegram webhook update from @{username} (Chat ID: {chat_id}) [chars: {len(text)}]")
-        print(f"TELEGRAM_INCOMING: username={username} chat_id={chat_id} text_len={len(text)}", flush=True)
-
+        logger.info(f"Received Telegram webhook update {update_id} from @{username} (Chat ID: {chat_id}) [chars: {len(text)}]")
+        print(f"TELEGRAM_INCOMING: update_id={update_id} username={username} chat_id={chat_id} text_len={len(text)}", flush=True)
 
         if text:
             import threading
@@ -297,7 +306,7 @@ class FinancialSentinelTelegramBot:
                 daemon=True
             ).start()
 
-        return {"status": "ok"}
+        return {"status": "ok", "update_id": update_id}
 
     def _poll_loop(self):
         while self.is_running:
@@ -307,7 +316,10 @@ class FinancialSentinelTelegramBot:
                 if resp.status_code == 200:
                     data = resp.json()
                     for update in data.get("result", []):
-                        self.last_update_id = max(self.last_update_id, update.get("update_id", 0))
+                        update_id = update.get("update_id", 0)
+                        self.last_update_id = max(self.last_update_id, update_id)
+                        if update_id and not self.orchestrator.state_store.claim_telegram_update(update_id):
+                            continue
                         msg = update.get("message", {})
                         text = msg.get("text", "").strip()
                         chat = msg.get("chat", {})
@@ -317,6 +329,7 @@ class FinancialSentinelTelegramBot:
 
                         if text:
                             self._handle_incoming_message(text, chat_id, from_user.get("first_name", "Investor"), username)
+
                 elif resp.status_code in (401, 404):
                     time.sleep(30)
                 else:

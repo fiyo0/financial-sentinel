@@ -235,7 +235,7 @@ async def security_and_auth_middleware(request: Request, call_next):
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
         "font-src 'self' https://fonts.gstatic.com; "
         "img-src 'self' data: https:; "
-        "connect-src 'self' https:; "
+        "connect-src 'self'; "
         "frame-ancestors 'none'; "
         "base-uri 'self';"
     )
@@ -250,14 +250,38 @@ async def login_view(request: Request):
     user = get_current_user(request)
     if user:
         return RedirectResponse(url="/")
-    return templates.TemplateResponse(request=request, name="login.html", context={"auth_enabled": config.dashboard_auth_enabled})
+    return templates.TemplateResponse("login.html", {"request": request, "config": config})
+
+
+def get_client_ip(request: Request) -> str:
+    """Extracts client IP behind Cloud Run / proxy from X-Forwarded-For."""
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
 
 
 login_attempts: Dict[str, List[float]] = {}
+registration_attempts: Dict[str, List[float]] = {}
 
 
 @app.post("/api/auth/register")
 async def api_register(payload: UserRegisterRequest, request: Request, response: Response):
+    client_ip = get_client_ip(request)
+    now = time.time()
+
+    # Rate-limit registrations: max 5 per 15 minutes per IP
+    if len(registration_attempts) > 500:
+        stale_cutoff = now - 900
+        stale_ips = [ip for ip, timestamps in registration_attempts.items() if not timestamps or timestamps[-1] < stale_cutoff]
+        for ip in stale_ips:
+            registration_attempts.pop(ip, None)
+
+    recent_reg = [t for t in registration_attempts.get(client_ip, []) if now - t < 900]
+    if len(recent_reg) >= 5:
+        raise HTTPException(status_code=429, detail="Too many registration attempts. Please wait 15 minutes.")
+    registration_attempts.setdefault(client_ip, []).append(now)
+
     clean_user = payload.username.strip()
     clean_email = payload.email.strip().lower()
 
@@ -307,7 +331,7 @@ async def api_register(payload: UserRegisterRequest, request: Request, response:
 
 @app.post("/api/auth/login")
 async def api_login(payload: UserLoginRequest, request: Request, response: Response):
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = get_client_ip(request)
     now = time.time()
 
     # Bounded cache pruning for login attempts (H-7)
@@ -323,12 +347,8 @@ async def api_login(payload: UserLoginRequest, request: Request, response: Respo
 
     clean_id = payload.username_or_email.strip()
 
-    # 1. Check user database authentication
+    # 1. Check user database authentication via PBKDF2 hash verification
     user = orchestrator.state_store.authenticate_user(clean_id, payload.password)
-
-    # 2. Check fallback master passcode for default admin
-    if not user and config.dashboard_password and payload.password == config.dashboard_password:
-        user = orchestrator.state_store.get_or_create_default_admin()
 
     if user:
         login_attempts.pop(client_ip, None)
@@ -344,11 +364,11 @@ async def api_login(payload: UserLoginRequest, request: Request, response: Respo
         )
         return {
             "status": "success",
+            "token": token,
             "user": {
                 "id": user["id"],
                 "username": user["username"],
                 "email": user["email"],
-                "role": user["role"],
                 "has_gemini_key": bool(user.get("encrypted_gemini_key"))
             }
         }
@@ -487,8 +507,10 @@ async def api_update_portfolio_cash(request: Request, user: Dict[str, Any] = Dep
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid cash payload")
 
-    res = portfolio_service.update_cash_balance(user_id=user_id, new_cash=new_cash)
+    res = await asyncio.to_thread(portfolio_service.update_cash_balance, user_id=user_id, new_cash=new_cash)
     return res
+
+
 
 
 @app.post("/api/portfolio/upload")
@@ -665,7 +687,8 @@ async def api_add_holding_alias(holding: HoldingUpdateRequest, user: Dict[str, A
 async def api_update_holding(holding: HoldingUpdateRequest, user: Dict[str, Any] = Depends(require_user)):
     user_id = user["id"]
     try:
-        res = portfolio_service.add_or_update_holding(
+        res = await asyncio.to_thread(
+            portfolio_service.add_or_update_holding,
             user_id=user_id,
             ticker=holding.ticker,
             shares=holding.shares,
@@ -698,12 +721,14 @@ async def api_delete_holding(request: Request, user: Dict[str, Any] = Depends(re
         raise HTTPException(status_code=400, detail="Ticker is required")
 
     try:
-        res = portfolio_service.remove_or_trim_holding(
+        res = await asyncio.to_thread(
+            portfolio_service.remove_or_trim_holding,
             user_id=user_id,
             ticker=ticker,
             shares_to_remove="all",
             credit_cash=True
         )
+
         return {
             "status": "success",
             "message": f"Sold {ticker}. Credited ${res['liquidated_val']:,.2f} to cash reserve.",
@@ -909,10 +934,6 @@ async def api_get_deepdive_detail(deepdive_id: str, user: Dict[str, Any] = Depen
 
     dd = orchestrator.state_store.get_deepdive_by_id(deepdive_id, user_id=user_id if not is_admin else None)
     if not dd:
-        # Check if record exists under another tenant to return 403 Forbidden instead of 404
-        existing = orchestrator.state_store.get_deepdive_by_id(deepdive_id)
-        if existing and not is_admin:
-            raise HTTPException(status_code=403, detail="Forbidden: You do not have permission to access this archived deep dive.")
         raise HTTPException(status_code=404, detail="Archived deep dive not found.")
     return {"status": "success", "deepdive": dd}
 
@@ -922,16 +943,15 @@ async def api_delete_deepdive(deepdive_id: str, user: Dict[str, Any] = Depends(r
     user_id = user["id"]
     is_admin = bool(user.get("role") == "admin")
 
-    existing = orchestrator.state_store.get_deepdive_by_id(deepdive_id)
+    existing = orchestrator.state_store.get_deepdive_by_id(deepdive_id, user_id=user_id if not is_admin else None)
     if not existing:
         raise HTTPException(status_code=404, detail="Deep dive record not found.")
-    if not is_admin and existing.get("user_id") != user_id:
-        raise HTTPException(status_code=403, detail="Forbidden: You do not have permission to delete this deep dive.")
 
     deleted = orchestrator.state_store.delete_deepdive(deepdive_id, user_id=user_id, is_admin=is_admin)
     if not deleted:
         raise HTTPException(status_code=404, detail="Deep dive record not found or could not be deleted.")
     return {"status": "success", "message": "Archived deep dive deleted successfully."}
+
 
 
 
@@ -1090,11 +1110,14 @@ async def api_discover_moonshots(count: int = 4, user: Dict[str, Any] = Depends(
 async def api_telegram_webhook(request: Request):
     expected_secret = config.resolved_telegram_webhook_secret
 
-    if expected_secret:
-        received_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
-        if not secrets.compare_digest(received_secret, expected_secret):
-            logger.warning("Rejected unauthenticated Telegram webhook update (missing or invalid secret token).")
-            return JSONResponse(status_code=401, content={"detail": "Unauthorized: Invalid Telegram webhook secret token"})
+    if not expected_secret:
+        logger.error("Telegram webhook received but secret is not configured on server. Rejecting update.")
+        return JSONResponse(status_code=403, content={"detail": "Forbidden: Webhook secret not configured on server"})
+
+    received_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    if not secrets.compare_digest(received_secret, expected_secret):
+        logger.warning("Rejected unauthenticated Telegram webhook update (missing or invalid secret token).")
+        return JSONResponse(status_code=401, content={"detail": "Unauthorized: Invalid Telegram webhook secret token"})
 
     try:
         data = await request.json()
@@ -1105,7 +1128,8 @@ async def api_telegram_webhook(request: Request):
 
 
 @app.get("/api/schedule/status")
-async def api_get_schedule_status():
+async def api_get_schedule_status(user: Dict[str, Any] = Depends(require_user)):
+
     from datetime import datetime
     from zoneinfo import ZoneInfo
     now_pst = datetime.now(ZoneInfo("America/Los_Angeles"))

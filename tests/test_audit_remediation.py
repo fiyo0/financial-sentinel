@@ -58,6 +58,26 @@ def test_c1_h2_no_candidate_secrets_token_forgery():
     assert valid_payload["uid"] == "usr_valid"
 
 
+def test_s1_s2_login_with_published_default_credential_is_rejected(test_client):
+    """S-1 & S-2: Direct login with legacy published default credential 'sentinel_admin' must fail."""
+    admin = orchestrator.state_store.get_or_create_default_admin()
+
+    # 1. Direct PBKDF2 authentication rejection
+    auth_result = orchestrator.state_store.authenticate_user(admin["username"], "sentinel_admin")
+    assert auth_result is None, "authenticate_user must never match 'sentinel_admin' when DASHBOARD_PASSWORD is configured"
+
+    # 2. HTTP POST /api/auth/login rejection
+    res = test_client.post("/api/auth/login", json={"username_or_email": admin["username"], "password": "sentinel_admin"})
+    assert res.status_code == 401, "API login with 'sentinel_admin' must return 401 Unauthorized"
+
+    # 3. Legacy header/cookie backdoor rejection
+    res_hdr = test_client.get("/api/portfolio", headers={"X-Sentinel-Auth": "sentinel_admin"})
+    assert res_hdr.status_code == 401, "X-Sentinel-Auth backdoor must be completely eliminated"
+
+    res_cookie = test_client.get("/api/portfolio", cookies={"sentinel_auth": "sentinel_admin"})
+    assert res_cookie.status_code == 401, "sentinel_auth cookie backdoor must be completely eliminated"
+
+
 def test_c2_telegram_webhook_secret_token_enforcement(test_client):
     """C-2: Webhook POST without valid secret token header must return 401."""
     # 1. No header -> 401

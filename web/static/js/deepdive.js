@@ -479,42 +479,47 @@ async function deleteArchivedDeepDive(deepdiveId, event) {
  */
 function formatAnalysisContent(text) {
     if (!text) return '';
-    let html = text;
+    const safeEsc = window.esc || function (s) {
+        if (s === null || s === undefined) return '';
+        return String(s).replace(/[&<>"']/g, c => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;'
+        }[c]));
+    };
 
-    // 1. Strip any malicious tags
-    html = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
-    html = html.replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '');
+    // 1. Fully escape all untrusted user / LLM input first (prevents any injected tags or entity tricks)
+    let html = safeEsc(text);
 
-    // 2. Unescape accidental HTML entities (&lt;b&gt; -> <b>, &lt;code&gt; -> <code>)
-    html = html.replace(/&lt;(\/?[a-z0-9]+)&gt;/gi, '<$1>');
-    html = html.replace(/&quot;/gi, '"');
-    html = html.replace(/&#039;/gi, "'");
+    // 2. Safely transform whitelisted Telegram HTML tags into styled Tailwind classes
+    html = html.replace(/&lt;b&gt;([\s\S]*?)&lt;\/b&gt;/gi, '<strong class="text-white font-semibold">$1</strong>');
+    html = html.replace(/&lt;strong&gt;([\s\S]*?)&lt;\/strong&gt;/gi, '<strong class="text-white font-semibold">$1</strong>');
+    html = html.replace(/&lt;i&gt;([\s\S]*?)&lt;\/i&gt;/gi, '<em class="text-slate-300 italic">$1</em>');
+    html = html.replace(/&lt;em&gt;([\s\S]*?)&lt;\/em&gt;/gi, '<em class="text-slate-300 italic">$1</em>');
+    html = html.replace(/&lt;code&gt;([\s\S]*?)&lt;\/code&gt;/gi, '<code class="px-1.5 py-0.5 bg-dark-950 text-cyan-300 rounded font-mono text-[11px] border border-slate-800">$1</code>');
+    html = html.replace(/&lt;pre&gt;([\s\S]*?)&lt;\/pre&gt;/gi, '<pre class="p-2 bg-dark-950 text-cyan-300 rounded font-mono text-[11px] border border-slate-800 overflow-x-auto">$1</pre>');
+    // Only allow http:// and https:// URLs for anchors; reject javascript: or data: schemes
+    html = html.replace(/&lt;a\s+href=&quot;(https?:\/\/[^&"]+)&quot;[^&]*&gt;([\s\S]*?)&lt;\/a&gt;/gi, '<a href="$1" target="_blank" rel="noopener noreferrer" class="text-cyan-400 hover:underline">$2</a>');
 
-    // 3. Format Telegram HTML tags into styled Tailwind classes
-    html = html.replace(/<b>([\s\S]*?)<\/b>/gi, '<strong class="text-white font-semibold">$1</strong>');
-    html = html.replace(/<strong>([\s\S]*?)<\/strong>/gi, '<strong class="text-white font-semibold">$1</strong>');
-    html = html.replace(/<i>([\s\S]*?)<\/i>/gi, '<em class="text-slate-300 italic">$1</em>');
-    html = html.replace(/<em>([\s\S]*?)<\/em>/gi, '<em class="text-slate-300 italic">$1</em>');
-    html = html.replace(/<code>([\s\S]*?)<\/code>/gi, '<code class="px-1.5 py-0.5 bg-dark-950 text-cyan-300 rounded font-mono text-[11px] border border-slate-800">$1</code>');
-    html = html.replace(/<pre>([\s\S]*?)<\/pre>/gi, '<pre class="p-2 bg-dark-950 text-cyan-300 rounded font-mono text-[11px] border border-slate-800 overflow-x-auto">$1</pre>');
-    html = html.replace(/<a\s+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, '<a href="$1" target="_blank" rel="noopener noreferrer" class="text-cyan-400 hover:underline">$2</a>');
-
-    // 4. Format markdown bold & code in case model returned markdown
+    // 3. Format markdown bold & inline code
     html = html.replace(/\*\*([^*]+)\*\*/g, '<strong class="text-white font-semibold">$1</strong>');
     html = html.replace(/`([^`]+)`/g, '<code class="px-1.5 py-0.5 bg-dark-950 text-cyan-300 rounded font-mono text-[11px] border border-slate-800">$1</code>');
 
-    // 5. Bullet points (•, -, *)
+    // 4. Bullet points (•, -, *)
     html = html.replace(/^\s*[•\-\*]\s+(.*)$/gm, '<li class="ml-4 list-disc text-slate-300 my-0.5">$1</li>');
     // Numbered lists
     html = html.replace(/^\s*(\d+)\.\s+(.*)$/gm, '<li class="ml-4 list-decimal text-slate-300 my-0.5">$2</li>');
 
-    // 6. Line breaks & spacing
+    // 5. Line breaks & spacing
     html = html.replace(/\n\n/g, '<div class="h-2"></div>');
     html = html.replace(/\n/g, '<br>');
     html = html.replace(/<\/li>\s*<br\s*\/?>/gi, '</li>');
 
     return html;
 }
+
 
 // Global exports
 window.analyzeHoldingTicker = analyzeHoldingTicker;

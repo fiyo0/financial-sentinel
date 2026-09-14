@@ -246,8 +246,9 @@ function renderSectorDistribution(p) {
     bar.innerHTML = sortedSectors.map(([sec, val]) => {
         const pct = ((val / totalWealth) * 100).toFixed(1);
         const colorObj = SECTOR_COLORS[sec] || SECTOR_COLORS['Other'];
+        const safeSec = (window.esc ? window.esc(sec) : sec);
         return `
-            <div style="width: ${pct}%;" class="${colorObj.bg} h-full transition-all" title="${sec}: ${pct}% ($${Math.round(val).toLocaleString()})"></div>
+            <div style="width: ${pct}%;" class="${colorObj.bg} h-full transition-all" title="${safeSec}: ${pct}% ($${Math.round(val).toLocaleString()})"></div>
         `;
     }).join('');
 
@@ -255,10 +256,11 @@ function renderSectorDistribution(p) {
     chips.innerHTML = sortedSectors.map(([sec, val]) => {
         const pct = ((val / totalWealth) * 100).toFixed(1);
         const colorObj = SECTOR_COLORS[sec] || SECTOR_COLORS['Other'];
+        const safeSec = (window.esc ? window.esc(sec) : sec);
         return `
             <div class="flex items-center space-x-1.5 px-2.5 py-1 bg-dark-950 border border-slate-800 rounded-lg">
                 <span class="w-2.5 h-2.5 rounded-full ${colorObj.bg}"></span>
-                <span class="text-slate-300 font-sans">${sec}:</span>
+                <span class="text-slate-300 font-sans">${safeSec}:</span>
                 <span class="${colorObj.text} font-bold">${pct}%</span>
                 <span class="text-[10px] text-slate-500 font-sans">($${Math.round(val).toLocaleString()})</span>
             </div>
@@ -271,8 +273,8 @@ function renderSectorDistribution(p) {
  */
 function renderStressMatrix(s) {
     if (!s) return;
-    const betaVal = s.estimated_portfolio_beta || 1.0;
-    const varPct = s.var_95_daily_pct || 1.8;
+    const betaVal = s.estimated_portfolio_beta != null ? s.estimated_portfolio_beta : 1.0;
+    const varPct = s.var_95_daily_pct != null ? s.var_95_daily_pct : 1.8;
     const varUsd = s.var_95_daily_usd || 0;
 
     // Beta updates
@@ -290,8 +292,8 @@ function renderStressMatrix(s) {
     if (document.getElementById('hud-var-usd')) document.getElementById('hud-var-usd').textContent = `-$${Math.round(varUsd).toLocaleString()} Bad Day Limit`;
 
     // Additional risk metrics
-    if (document.getElementById('val-vol')) document.getElementById('val-vol').textContent = (s.annualized_volatility_pct || 0) + '%';
-    if (document.getElementById('val-sharpe')) document.getElementById('val-sharpe').textContent = s.sharpe_ratio || 1.0;
+    if (document.getElementById('val-vol')) document.getElementById('val-vol').textContent = (s.annualized_volatility_pct != null ? s.annualized_volatility_pct : 0) + '%';
+    if (document.getElementById('val-sharpe')) document.getElementById('val-sharpe').textContent = (s.sharpe_ratio != null ? s.sharpe_ratio : '—');
     if (document.getElementById('val-cash-alloc')) document.getElementById('val-cash-alloc').textContent = (s.cash_allocation_pct || 0) + '%';
 
     if (document.getElementById('val-top3')) {
@@ -304,9 +306,10 @@ function renderStressMatrix(s) {
     if (scenList && s.macro_shock_scenarios) {
         scenList.innerHTML = Object.entries(s.macro_shock_scenarios).map(([scen, val]) => {
             const isPos = val >= 0;
+            const safeScen = (window.esc ? window.esc(scen) : scen);
             return `
                 <div class="flex justify-between items-center py-1 border-b border-slate-900/60 last:border-0">
-                    <span class="text-slate-400">${scen}</span>
+                    <span class="text-slate-400">${safeScen}</span>
                     <span class="${isPos ? 'text-emerald-400' : 'text-rose-400'} font-semibold">
                         ${isPos ? '+' : ''}${val}%
                     </span>
@@ -315,6 +318,7 @@ function renderStressMatrix(s) {
         }).join('');
     }
 }
+
 
 /**
  * Concurrent live price sync across all portfolio holdings.

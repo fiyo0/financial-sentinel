@@ -67,9 +67,10 @@ class CacheManager:
                     count = len(self._store[namespace])
                     self._store[namespace].clear()
             else:
-                for ns, keys in self._store.items():
+                for _ns, keys in self._store.items():
                     count += len(keys)
                 self._store.clear()
+
         return count
 
     def stats(self) -> Dict[str, Any]:

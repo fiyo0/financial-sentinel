@@ -151,11 +151,18 @@ def test_webhook_process_update(telegram_test_setup):
     }
     with patch.object(bot, "_handle_incoming_message") as mock_handler:
         res = bot.process_webhook_update(update_payload)
-        assert res == {"status": "ok"}
+        assert res["status"] == "ok"
+        assert res["update_id"] == 10001
         # Allow thread to call handler
         import time
         time.sleep(0.05)
         mock_handler.assert_called_once_with("/NVDA", "12345", "Frank", "frank")
+
+        # Test duplicate update idempotency
+        res_dup = bot.process_webhook_update(update_payload)
+        assert res_dup["status"] == "already_processed"
+        assert res_dup["update_id"] == 10001
+        assert mock_handler.call_count == 1
 
 
 def test_greetings_routing(telegram_test_setup):

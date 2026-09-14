@@ -1,7 +1,7 @@
 # 🛡️ Financial Sentinel & Alpha Discovery Multi-Agent Platform
 
 [![Version](https://img.shields.io/badge/version-2.4.0-blue.svg)](config.py)
-[![Tests](https://img.shields.io/badge/tests-109%20passed-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-111%20passed-brightgreen.svg)](tests/)
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](requirements.txt)
 [![GCP Cloud Run](https://img.shields.io/badge/deployment-Cloud%20Run-orange.svg)](Dockerfile)
 [![Security](https://img.shields.io/badge/security-AES--256%20BYOK%20%7C%20Secret%20Manager-purple.svg)](auth/crypto.py)
@@ -146,13 +146,13 @@ cp .env.example .env
 ```bash
 pytest tests/ -v
 ```
-*Current test suite: **68 passed tests** covering multi-tenancy, encryption, technical indicators, sentiment streams, scheduler, and web APIs.*
+*Current test suite: **111 passed tests** (100% hermetic, zero `.env` reliance) covering multi-tenancy, cryptography, technical indicators, sentiment streams, scheduler, quant risk, and web APIs.*
 
 ### 4. Launch Web Dashboard
 ```bash
 python web/app.py
 ```
-Open **http://127.0.0.1:8000** in your browser. Default login: `admin` / `sentinel_admin` (or configured `DASHBOARD_PASSWORD`).
+Open **http://127.0.0.1:8000** in your browser. Authenticate with your configured `DASHBOARD_PASSWORD` (or your registered tenant account). In local development, if `DASHBOARD_PASSWORD` is unset, an ephemeral administrative credential is generated at startup and logged to console output.
 
 ### 5. Run Interactive CLI
 ```bash

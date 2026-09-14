@@ -207,16 +207,20 @@ class PortfolioStressMetric(BaseModel):
     sector_concentrations: Dict[str, float] = Field(default_factory=dict)
     top_3_concentration_pct: float = 0.0
     high_concentration_warning: bool = False
-    estimated_portfolio_beta: float = 1.0
-    annualized_volatility_pct: float = 0.0
-    var_95_daily_pct: float = 0.0
-    var_95_daily_usd: float = 0.0
-    sharpe_ratio: float = 0.0
+    sector_herfindahl_index: Optional[float] = None
+    estimated_portfolio_beta: Optional[float] = 1.0
+    annualized_volatility_pct: Optional[float] = None
+    var_95_daily_pct: Optional[float] = None
+    var_95_daily_usd: Optional[float] = None
+    sharpe_ratio: Optional[float] = None
     cash_allocation_pct: float = 0.0
     macro_shock_scenarios: Dict[str, float] = Field(
         default_factory=dict,
         description="Scenario name -> Estimated portfolio drawdown/gain %"
     )
+    fields_unavailable: List[str] = Field(default_factory=list)
+    provenance_note: Optional[str] = None
+
 
 
 class BriefingReport(BaseModel):

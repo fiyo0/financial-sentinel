@@ -53,16 +53,17 @@ def test_deepdive_strict_tenant_isolation(test_users):
     assert res_alice.status_code == 200
     assert res_alice.json()["deepdive"]["ticker"] == "NVDA"
 
-    # 3. Bob attempts to view Alice's deep dive -> 403 Forbidden
+    # 3. Bob attempts to view Alice's deep dive -> 404 Not Found (prevents ID enumeration oracle)
     bob_token = create_session_token(bob["id"], bob["username"], role="user")
     client.cookies.set("sentinel_token", bob_token)
     res_bob = client.get(f"/api/deepdives/{dd_id}")
-    assert res_bob.status_code == 403
-    assert "Forbidden" in res_bob.json()["detail"]
+    assert res_bob.status_code == 404
+    assert "not found" in res_bob.json()["detail"].lower()
 
-    # 4. Bob attempts to delete Alice's deep dive -> 403 Forbidden
+    # 4. Bob attempts to delete Alice's deep dive -> 404 Not Found
     res_bob_del = client.delete(f"/api/deepdives/{dd_id}")
-    assert res_bob_del.status_code == 403
+    assert res_bob_del.status_code == 404
+
 
     # 5. Admin views Alice's deep dive -> 200 OK
     admin_token = create_session_token(admin["id"], admin["username"], role="admin")
