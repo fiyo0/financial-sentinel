@@ -250,7 +250,7 @@ async def login_view(request: Request):
     user = get_current_user(request)
     if user:
         return RedirectResponse(url="/")
-    return templates.TemplateResponse("login.html", {"request": request, "config": config})
+    return templates.TemplateResponse(request=request, name="login.html", context={"config": config})
 
 
 def get_client_ip(request: Request) -> str:
