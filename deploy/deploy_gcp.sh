@@ -27,7 +27,7 @@ gcloud run deploy "$SERVICE_NAME" \
     --allow-unauthenticated \
     --max-instances=1 \
     --no-cpu-throttling \
-    --set-env-vars "PORT=8000,DASHBOARD_AUTH_ENABLED=true,TELEGRAM_ALLOWED_USERNAMES=forello0,SERVICE_URL=https://financial-sentinel-272533633552.us-central1.run.app,GEMINI_MODEL=gemini-3.8-flash,TELEGRAM_CHAT_ID=5251594125,GCS_DATA_BUCKET=financial-sentinel-data-507007,GCS_SYNC_ENABLED=true" \
+    --set-env-vars "DASHBOARD_AUTH_ENABLED=true,TELEGRAM_ALLOWED_USERNAMES=forello0,SERVICE_URL=https://financial-sentinel-272533633552.us-central1.run.app,GEMINI_MODEL=gemini-3.8-flash,TELEGRAM_CHAT_ID=5251594125,GCS_DATA_BUCKET=financial-sentinel-data-507007,GCS_SYNC_ENABLED=true" \
     --set-secrets "GEMINI_API_KEY=gemini-api-key:latest,TELEGRAM_BOT_TOKEN=telegram-bot-token:latest,DASHBOARD_PASSWORD=dashboard-password:latest,APP_SECRET_KEY=app-secret-key:latest,CRON_SECRET=cron-secret:latest" \
     --memory 1Gi \
     --cpu 1
