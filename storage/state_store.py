@@ -8,7 +8,7 @@ import os
 import logging
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
-from models import NewsItem, BriefingReport
+from models import NewsItem, BriefingReport, NewsCategory
 
 import threading
 
@@ -426,6 +426,51 @@ class StateStore:
                 return True
             except sqlite3.IntegrityError:
                 return False
+
+    def get_recent_news(self, hours: int = 24, limit: int = 50) -> List[NewsItem]:
+        """
+        Retrieves recently ingested news items within the specified lookback window,
+        sorted chronologically by published_at DESC.
+        """
+        cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+        items: List[NewsItem] = []
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, raw_hash, title, source, url, published_at, category, reliability_score, related_tickers
+                FROM ingested_news
+                WHERE published_at >= ?
+                ORDER BY published_at DESC
+                LIMIT ?
+            """, (cutoff, limit))
+            for row in cursor.fetchall():
+                try:
+                    pub_dt = datetime.fromisoformat(row[5])
+                except Exception:
+                    pub_dt = datetime.utcnow()
+                try:
+                    cat = NewsCategory(row[6])
+                except Exception:
+                    cat = NewsCategory.BREAKING
+                try:
+                    tickers = json.loads(row[8]) if row[8] else []
+                except Exception:
+                    tickers = []
+
+                items.append(NewsItem(
+                    id=row[0],
+                    raw_hash=row[1],
+                    title=row[2],
+                    source=row[3],
+                    url=row[4] or "",
+                    published_at=pub_dt,
+                    summary=row[2],
+                    category=cat,
+                    source_reliability_score=row[7] or 0.8,
+                    related_tickers=tickers,
+                    related_sectors=[]
+                ))
+        return items
 
     def save_briefing(self, briefing: BriefingReport, user_id: Optional[str] = None):
         target_user = user_id or briefing.user_id

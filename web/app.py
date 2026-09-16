@@ -908,6 +908,16 @@ async def api_get_earnings_calendar(user: Dict[str, Any] = Depends(require_user)
     }
 
 
+@app.get("/api/economic/calendar")
+async def api_get_economic_calendar(user: Dict[str, Any] = Depends(require_user)):
+    from analytics.economic_calendar import get_economic_calendar_context
+    ctx = get_economic_calendar_context()
+    return {
+        "status": "success",
+        "calendar": ctx
+    }
+
+
 @app.post("/api/analyze/{ticker}")
 @app.get("/api/analyze/{ticker}")
 async def api_analyze_ticker(ticker: str, user: Dict[str, Any] = Depends(require_user)):

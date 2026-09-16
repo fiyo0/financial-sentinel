@@ -298,6 +298,9 @@ class NewsIngestionAgent(BaseAgent):
         if new_items and self.use_llm and not live:
             new_items = self.enrich_items_with_gemini(new_items, api_key=api_key)
 
+        # Sort news items chronologically so freshest breaking news appears first
+        new_items.sort(key=lambda x: x.published_at, reverse=True)
+
         # Update in-memory TTL cache for live feeds
         if live and new_items and not custom_items:
             cache_key = ",".join(sorted([t.upper() for t in (portfolio_tickers or [])]))

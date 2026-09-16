@@ -94,7 +94,18 @@ class DailyMarketScheduler:
             self._mark_slot_executed(slot_key)
 
         market_overview = fetch_market_overview()
-        news_items = self.orchestrator.news_agent.ingest_all_feeds()
+        fresh_news = self.orchestrator.news_agent.ingest_all_feeds(force_fresh=True)
+        stored_news = self.orchestrator.state_store.get_recent_news(hours=24)
+        seen_hashes = set()
+        combined_news = []
+        for n in (fresh_news + stored_news):
+            h = getattr(n, "raw_hash", None) or n.id
+            if h not in seen_hashes:
+                seen_hashes.add(h)
+                combined_news.append(n)
+        combined_news.sort(key=lambda x: x.published_at if x.published_at else datetime.min, reverse=True)
+        news_items = combined_news
+
         movers = fetch_market_movers() if slot == "postmarket" else []
 
         # Single user on-demand generation
@@ -104,17 +115,17 @@ class DailyMarketScheduler:
             api_key = self.orchestrator.resolve_user_api_key(user_id)
 
             if slot == "premarket":
-                message = self.briefing_agent.generate_premarket_briefing(portfolio, market_overview, news_items, api_key=api_key)
+                message = self.briefing_agent.generate_premarket_briefing(portfolio, market_overview, news_items, api_key=api_key, as_of=now_pst)
             elif slot == "midmarket":
-                message = self.briefing_agent.generate_midmarket_briefing(portfolio, market_overview, news_items, api_key=api_key)
+                message = self.briefing_agent.generate_midmarket_briefing(portfolio, market_overview, news_items, api_key=api_key, as_of=now_pst)
             elif slot == "postmarket":
-                message = self.briefing_agent.generate_postmarket_briefing(portfolio, market_overview, news_items, movers, api_key=api_key)
+                message = self.briefing_agent.generate_postmarket_briefing(portfolio, market_overview, news_items, movers, api_key=api_key, as_of=now_pst)
             elif slot == "weekend":
-                message = self.briefing_agent.generate_weekend_eod_briefing(portfolio, market_overview, news_items, api_key=api_key)
+                message = self.briefing_agent.generate_weekend_eod_briefing(portfolio, market_overview, news_items, api_key=api_key, as_of=now_pst)
             elif slot == "earnings":
-                message = self.briefing_agent.generate_weekly_earnings_briefing(portfolio, news_items, api_key=api_key)
+                message = self.briefing_agent.generate_weekly_earnings_briefing(portfolio, news_items, api_key=api_key, as_of=now_pst)
             else:
-                message = self.briefing_agent.generate_premarket_briefing(portfolio, market_overview, news_items, api_key=api_key)
+                message = self.briefing_agent.generate_premarket_briefing(portfolio, market_overview, news_items, api_key=api_key, as_of=now_pst)
 
             briefing_id = f"briefing_{slot}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
             dispatched = []
@@ -168,17 +179,17 @@ class DailyMarketScheduler:
                 u_portfolio, _ = update_portfolio_live_prices(u_portfolio)
 
                 if slot == "premarket":
-                    u_msg = self.briefing_agent.generate_premarket_briefing(u_portfolio, market_overview, news_items, api_key=u_key)
+                    u_msg = self.briefing_agent.generate_premarket_briefing(u_portfolio, market_overview, news_items, api_key=u_key, as_of=now_pst)
                 elif slot == "midmarket":
-                    u_msg = self.briefing_agent.generate_midmarket_briefing(u_portfolio, market_overview, news_items, api_key=u_key)
+                    u_msg = self.briefing_agent.generate_midmarket_briefing(u_portfolio, market_overview, news_items, api_key=u_key, as_of=now_pst)
                 elif slot == "postmarket":
-                    u_msg = self.briefing_agent.generate_postmarket_briefing(u_portfolio, market_overview, news_items, movers, api_key=u_key)
+                    u_msg = self.briefing_agent.generate_postmarket_briefing(u_portfolio, market_overview, news_items, movers, api_key=u_key, as_of=now_pst)
                 elif slot == "weekend":
-                    u_msg = self.briefing_agent.generate_weekend_eod_briefing(u_portfolio, market_overview, news_items, api_key=u_key)
+                    u_msg = self.briefing_agent.generate_weekend_eod_briefing(u_portfolio, market_overview, news_items, api_key=u_key, as_of=now_pst)
                 elif slot == "earnings":
-                    u_msg = self.briefing_agent.generate_weekly_earnings_briefing(u_portfolio, news_items, api_key=u_key)
+                    u_msg = self.briefing_agent.generate_weekly_earnings_briefing(u_portfolio, news_items, api_key=u_key, as_of=now_pst)
                 else:
-                    u_msg = self.briefing_agent.generate_premarket_briefing(u_portfolio, market_overview, news_items, api_key=u_key)
+                    u_msg = self.briefing_agent.generate_premarket_briefing(u_portfolio, market_overview, news_items, api_key=u_key, as_of=now_pst)
 
 
                 last_generated_msg = u_msg

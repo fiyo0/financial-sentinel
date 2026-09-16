@@ -1,0 +1,196 @@
+"""
+Unit tests for temporal grounding and timestamped briefings in MarketBriefingAgent and StateStore.
+"""
+import pytest
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+from models import Portfolio, PortfolioHolding, NewsItem, NewsCategory
+from agents.market_briefing_agent import MarketBriefingAgent
+from storage.state_store import StateStore
+
+PST = ZoneInfo("America/Los_Angeles")
+EST = ZoneInfo("America/New_York")
+
+
+@pytest.fixture
+def sample_portfolio():
+    return Portfolio(
+        name="Test Portfolio",
+        cash=50000.0,
+        holdings=[
+            PortfolioHolding(
+                ticker="AMD",
+                name="Advanced Micro Devices",
+                shares=100,
+                avg_price=150.0,
+                current_price=160.0,
+                sector="Semiconductors",
+                daily_change_pct=2.1
+            )
+        ]
+    )
+
+
+def test_format_news_summary_relative_timestamps():
+    """Verify news formatting includes chronological ordering and relative time tags."""
+    agent = MarketBriefingAgent()
+    as_of = datetime(2026, 9, 16, 15, 0, tzinfo=PST)  # 6:00 PM EDT
+
+    # Create news items: 2 hours ago today, and 26 hours ago yesterday
+    news_today = NewsItem(
+        id="n_today",
+        title="Fed Hikes Interest Rates by 25 bps",
+        source="Federal Reserve Press",
+        url="https://federalreserve.gov/press",
+        published_at=datetime(2026, 9, 16, 14, 0, tzinfo=EST),  # 2:00 PM EDT today (4h ago)
+        summary="FOMC voted to raise the target range for the federal funds rate.",
+        category=NewsCategory.MACRO,
+        related_tickers=[],
+        related_sectors=["Financials"]
+    )
+    news_yesterday = NewsItem(
+        id="n_yesterday",
+        title="Coinbase Slips Ahead of Clarity Act",
+        source="Yahoo Finance",
+        url="https://finance.yahoo.com/coin",
+        published_at=datetime(2026, 9, 15, 13, 0, tzinfo=EST),  # Yesterday 1:00 PM EDT (29h ago)
+        summary="Crypto equities decline ahead of committee vote.",
+        category=NewsCategory.MACRO,
+        related_tickers=["COIN"],
+        related_sectors=["Financials"]
+    )
+
+    formatted = agent._format_news_summary([news_yesterday, news_today], as_of=as_of)
+
+    # 1. Newest article must appear first despite being passed second
+    lines = formatted.split("\n")
+    assert "Fed Hikes Interest Rates" in lines[0]
+    assert "Coinbase Slips" in lines[1]
+
+    # 2. Must contain relative age tags
+    assert "Today 02:00 PM EDT" in lines[0]
+    assert "4.0h ago" in lines[0]
+    assert "Yesterday Sep 15" in lines[1]
+
+
+def test_postmarket_prompt_temporal_grounding_september_16(sample_portfolio):
+    """
+    Simulates the September 16, 2026 3:00 PM PST Post-Market run.
+    Ensures prompt strictly conveys that the FOMC rate decision is COMPLETED today,
+    not happening tomorrow.
+    """
+    agent = MarketBriefingAgent()
+    as_of_pst = datetime(2026, 9, 16, 15, 0, tzinfo=PST)
+
+    captured_prompts = []
+    agent.query_llm_text = lambda prompt, **kwargs: (captured_prompts.append(prompt), "🌙 <b>POST-MARKET WRAP</b>")[1]
+
+    overview = {"indices": {"SPY": {"current_price": 550.0, "change_pct": -0.4}}}
+    movers = {"top_gainers": [{"ticker": "AMD", "change_pct": 2.1}], "top_losers": []}
+    news = [
+        NewsItem(
+            id="n1",
+            title="Fed decision completed",
+            source="WSJ",
+            url="https://wsj.com",
+            published_at=datetime(2026, 9, 16, 14, 5, tzinfo=EST),
+            summary="Fed policy statement released.",
+            category=NewsCategory.MACRO
+        )
+    ]
+
+    msg = agent.generate_postmarket_briefing(
+        portfolio=sample_portfolio,
+        market_overview=overview,
+        news_items=news,
+        market_movers=movers,
+        api_key="test_key",
+        as_of=as_of_pst
+    )
+
+    assert len(captured_prompts) == 1
+    prompt = captured_prompts[0]
+
+    # Temporal ground truth assertions
+    assert "Wednesday, September 16, 2026" in prompt
+    assert "03:00 PM PST / 06:00 PM EDT" in prompt
+    assert "Post-Market Closing Wrap" in prompt
+
+    # Economic calendar ground truth assertions
+    assert "[COMPLETED] Federal Reserve FOMC Interest Rate Decision" in prompt
+    assert "Concluded earlier today" in prompt
+    assert "DO NOT describe it as upcoming, happening tomorrow, or in the future" in prompt
+
+    # Tomorrow's focus ground truth assertions
+    assert "tomorrow's session (2026-09-17)" in prompt
+    assert "DO NOT describe events that occurred earlier today (such as completed Federal Reserve rate announcements" in prompt
+
+
+def test_premarket_prompt_temporal_grounding_september_16(sample_portfolio):
+    """
+    Simulates the September 16, 2026 6:30 AM PST Pre-Market run.
+    Ensures prompt conveys that the FOMC rate decision is upcoming later today (PENDING).
+    """
+    agent = MarketBriefingAgent()
+    as_of_pst = datetime(2026, 9, 16, 6, 30, tzinfo=PST)
+
+    captured_prompts = []
+    agent.query_llm_text = lambda prompt, **kwargs: (captured_prompts.append(prompt), "🌅 <b>PRE-MARKET BRIEF</b>")[1]
+
+    overview = {"indices": {}}
+    agent.generate_premarket_briefing(
+        portfolio=sample_portfolio,
+        market_overview=overview,
+        news_items=[],
+        api_key="test_key",
+        as_of=as_of_pst
+    )
+
+    assert len(captured_prompts) == 1
+    prompt = captured_prompts[0]
+
+    assert "Wednesday, September 16, 2026" in prompt
+    assert "06:30 AM PST / 09:30 AM EDT" in prompt
+    assert "[PENDING] Federal Reserve FOMC Interest Rate Decision" in prompt
+    assert "Upcoming today during the trading session" in prompt
+
+
+def test_state_store_get_recent_news(tmp_path):
+    """Verify get_recent_news retrieves news within the lookback window ordered by published_at DESC."""
+    db_file = str(tmp_path / "test_state.db")
+    store = StateStore(db_path=db_file)
+
+    now = datetime.utcnow()
+    item_new = NewsItem(
+        id="item_new",
+        title="Breaking: Tech Rally Continues",
+        source="Bloomberg",
+        url="https://bloomberg.com/tech",
+        published_at=now - timedelta(hours=1),
+        summary="Tech stocks advance.",
+        category=NewsCategory.BREAKING
+    )
+    item_old = NewsItem(
+        id="item_old",
+        title="Old News from 40 hours ago",
+        source="Reuters",
+        url="https://reuters.com/old",
+        published_at=now - timedelta(hours=40),
+        summary="Historical summary.",
+        category=NewsCategory.MACRO
+    )
+
+    store.save_news_item(item_new)
+    store.save_news_item(item_old)
+
+    # 24-hour lookback should retrieve only item_new
+    recent = store.get_recent_news(hours=24)
+    assert len(recent) == 1
+    assert recent[0].id == "item_new"
+    assert recent[0].title == "Breaking: Tech Rally Continues"
+
+    # 48-hour lookback should retrieve both, with item_new first
+    all_news = store.get_recent_news(hours=48)
+    assert len(all_news) == 2
+    assert all_news[0].id == "item_new"
+    assert all_news[1].id == "item_old"

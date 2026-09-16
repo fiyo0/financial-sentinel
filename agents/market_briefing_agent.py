@@ -3,9 +3,12 @@ Specialized Market & Portfolio Briefing Agent.
 Synthesizes broad market macro, pre/post-market earnings, sector rotations,
 and portfolio correlation into executive Telegram briefings.
 """
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Dict, Any, List, Optional
 from agents.base_agent import BaseAgent
 from models import Portfolio, NewsItem
+from analytics.economic_calendar import get_economic_calendar_context, format_economic_calendar_for_prompt
 
 
 BRIEFING_COMMUNICATION_RULES = """
@@ -18,6 +21,12 @@ COMMUNICATION & RECOMMENDATION DISCIPLINE:
    - Do not recommend random or speculative tickers.
    - Any highlighted opportunity must possess genuine fundamental merit: a clear competitive moat, high forward growth potential, or recent credible positive changes in institutional analyst ratings.
    - If market conditions are overextended or lack high-conviction risk/reward setups, advise patience or preserving dry powder rather than forcing low-quality picks.
+3. Strict Temporal Accuracy & Catalyst Timing:
+   - Ground all commentary strictly in TODAY'S calendar date and the exact current session time.
+   - Check the MACROECONOMIC & CENTRAL BANK CALENDAR GROUND TRUTH in the prompt.
+   - If a central bank or economic catalyst has status [COMPLETED], it CONCLUDED EARLIER TODAY. Analyze its outcome, market reaction, and day-end impact; NEVER refer to it as happening "tomorrow" or "upcoming".
+   - Only refer to an event as happening "tomorrow" if it is explicitly scheduled for tomorrow's date.
+   - Cross-reference news headlines against their relative age timestamps. Do not cite yesterday's preview speculation as today's market drivers.
 """
 
 
@@ -85,13 +94,39 @@ class MarketBriefingAgent(BaseAgent):
             lines.append(f"• {sym} ({d.get('name', sym)}): {price_str} ({sign}{chg:.2f}%)")
         return "\n".join(lines)
 
-    def _format_news_summary(self, news_items: List[NewsItem]) -> str:
+    def _format_news_summary(self, news_items: List[NewsItem], as_of: Optional[datetime] = None) -> str:
         if not news_items:
             return "No major breaking macro alerts."
-        return "\n".join([
-            f"- [{n.source}] {n.title}: {n.summary[:150]}"
-            for n in news_items[:12]
-        ])
+
+        ref_dt = as_of or datetime.now(ZoneInfo("America/Los_Angeles"))
+        if ref_dt.tzinfo is None:
+            ref_dt = ref_dt.replace(tzinfo=ZoneInfo("America/Los_Angeles"))
+        ref_et = ref_dt.astimezone(ZoneInfo("America/New_York"))
+
+        # Sort chronologically so newest breaking news is prioritized
+        sorted_items = sorted(news_items, key=lambda x: x.published_at if x.published_at else datetime.min, reverse=True)
+
+        lines = []
+        for n in sorted_items[:15]:
+            pub = n.published_at
+            if pub:
+                if pub.tzinfo is None:
+                    pub_aware = pub.replace(tzinfo=timezone.utc)
+                else:
+                    pub_aware = pub
+                pub_et = pub_aware.astimezone(ZoneInfo("America/New_York"))
+                age_h = max(0.0, (ref_et - pub_et).total_seconds() / 3600.0)
+                if pub_et.date() == ref_et.date():
+                    time_tag = f"Today {pub_et.strftime('%I:%M %p')} EDT ({age_h:.1f}h ago)"
+                elif (ref_et.date() - pub_et.date()).days == 1:
+                    time_tag = f"Yesterday {pub_et.strftime('%b %d, %I:%M %p')} EDT ({age_h:.1f}h ago)"
+                else:
+                    time_tag = f"{pub_et.strftime('%b %d, %I:%M %p')} EDT ({age_h:.1f}h ago)"
+            else:
+                time_tag = "Recent"
+
+            lines.append(f"- [{n.source} | {time_tag}] {n.title}: {n.summary[:150]}")
+        return "\n".join(lines)
 
     def _format_holdings_summary(self, portfolio: Portfolio) -> str:
         if not portfolio or not portfolio.holdings:
@@ -110,20 +145,37 @@ class MarketBriefingAgent(BaseAgent):
         portfolio: Portfolio,
         market_overview: Dict[str, Any],
         news_items: List[NewsItem],
-        api_key: Optional[str] = None
+        api_key: Optional[str] = None,
+        as_of: Optional[datetime] = None
     ) -> str:
         """
         6:30 AM PST Pre-Market Intelligence:
         Overnight global macro, futures, pre-market earnings, portfolio open impact & market-wide alpha ideas.
         """
+        ref_dt = as_of or datetime.now(ZoneInfo("America/Los_Angeles"))
+        if ref_dt.tzinfo is None:
+            ref_dt = ref_dt.replace(tzinfo=ZoneInfo("America/Los_Angeles"))
+        as_of_pst = ref_dt.astimezone(ZoneInfo("America/Los_Angeles"))
+        as_of_et = ref_dt.astimezone(ZoneInfo("America/New_York"))
+
+        economic_ctx = get_economic_calendar_context(as_of_pst)
+        economic_str = format_economic_calendar_for_prompt(economic_ctx)
+
         movers_context = self._extract_significant_portfolio_movers(portfolio, news_items, threshold_pct=1.5)
         indices_str = self._format_indices_summary(market_overview)
-        news_str = self._format_news_summary(news_items)
+        news_str = self._format_news_summary(news_items, as_of=as_of_pst)
 
         prompt = f"""
         You are a seasoned Chief Investment Officer delivering the 6:30 AM PST PRE-MARKET BRIEFING.
 
         {BRIEFING_COMMUNICATION_RULES}
+
+        CURRENT TIME & SESSION GROUND TRUTH:
+        • Calendar Date: {as_of_pst.strftime('%A, %B %d, %Y')}
+        • Current Time: {as_of_pst.strftime('%I:%M %p')} PST / {as_of_et.strftime('%I:%M %p')} EDT
+        • Session Phase: Pre-Market Opening (U.S. cash equity markets open at 6:30 AM PST / 9:30 AM EDT)
+
+        {economic_str}
 
         BROAD BENCHMARKS & FUTURES:
         {indices_str}
@@ -176,20 +228,37 @@ class MarketBriefingAgent(BaseAgent):
         portfolio: Portfolio,
         market_overview: Dict[str, Any],
         news_items: List[NewsItem],
-        api_key: Optional[str] = None
+        api_key: Optional[str] = None,
+        as_of: Optional[datetime] = None
     ) -> str:
         """
         10:00 AM PST Mid-Market Pulse:
         Midday momentum, Fed statements, economic releases, sector rotations, and emerging breakout opportunities.
         """
+        ref_dt = as_of or datetime.now(ZoneInfo("America/Los_Angeles"))
+        if ref_dt.tzinfo is None:
+            ref_dt = ref_dt.replace(tzinfo=ZoneInfo("America/Los_Angeles"))
+        as_of_pst = ref_dt.astimezone(ZoneInfo("America/Los_Angeles"))
+        as_of_et = ref_dt.astimezone(ZoneInfo("America/New_York"))
+
+        economic_ctx = get_economic_calendar_context(as_of_pst)
+        economic_str = format_economic_calendar_for_prompt(economic_ctx)
+
         movers_context = self._extract_significant_portfolio_movers(portfolio, news_items, threshold_pct=1.5)
         indices_str = self._format_indices_summary(market_overview)
-        news_str = self._format_news_summary(news_items)
+        news_str = self._format_news_summary(news_items, as_of=as_of_pst)
 
         prompt = f"""
         You are a seasoned Chief Investment Officer delivering the 10:00 AM PST MID-MARKET PULSE.
 
         {BRIEFING_COMMUNICATION_RULES}
+
+        CURRENT TIME & SESSION GROUND TRUTH:
+        • Calendar Date: {as_of_pst.strftime('%A, %B %d, %Y')}
+        • Current Time: {as_of_pst.strftime('%I:%M %p')} PST / {as_of_et.strftime('%I:%M %p')} EDT
+        • Session Phase: Mid-Day Trading (Morning cash session complete; entering midday positioning)
+
+        {economic_str}
 
         BENCHMARK INDICES & INTRADAY BREADTH:
         {indices_str}
@@ -243,15 +312,25 @@ class MarketBriefingAgent(BaseAgent):
         market_overview: Dict[str, Any],
         news_items: List[NewsItem],
         market_movers: Optional[Dict[str, Any]] = None,
-        api_key: Optional[str] = None
+        api_key: Optional[str] = None,
+        as_of: Optional[datetime] = None
     ) -> str:
         """
         3:00 PM PST Post-Market Wrap:
         Closing bell recap, after-hours earnings call takeaways, today's top winners/losers & hot asymmetric plays.
         """
+        ref_dt = as_of or datetime.now(ZoneInfo("America/Los_Angeles"))
+        if ref_dt.tzinfo is None:
+            ref_dt = ref_dt.replace(tzinfo=ZoneInfo("America/Los_Angeles"))
+        as_of_pst = ref_dt.astimezone(ZoneInfo("America/Los_Angeles"))
+        as_of_et = ref_dt.astimezone(ZoneInfo("America/New_York"))
+
+        economic_ctx = get_economic_calendar_context(as_of_pst)
+        economic_str = format_economic_calendar_for_prompt(economic_ctx)
+
         movers_context = self._extract_significant_portfolio_movers(portfolio, news_items, threshold_pct=1.5)
         indices_str = self._format_indices_summary(market_overview)
-        news_str = self._format_news_summary(news_items)
+        news_str = self._format_news_summary(news_items, as_of=as_of_pst)
 
         movers_str = "Top Market Movers:\n"
         if market_movers:
@@ -268,6 +347,13 @@ class MarketBriefingAgent(BaseAgent):
         You are a seasoned Chief Investment Officer delivering the 3:00 PM PST POST-MARKET WRAP-UP.
 
         {BRIEFING_COMMUNICATION_RULES}
+
+        CURRENT TIME & SESSION GROUND TRUTH:
+        • Calendar Date: {as_of_pst.strftime('%A, %B %d, %Y')}
+        • Current Time: {as_of_pst.strftime('%I:%M %p')} PST / {as_of_et.strftime('%I:%M %p')} EDT
+        • Session Phase: Post-Market Closing Wrap (Regular trading ended at 1:00 PM PST / 4:00 PM EDT)
+
+        {economic_str}
 
         CLOSING BENCHMARK PERFORMANCE:
         {indices_str}
@@ -288,7 +374,7 @@ class MarketBriefingAgent(BaseAgent):
         🌙 <b>POST-MARKET WRAP & DAY-END RECAP (3:00 PM PST)</b>
 
         🏁 <b>Closing Bell Summary:</b>
-        - Daily closing index results and what dictated today's tape.
+        - Daily closing index results and what dictated today's tape (including any macro/central bank catalysts that concluded earlier today).
 
         🏆 <b>Notable Market Movers:</b>
         - Recap the key movers of the day across the market, explaining the drivers behind their moves (earnings beat/miss, forward guidance, analyst revisions, or M&A).
@@ -297,7 +383,8 @@ class MarketBriefingAgent(BaseAgent):
         - If specific holdings experienced significant movement (>=1.5%) or earnings releases, detail ONLY those movers. If all holdings were steady, provide a concise 1-line reassurance.
 
         🔮 <b>After-Hours Earnings & Tomorrow's Focus:</b>
-        - Key after-hours earnings calls to note and 1 to 2 high-quality opportunity ideas to research for tomorrow's session. Exercise critical judgment—focus on companies with proven business moats, secular growth potential, or credible positive analyst revisions.
+        - Key after-hours earnings calls to note and 1 to 2 high-quality opportunity ideas to research for tomorrow's session ({economic_ctx.get('tomorrow_date')}). Exercise critical judgment—focus on companies with proven business moats, secular growth potential, or credible positive analyst revisions.
+        - CRITICAL RULE: DO NOT describe events that occurred earlier today (such as completed Federal Reserve rate announcements or today's earnings) as happening tomorrow.
 
         Keep it comprehensive, institutional, objective, and beautifully styled with HTML tags. Avoid unwarranted puffery, hyperbole, or false profundity.
         """
@@ -322,19 +409,36 @@ class MarketBriefingAgent(BaseAgent):
         portfolio: Portfolio,
         market_overview: Dict[str, Any],
         news_items: List[NewsItem],
-        api_key: Optional[str] = None
+        api_key: Optional[str] = None,
+        as_of: Optional[datetime] = None
     ) -> str:
         """
         9:00 PM PST Weekend EOD Wrap (Sat & Sun):
         Weekend macro/geopolitics, Sunday futures open sentiment, and the week ahead earnings/economic calendar.
         """
+        ref_dt = as_of or datetime.now(ZoneInfo("America/Los_Angeles"))
+        if ref_dt.tzinfo is None:
+            ref_dt = ref_dt.replace(tzinfo=ZoneInfo("America/Los_Angeles"))
+        as_of_pst = ref_dt.astimezone(ZoneInfo("America/Los_Angeles"))
+        as_of_et = ref_dt.astimezone(ZoneInfo("America/New_York"))
+
+        economic_ctx = get_economic_calendar_context(as_of_pst)
+        economic_str = format_economic_calendar_for_prompt(economic_ctx)
+
         movers_context = self._extract_significant_portfolio_movers(portfolio, news_items, threshold_pct=1.5)
-        news_str = self._format_news_summary(news_items)
+        news_str = self._format_news_summary(news_items, as_of=as_of_pst)
 
         prompt = f"""
         You are a seasoned Chief Investment Officer delivering the 9:00 PM PST WEEKEND MACRO & WEEK-AHEAD BRIEFING.
 
         {BRIEFING_COMMUNICATION_RULES}
+
+        CURRENT TIME & SESSION GROUND TRUTH:
+        • Calendar Date: {as_of_pst.strftime('%A, %B %d, %Y')}
+        • Current Time: {as_of_pst.strftime('%I:%M %p')} PST / {as_of_et.strftime('%I:%M %p')} EDT
+        • Session Phase: Weekend Transition / Week-Ahead Setup
+
+        {economic_str}
 
         WEEKEND GLOBAL NEWS & MACRO DEVELOPMENTS:
         {news_str}
@@ -384,7 +488,8 @@ class MarketBriefingAgent(BaseAgent):
         self,
         portfolio: Portfolio,
         news_items: List[NewsItem],
-        api_key: Optional[str] = None
+        api_key: Optional[str] = None,
+        as_of: Optional[datetime] = None
     ) -> str:
         """
         Next 7 Days Corporate Earnings Calendar & Sentiment Analysis:
@@ -395,7 +500,10 @@ class MarketBriefingAgent(BaseAgent):
         from zoneinfo import ZoneInfo
         from analytics.earnings_calendar import fetch_7day_earnings_schedule
 
-        now_pst = datetime.now(ZoneInfo("America/Los_Angeles"))
+        ref_dt = as_of or datetime.now(ZoneInfo("America/Los_Angeles"))
+        if ref_dt.tzinfo is None:
+            ref_dt = ref_dt.replace(tzinfo=ZoneInfo("America/Los_Angeles"))
+        now_pst = ref_dt.astimezone(ZoneInfo("America/Los_Angeles"))
         end_date = now_pst + timedelta(days=7)
         portfolio_tickers = [h.ticker for h in portfolio.holdings]
 
@@ -415,7 +523,7 @@ class MarketBriefingAgent(BaseAgent):
 
         verified_schedule_str = "\n\n".join(schedule_text_blocks) if schedule_text_blocks else "No major corporate earnings scheduled this week."
         holdings_str = self._format_holdings_summary(portfolio)
-        news_str = self._format_news_summary(news_items)
+        news_str = self._format_news_summary(news_items, as_of=now_pst)
 
         prompt = f"""
         You are an elite Wall Street Equity Research Director delivering the UPCOMING 7-DAY CORPORATE EARNINGS CALENDAR & SENTIMENT REPORT.
