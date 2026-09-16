@@ -815,15 +815,34 @@ async function loadEarningsCalendar() {
 /**
  * Deterministic Macroeconomic & Central Bank Calendar Loader
  */
-async function loadEconomicCalendar() {
+async function loadEconomicCalendar(isManual = false) {
     const container = document.getElementById('economic-calendar-container');
     if (!container) return;
 
     const btn = document.getElementById('btn-refresh-economic');
-    if (btn) btn.innerHTML = '<span class="pulse-subtle">🔄 Syncing Macro Ground Truth...</span>';
+    const btnIcon = document.getElementById('btn-refresh-economic-icon');
+    const btnText = document.getElementById('btn-refresh-economic-text');
+    const lastUpdated = document.getElementById('macro-calendar-last-updated');
+
+    if (btn) {
+        btn.disabled = true;
+        if (btnIcon) btnIcon.classList.add('animate-spin');
+        if (btnText) btnText.textContent = isManual ? 'Syncing...' : 'Updating...';
+    }
+
+    if (isManual) {
+        container.style.opacity = '0.6';
+    }
+
+    const minDelay = isManual ? 400 : 0;
 
     try {
-        const res = await fetch('/api/economic/calendar');
+        const fetchPromise = fetch(`/api/economic/calendar?t=${Date.now()}`, { cache: 'no-store' });
+        const [res] = await Promise.all([
+            fetchPromise,
+            new Promise(resolve => setTimeout(resolve, minDelay))
+        ]);
+
         const data = await res.json();
 
         if (res.ok && data.calendar) {
@@ -866,7 +885,7 @@ async function loadEconomicCalendar() {
                         ${todayEvents.length > 0 ? `
                             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                                 ${todayEvents.map(ev => `
-                                    <div class="p-3 bg-dark-900/90 border ${ev.status === 'COMPLETED' ? 'border-emerald-500/30 bg-emerald-950/10' : 'border-indigo-500/40 bg-indigo-950/10'} rounded-xl space-y-2">
+                                    <div class="p-3 bg-dark-900/90 border ${ev.status === 'COMPLETED' ? 'border-emerald-500/30 bg-emerald-950/10' : 'border-indigo-500/40 bg-indigo-950/10'} rounded-xl space-y-2 transition hover:border-slate-700">
                                         <div class="flex items-start justify-between gap-2">
                                             <div class="space-y-1">
                                                 <div class="flex items-center space-x-1.5">
@@ -960,13 +979,42 @@ async function loadEconomicCalendar() {
                     </div>
                 </div>
             `;
+
+            // Update timestamp
+            const nowTime = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+            if (lastUpdated) {
+                lastUpdated.innerHTML = `<span class="text-emerald-400">●</span> Synced ${nowTime}`;
+                lastUpdated.classList.remove('hidden');
+            }
+
+            if (isManual) {
+                if (typeof showBanner === 'function') {
+                    showBanner(`✅ Macroeconomic Calendar refreshed at ${nowTime}. All catalysts synchronized.`);
+                }
+                if (btnIcon) {
+                    btnIcon.classList.remove('animate-spin');
+                    btnIcon.textContent = '✅';
+                }
+                if (btnText) btnText.textContent = 'Synced!';
+            }
         } else {
             container.innerHTML = '<div class="p-4 bg-dark-950 border border-slate-800 rounded-xl text-xs text-slate-400">No macroeconomic events found.</div>';
         }
     } catch (err) {
         container.innerHTML = `<div class="p-4 bg-rose-950/30 border border-rose-800 rounded-xl text-xs text-rose-400">Error loading macroeconomic calendar: ${esc(err.message)}</div>`;
+        if (isManual && typeof showBanner === 'function') {
+            showBanner(`❌ Error refreshing macro calendar: ${err.message}`, true);
+        }
     } finally {
-        if (btn) btn.innerHTML = '<span>🔄 Refresh Macro Calendar</span>';
+        container.style.opacity = '1';
+        setTimeout(() => {
+            if (btn) btn.disabled = false;
+            if (btnIcon) {
+                btnIcon.classList.remove('animate-spin');
+                btnIcon.textContent = '🔄';
+            }
+            if (btnText) btnText.textContent = 'Refresh Macro Calendar';
+        }, isManual ? 1200 : 0);
     }
 }
 
