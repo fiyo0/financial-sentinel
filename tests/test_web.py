@@ -49,7 +49,7 @@ def test_dashboard_authenticated(client):
     assert resp.status_code == 200
     assert "Financial Sentinel" in resp.text
     assert "Portfolio & Risk" in resp.text
-    assert "Earnings & Events" in resp.text
+    assert "Earnings & Macro Calendar" in resp.text
 
 
 def test_api_earnings_calendar(client, monkeypatch):
@@ -80,6 +80,17 @@ def test_api_earnings_calendar(client, monkeypatch):
     data = resp.json()
     assert "schedule" in data
     assert len(data["schedule"]) > 0
+
+
+def test_api_economic_calendar(client):
+    headers, cookies = get_auth_context()
+    resp = client.get("/api/economic/calendar", headers=headers, cookies=cookies)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "success"
+    assert "calendar" in data
+    assert "today_events" in data["calendar"]
+    assert "upcoming_events_7d" in data["calendar"]
 
 
 def test_api_portfolio_cash_update(client):

@@ -41,6 +41,7 @@ function switchTab(tabId, updateUrl = true) {
     // Lazy load tab data if required
     if (tabId === 'tab-earnings') {
         if (typeof loadEarningsCalendar === 'function') loadEarningsCalendar();
+        if (typeof loadEconomicCalendar === 'function') loadEconomicCalendar();
     } else if (tabId === 'tab-briefings') {
         if (typeof loadMarketBriefings === 'function') loadMarketBriefings();
     } else if (tabId === 'tab-scans') {

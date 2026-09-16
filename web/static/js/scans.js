@@ -813,6 +813,164 @@ async function loadEarningsCalendar() {
 }
 
 /**
+ * Deterministic Macroeconomic & Central Bank Calendar Loader
+ */
+async function loadEconomicCalendar() {
+    const container = document.getElementById('economic-calendar-container');
+    if (!container) return;
+
+    const btn = document.getElementById('btn-refresh-economic');
+    if (btn) btn.innerHTML = '<span class="pulse-subtle">🔄 Syncing Macro Ground Truth...</span>';
+
+    try {
+        const res = await fetch('/api/economic/calendar');
+        const data = await res.json();
+
+        if (res.ok && data.calendar) {
+            const cal = data.calendar;
+            const todayEvents = cal.today_events || [];
+            const tomorrowEvents = cal.tomorrow_events || [];
+            const upcomingEvents = cal.upcoming_events_7d || [];
+
+            const renderStatusBadge = (status) => {
+                if (status === 'COMPLETED') {
+                    return '<span class="px-2 py-0.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 rounded-full text-[10px] font-mono font-bold flex items-center space-x-1"><span>✅</span><span>COMPLETED</span></span>';
+                }
+                if (status === 'IMMINENT') {
+                    return '<span class="px-2 py-0.5 bg-amber-500/20 text-amber-300 border border-amber-500/40 rounded-full text-[10px] font-mono font-bold flex items-center space-x-1 animate-pulse"><span>⏳</span><span>IMMINENT</span></span>';
+                }
+                if (status === 'TOMORROW') {
+                    return '<span class="px-2 py-0.5 bg-blue-500/10 text-blue-400 border border-blue-500/30 rounded-full text-[10px] font-mono font-bold">TOMORROW</span>';
+                }
+                return '<span class="px-2 py-0.5 bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 rounded-full text-[10px] font-mono font-bold">SCHEDULED</span>';
+            };
+
+            const renderCategoryBadge = (cat, importance) => {
+                const isCrit = importance === 'CRITICAL';
+                return `<span class="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold ${isCrit ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40' : 'bg-slate-800 text-slate-300 border border-slate-700'}">${cat}</span>`;
+            };
+
+            container.innerHTML = `
+                <div class="space-y-4 w-full">
+                    <!-- Section 1: Today's Macro Catalysts -->
+                    <div class="p-4 bg-dark-950 border border-slate-800/90 rounded-2xl space-y-3 shadow-md">
+                        <div class="flex items-center justify-between border-b border-slate-800/80 pb-2">
+                            <div class="font-bold text-sm text-indigo-400 flex items-center space-x-2">
+                                <span>🏛️</span>
+                                <span>Today's Catalysts (${cal.today_date})</span>
+                            </div>
+                            <span class="text-[10px] font-mono text-slate-400 bg-dark-900 px-2 py-0.5 rounded border border-slate-800">
+                                ${todayEvents.length} Events Tracked Today
+                            </span>
+                        </div>
+                        ${todayEvents.length > 0 ? `
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                ${todayEvents.map(ev => `
+                                    <div class="p-3 bg-dark-900/90 border ${ev.status === 'COMPLETED' ? 'border-emerald-500/30 bg-emerald-950/10' : 'border-indigo-500/40 bg-indigo-950/10'} rounded-xl space-y-2">
+                                        <div class="flex items-start justify-between gap-2">
+                                            <div class="space-y-1">
+                                                <div class="flex items-center space-x-1.5">
+                                                    ${renderCategoryBadge(ev.category, ev.importance)}
+                                                    <span class="text-xs font-bold text-slate-100">${esc(ev.name)}</span>
+                                                </div>
+                                                <div class="text-[11px] text-slate-400 font-mono flex items-center space-x-1.5">
+                                                    <span>🕒 ${esc(ev.time_display)}</span>
+                                                </div>
+                                            </div>
+                                            <div>
+                                                ${renderStatusBadge(ev.status)}
+                                            </div>
+                                        </div>
+                                        <div class="text-[11px] text-slate-300 bg-dark-950/60 p-2 rounded-lg border border-slate-800/60 leading-relaxed">
+                                            ${esc(ev.status_desc)}
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        ` : `
+                            <div class="text-slate-500 text-xs italic py-2">No tier-1 macroeconomic releases scheduled for today (${cal.today_date}).</div>
+                        `}
+                    </div>
+
+                    <!-- Section 2: Tomorrow & Upcoming 7-Day Releases -->
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                        <!-- Tomorrow -->
+                        <div class="p-4 bg-dark-950 border border-slate-800/90 rounded-2xl space-y-3 shadow-md">
+                            <div class="flex items-center justify-between border-b border-slate-800/80 pb-2">
+                                <div class="font-bold text-sm text-blue-400 flex items-center space-x-2">
+                                    <span>🌅</span>
+                                    <span>Tomorrow's Focus (${cal.tomorrow_date})</span>
+                                </div>
+                                <span class="text-[10px] font-mono text-slate-400 bg-dark-900 px-2 py-0.5 rounded border border-slate-800">
+                                    ${tomorrowEvents.length} Releases
+                                </span>
+                            </div>
+                            ${tomorrowEvents.length > 0 ? `
+                                <div class="space-y-2">
+                                    ${tomorrowEvents.map(ev => `
+                                        <div class="p-2.5 bg-dark-900/90 border border-slate-800/80 rounded-xl flex items-center justify-between text-xs">
+                                            <div class="space-y-0.5">
+                                                <div class="flex items-center space-x-1.5">
+                                                    ${renderCategoryBadge(ev.category, ev.importance)}
+                                                    <span class="font-bold text-slate-200">${esc(ev.name)}</span>
+                                                </div>
+                                                <div class="text-[10px] text-slate-400 font-mono">${esc(ev.time_display)}</div>
+                                            </div>
+                                            ${renderStatusBadge('TOMORROW')}
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            ` : `
+                                <div class="text-slate-500 text-xs italic py-2">No major macroeconomic releases scheduled for tomorrow (${cal.tomorrow_date}).</div>
+                            `}
+                        </div>
+
+                        <!-- Next 7 Days -->
+                        <div class="p-4 bg-dark-950 border border-slate-800/90 rounded-2xl space-y-3 shadow-md">
+                            <div class="flex items-center justify-between border-b border-slate-800/80 pb-2">
+                                <div class="font-bold text-sm text-cyan-400 flex items-center space-x-2">
+                                    <span>📆</span>
+                                    <span>Upcoming 7-Day Macro Horizon</span>
+                                </div>
+                                <span class="text-[10px] font-mono text-slate-400 bg-dark-900 px-2 py-0.5 rounded border border-slate-800">
+                                    ${upcomingEvents.length} Key Catalysts
+                                </span>
+                            </div>
+                            ${upcomingEvents.length > 0 ? `
+                                <div class="space-y-2">
+                                    ${upcomingEvents.map(ev => `
+                                        <div class="p-2.5 bg-dark-900/90 border border-slate-800/80 rounded-xl flex items-center justify-between text-xs">
+                                            <div class="space-y-0.5">
+                                                <div class="flex items-center space-x-1.5">
+                                                    ${renderCategoryBadge(ev.category, ev.importance)}
+                                                    <span class="font-bold text-slate-200">${esc(ev.name)}</span>
+                                                </div>
+                                                <div class="text-[10px] text-slate-400 font-mono">${esc(ev.time_display)}</div>
+                                            </div>
+                                            <span class="px-2 py-0.5 bg-slate-800 text-slate-300 border border-slate-700 rounded text-[10px] font-mono">
+                                                in ${ev.days_away}d
+                                            </span>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            ` : `
+                                <div class="text-slate-500 text-xs italic py-2">No upcoming major catalysts within the 7-day window.</div>
+                            `}
+                        </div>
+                    </div>
+                </div>
+            `;
+        } else {
+            container.innerHTML = '<div class="p-4 bg-dark-950 border border-slate-800 rounded-xl text-xs text-slate-400">No macroeconomic events found.</div>';
+        }
+    } catch (err) {
+        container.innerHTML = `<div class="p-4 bg-rose-950/30 border border-rose-800 rounded-xl text-xs text-rose-400">Error loading macroeconomic calendar: ${esc(err.message)}</div>`;
+    } finally {
+        if (btn) btn.innerHTML = '<span>🔄 Refresh Macro Calendar</span>';
+    }
+}
+
+/**
  * Market Intelligence Briefings Archive & Reader
  */
 function formatBriefingTimestamp(isoStr, includeDate = true) {
@@ -1105,6 +1263,7 @@ window.sendFeedback = sendFeedback;
 window.sendQuickChat = sendQuickChat;
 window.handleChatSubmit = handleChatSubmit;
 window.loadEarningsCalendar = loadEarningsCalendar;
+window.loadEconomicCalendar = loadEconomicCalendar;
 window.formatBriefingTimestamp = formatBriefingTimestamp;
 window.formatFullBriefingTimestamp = formatFullBriefingTimestamp;
 window.loadMarketBriefings = loadMarketBriefings;
