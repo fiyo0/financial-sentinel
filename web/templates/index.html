@@ -868,23 +868,74 @@
 
             <!-- 2. Deterministic Macroeconomic & Central Bank Calendar (Bottom of Tab) -->
             <div class="bg-dark-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4 w-full">
-                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
+                <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-slate-800 pb-3">
                     <div>
-                        <div class="flex items-center space-x-2">
+                        <div class="flex flex-wrap items-center gap-2">
                             <span class="text-lg">🏛️</span>
-                            <h3 class="text-base font-bold text-white">Deterministic Macroeconomic & Central Bank Calendar</h3>
-                            <span class="px-2 py-0.5 bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 rounded-full text-[10px] font-mono font-semibold">Ground Truth Engine</span>
+                            <h3 class="text-base font-bold text-white">Live Macroeconomic & Catalytic Calendar</h3>
+                            <span class="px-2 py-0.5 bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 rounded-full text-[10px] font-mono font-semibold">Live Sync & Ground Truth</span>
+                            <span class="px-2 py-0.5 bg-amber-500/10 text-amber-300 border border-amber-500/20 rounded-full text-[10px] font-mono font-semibold">⚡ Fed Catalysts</span>
                         </div>
-                        <p class="text-xs text-slate-400 mt-0.5">Federal Reserve FOMC rate decisions, press conferences, CPI/PPI releases, and labor data with real-time completion tracking</p>
+                        <p class="text-xs text-slate-400 mt-0.5">Federal Reserve FOMC rate decisions, press conferences, CPI/PPI releases, and labor catalysts with live iCalendar sync</p>
                     </div>
-                    <div class="flex items-center space-x-3 self-start sm:self-auto">
+                    <div class="flex flex-wrap items-center gap-2.5 self-start lg:self-auto">
+                        <!-- Catalytic Filter Toggle -->
+                        <div class="inline-flex rounded-lg p-0.5 bg-dark-950 border border-slate-800 text-[11px] font-mono">
+                            <button id="btn-filter-catalytic" onclick="setEconomicCalendarFilter(true)" class="px-2.5 py-1 rounded-md text-amber-300 bg-amber-500/10 border border-amber-500/20 font-semibold transition">
+                                ⚡ Catalytic Focus
+                            </button>
+                            <button id="btn-filter-all" onclick="setEconomicCalendarFilter(false)" class="px-2.5 py-1 rounded-md text-slate-400 hover:text-slate-200 transition">
+                                All Releases
+                            </button>
+                        </div>
+
+                        <!-- Live Calendar Sync Dropdown -->
+                        <div class="relative inline-block text-left" id="calendar-sync-dropdown-wrapper">
+                            <button onclick="toggleCalendarSyncMenu(event)" id="btn-calendar-sync" class="px-3 py-1.5 bg-indigo-950/60 hover:bg-indigo-900/80 text-indigo-200 rounded-lg border border-indigo-700/50 text-xs font-semibold flex items-center space-x-1.5 transition active:scale-95 shadow-sm">
+                                <span>📅</span>
+                                <span>Live Sync</span>
+                                <span class="text-[10px] text-indigo-400">▼</span>
+                            </button>
+                            <div id="calendar-sync-menu" class="hidden absolute right-0 mt-2 w-72 bg-dark-950 border border-slate-800 rounded-xl shadow-2xl p-2.5 z-50 space-y-1.5 backdrop-blur-md">
+                                <div class="px-2 py-1 border-b border-slate-800/80">
+                                    <div class="text-[11px] font-bold text-slate-200 flex items-center space-x-1.5">
+                                        <span>⚡</span>
+                                        <span>Subscribe to Live Macro Calendar</span>
+                                    </div>
+                                    <p class="text-[10px] text-slate-400 mt-0.5">Syncs Fed rate decisions & tier-1 catalysts with pre-event trading alarms.</p>
+                                </div>
+                                <button onclick="subscribeAppleCalendar()" class="w-full text-left px-2.5 py-2 hover:bg-slate-900 rounded-lg text-xs text-slate-200 flex items-center space-x-2.5 transition">
+                                    <span class="text-base">🍏</span>
+                                    <div>
+                                        <div class="font-medium text-slate-100">Apple Calendar / Mac / iOS</div>
+                                        <div class="text-[10px] text-slate-400">One-click webcal:// direct subscription</div>
+                                    </div>
+                                </button>
+                                <button onclick="subscribeGoogleCalendar()" class="w-full text-left px-2.5 py-2 hover:bg-slate-900 rounded-lg text-xs text-slate-200 flex items-center space-x-2.5 transition">
+                                    <span class="text-base">📅</span>
+                                    <div>
+                                        <div class="font-medium text-slate-100">Google Calendar</div>
+                                        <div class="text-[10px] text-slate-400">Subscribe via Google Calendar Web</div>
+                                    </div>
+                                </button>
+                                <button onclick="copyIcsFeedUrl()" id="btn-copy-ics" class="w-full text-left px-2.5 py-2 hover:bg-slate-900 rounded-lg text-xs text-slate-200 flex items-center space-x-2.5 transition">
+                                    <span class="text-base">📋</span>
+                                    <div>
+                                        <div class="font-medium text-slate-100" id="btn-copy-ics-text">Copy .ics Feed URL</div>
+                                        <div class="text-[10px] text-slate-400">RFC 5545 feed URL for Outlook / Thunderbird</div>
+                                    </div>
+                                </button>
+                            </div>
+                        </div>
+
                         <span id="macro-calendar-last-updated" class="text-[11px] font-mono text-slate-400 hidden sm:inline"></span>
                         <button onclick="loadEconomicCalendar(true)" id="btn-refresh-economic" class="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg border border-slate-700 text-xs font-semibold flex items-center space-x-1.5 transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed">
                             <span id="btn-refresh-economic-icon" class="inline-block transition-transform">🔄</span>
-                            <span id="btn-refresh-economic-text">Refresh Macro Calendar</span>
+                            <span id="btn-refresh-economic-text">Refresh</span>
                         </button>
                     </div>
                 </div>
+
 
                 <div id="economic-calendar-container" class="space-y-4 w-full">
                     <div class="p-6 bg-dark-950 border border-slate-800/80 rounded-xl text-xs text-slate-400 flex items-center justify-center space-x-2">

@@ -91,6 +91,44 @@ def test_api_economic_calendar(client):
     assert "calendar" in data
     assert "today_events" in data["calendar"]
     assert "upcoming_events_7d" in data["calendar"]
+    assert "feed_urls" in data["calendar"]
+    assert data["calendar"]["feed_urls"]["ics"] == "/api/economic/calendar.ics"
+    assert "stats" in data["calendar"]
+
+    # Test catalytic filter
+    resp_cat = client.get("/api/economic/calendar?catalytic_only=true", headers=headers, cookies=cookies)
+    assert resp_cat.status_code == 200
+    data_cat = resp_cat.json()
+    assert data_cat["calendar"]["catalytic_only"] is True
+
+
+def test_api_economic_calendar_ics_crawler_access(client):
+    """
+    Verify /api/economic/calendar.ics serves valid RFC 5545 calendar data
+    to external crawlers (Google Calendar, Apple Calendar, Outlook) without
+    requiring session cookies or browser authentication headers.
+    """
+    # 1. Default request (unauthenticated crawler simulation)
+    resp = client.get("/api/economic/calendar.ics")
+    assert resp.status_code == 200
+    assert "text/calendar" in resp.headers.get("content-type", "")
+    assert "financial_sentinel_macro.ics" in resp.headers.get("content-disposition", "")
+    assert "max-age=1800" in resp.headers.get("cache-control", "")
+
+    body = resp.content.decode("utf-8")
+    assert body.startswith("BEGIN:VCALENDAR\r\n")
+    assert body.endswith("END:VCALENDAR\r\n")
+    assert "X-WR-CALNAME:Financial Sentinel Macro Catalysts\r\n" in body
+    assert "UID:macro-" in body
+    assert "BEGIN:VALARM\r\n" in body
+    assert "TRIGGER:-PT15M\r\n" in body
+
+    # 2. Catalytic only query param
+    resp_all = client.get("/api/economic/calendar.ics?catalytic_only=false")
+    assert resp_all.status_code == 200
+    body_all = resp_all.content.decode("utf-8")
+    assert "Producer Price Index" in body_all
+
 
 
 def test_api_portfolio_cash_update(client):

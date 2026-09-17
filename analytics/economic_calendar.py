@@ -1,19 +1,30 @@
 """
-analytics/economic_calendar.py - Deterministic Macroeconomic & Central Bank Calendar Engine.
+analytics/economic_calendar.py - Deterministic & Live Macroeconomic / Central Bank Calendar Suite.
 Tracks scheduled Federal Reserve FOMC rate decisions, press conferences, minutes,
-and high-impact economic releases (CPI, PPI, Jobs/NFP, GDP) with exact timestamps
-and real-time completion status.
+and catalytic high-impact economic releases (CPI, PPI, Jobs/NFP, PCE, GDP) with exact timestamps,
+real-time completion status, live Federal Reserve policy bulletins, and RFC 5545 iCalendar sync.
 """
 from datetime import datetime, date, time as dt_time, timedelta
 from zoneinfo import ZoneInfo
 from typing import List, Dict, Any, Optional
 import logging
+import re
+import feedparser
+import httpx
+from storage.cache_manager import CacheManager
 
 logger = logging.getLogger(__name__)
 
 PST_TZ = ZoneInfo("America/Los_Angeles")
 EST_TZ = ZoneInfo("America/New_York")
 UTC_TZ = ZoneInfo("UTC")
+
+# Centralized in-memory cache for live external macro feeds (15-minute TTL)
+_macro_cache = CacheManager(default_ttl_seconds=900.0)
+
+# Federal Reserve Official RSS Endpoints
+FED_MONETARY_FEED_URL = "https://www.federalreserve.gov/feeds/press_monetary.xml"
+FED_ALL_PRESS_URL = "https://www.federalreserve.gov/feeds/press_all.xml"
 
 # Official Federal Reserve FOMC Calendar (2025 - 2027)
 # Announcement: 2:00 PM Eastern Time (14:00), Press Conference: 2:30 PM Eastern Time (14:30)
@@ -78,14 +89,205 @@ def _build_event_datetime(date_str: str, time_et_str: str) -> datetime:
     return datetime(d.year, d.month, d.day, h, m, 0, tzinfo=EST_TZ)
 
 
+def escape_ics_text(text: str) -> str:
+    """Escapes special characters for RFC 5545 iCalendar text values."""
+    if not text:
+        return ""
+    text = text.replace("\\", "\\\\")
+    text = text.replace(";", "\\;")
+    text = text.replace(",", "\\,")
+    text = text.replace("\r\n", "\\n").replace("\n", "\\n")
+    return text
+
+
+def fetch_live_fed_bulletins(max_age_hours: float = 72.0, timeout: float = 3.0) -> List[Dict[str, Any]]:
+    """
+    Ingests live Federal Reserve monetary policy and press RSS feeds.
+    Extracts official FOMC actions, interest rate adjustments, and policy statements.
+    Caches parsed feeds in memory for 15 minutes. Gracefully returns empty list if
+    network is offline or rate-limited.
+    """
+    cached = _macro_cache.get("macro_calendar", "fed_bulletins")
+    if cached is not None:
+        return cached
+
+    bulletins: List[Dict[str, Any]] = []
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; FinancialSentinel/2.4; MacroIntelligenceEngine)"}
+        with httpx.Client(timeout=timeout, follow_redirects=True, headers=headers) as client:
+            resp = client.get(FED_MONETARY_FEED_URL)
+            if resp.status_code == 200 and resp.text:
+                parsed = feedparser.parse(resp.text)
+                now_utc = datetime.now(UTC_TZ)
+                for entry in parsed.entries[:8]:
+                    title = getattr(entry, "title", "").strip()
+                    link = getattr(entry, "link", "").strip()
+                    summary = getattr(entry, "summary", "").strip()
+                    published_parsed = getattr(entry, "published_parsed", None)
+
+                    if published_parsed:
+                        pub_dt = datetime(*published_parsed[:6], tzinfo=UTC_TZ)
+                        age_hours = max(0.0, (now_utc - pub_dt).total_seconds() / 3600.0)
+                        if age_hours > max_age_hours:
+                            continue
+                    else:
+                        pub_dt = now_utc
+                        age_hours = 0.0
+
+                    is_rate_action = any(
+                        kw in title.lower() or kw in summary.lower()
+                        for kw in ["federal open market committee", "fomc statement", "discount rate", "policy action", "interest rate", "target range"]
+                    )
+
+                    bulletins.append({
+                        "title": title,
+                        "link": link,
+                        "summary": summary,
+                        "published": getattr(entry, "published", pub_dt.strftime("%Y-%m-%d %H:%M UTC")),
+                        "published_iso": pub_dt.isoformat(),
+                        "age_hours": round(age_hours, 1),
+                        "is_rate_action": is_rate_action,
+                        "source": "Federal Reserve Board (Official Monetary Feed)"
+                    })
+    except Exception as exc:
+        logger.debug("Live Federal Reserve feed fetch skipped or unavailable: %s", exc)
+
+    _macro_cache.set("macro_calendar", "fed_bulletins", bulletins, ttl_seconds=900.0)
+    return bulletins
+
+
+def generate_economic_calendar_ics(
+    catalytic_only: bool = True,
+    calendar_name: str = "Financial Sentinel Macro Catalysts"
+) -> str:
+    """
+    Generates a standards-compliant RFC 5545 iCalendar (.ics) subscription string.
+    Includes scheduled FOMC rate decisions, press conferences, CPI, PPI, NFP, and GDP releases.
+    Configures pre-event trading alarms (-15m and -1h) and unique deterministic UIDs.
+    """
+    events_to_include = []
+    seen_keys = set()
+
+    # 1. Collect Key Macro Releases
+    for ev in KEY_MACRO_RELEASES_2026:
+        is_catalytic = ev.get("importance") in ("CRITICAL", "HIGH") or ev.get("category") == "CENTRAL_BANK"
+        if catalytic_only and not is_catalytic:
+            continue
+        key = (ev["date"], ev["time_et"], ev["name"])
+        if key not in seen_keys:
+            seen_keys.add(key)
+            events_to_include.append(ev)
+
+    # 2. Collect FOMC schedule across 2025-2027
+    for fomc in FOMC_SCHEDULE:
+        # Main Rate Decision
+        fomc_name = fomc["desc"]
+        key = (fomc["date"], fomc["time_et"], fomc_name)
+        if key not in seen_keys:
+            seen_keys.add(key)
+            events_to_include.append({
+                "date": fomc["date"],
+                "time_et": fomc["time_et"],
+                "category": "CENTRAL_BANK",
+                "name": fomc_name,
+                "importance": "CRITICAL"
+            })
+
+        # Accompanying Press Conference (30 minutes after rate decision)
+        presser_name = "Federal Reserve Chair Press Conference"
+        key_presser = (fomc["date"], "14:30", presser_name)
+        if key_presser not in seen_keys:
+            seen_keys.add(key_presser)
+            events_to_include.append({
+                "date": fomc["date"],
+                "time_et": "14:30",
+                "category": "CENTRAL_BANK",
+                "name": presser_name,
+                "importance": "CRITICAL"
+            })
+
+    # Sort chronologically
+    events_to_include.sort(key=lambda x: (x["date"], x["time_et"]))
+
+    dtstamp = datetime.now(UTC_TZ).strftime("%Y%m%dT%H%M%SZ")
+
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//Financial Sentinel//Macro Catalytic Calendar Engine//EN",
+        "CALSCALE:GREGORIAN",
+        "METHOD:PUBLISH",
+        f"X-WR-CALNAME:{escape_ics_text(calendar_name)}",
+        "X-WR-TIMEZONE:America/New_York",
+        "X-PUBLISHED-TTL:PT1H",
+        "REFRESH-INTERVAL;VALUE=DURATION:PT1H"
+    ]
+
+    for ev in events_to_include:
+        ev_dt = _build_event_datetime(ev["date"], ev["time_et"])
+        ev_utc = ev_dt.astimezone(UTC_TZ)
+        duration_minutes = 60 if "Press Conference" in ev["name"] else 30
+        ev_end_utc = ev_utc + timedelta(minutes=duration_minutes)
+
+        start_str = ev_utc.strftime("%Y%m%dT%H%M%SZ")
+        end_str = ev_end_utc.strftime("%Y%m%dT%H%M%SZ")
+
+        safe_name = re.sub(r'[^a-zA-Z0-9]', '-', ev["name"].lower())[:32].strip('-')
+        uid = f"macro-{ev['date']}-{ev['time_et'].replace(':', '')}-{safe_name}@financial-sentinel"
+
+        badge = "🏛️ [CRITICAL]" if ev.get("importance") == "CRITICAL" else "⚡ [HIGH]" if ev.get("importance") == "HIGH" else "📊 [MACRO]"
+        summary = f"{badge} {ev['name']}"
+
+        desc_parts = [
+            f"Category: {ev.get('category', 'MACRO')}",
+            f"Importance: {ev.get('importance', 'HIGH')}",
+            f"Scheduled Time: {ev['time_et']} Eastern Time / {_build_event_datetime(ev['date'], ev['time_et']).astimezone(PST_TZ).strftime('%I:%M %p')} Pacific",
+            "Institutional Directive: Monitor implied volatility, rate curve reaction, and cross-asset liquidity.",
+            "Live Trading Desk: Financial Sentinel Portfolio Intelligence"
+        ]
+        description = "\\n\\n".join(desc_parts)
+
+        lines.extend([
+            "BEGIN:VEVENT",
+            f"UID:{uid}",
+            f"DTSTAMP:{dtstamp}",
+            f"DTSTART:{start_str}",
+            f"DTEND:{end_str}",
+            f"SUMMARY:{escape_ics_text(summary)}",
+            f"DESCRIPTION:{description}",
+            f"CATEGORIES:FINANCE,MACRO,{ev.get('category', 'MACRO')},CATALYST",
+            "STATUS:CONFIRMED",
+            "SEQUENCE:0",
+            # Alarm 1: 15 minutes before event
+            "BEGIN:VALARM",
+            "TRIGGER:-PT15M",
+            "ACTION:DISPLAY",
+            f"DESCRIPTION:Financial Sentinel Reminder: {escape_ics_text(ev['name'])} in 15 minutes",
+            "END:VALARM",
+            # Alarm 2: 1 hour before event
+            "BEGIN:VALARM",
+            "TRIGGER:-PT1H",
+            "ACTION:DISPLAY",
+            f"DESCRIPTION:Financial Sentinel Reminder: {escape_ics_text(ev['name'])} in 1 hour",
+            "END:VALARM",
+            "END:VEVENT"
+        ])
+
+    lines.append("END:VCALENDAR")
+    return "\r\n".join(lines) + "\r\n"
+
+
 def get_economic_calendar_context(
     as_of: Optional[datetime] = None,
-    timezone_str: str = "America/Los_Angeles"
+    timezone_str: str = "America/Los_Angeles",
+    catalytic_only: bool = False,
+    include_live_bulletins: bool = True
 ) -> Dict[str, Any]:
     """
     Evaluates the macroeconomic and central bank calendar against the reference timestamp.
     Determines status (COMPLETED vs PENDING/IMMINENT) for today's events, identifies tomorrow's
     catalysts, and lists key releases for the upcoming 7 calendar days.
+    Also incorporates live Federal Reserve policy bulletins and live iCalendar sync URLs.
     """
     user_tz = ZoneInfo(timezone_str)
     if as_of is None:
@@ -105,6 +307,10 @@ def get_economic_calendar_context(
     upcoming_events_7d = []
 
     for event in KEY_MACRO_RELEASES_2026:
+        is_catalytic = event.get("importance") in ("CRITICAL", "HIGH") or event.get("category") == "CENTRAL_BANK"
+        if catalytic_only and not is_catalytic:
+            continue
+
         ev_dt = _build_event_datetime(event["date"], event["time_et"])
         ev_date = ev_dt.astimezone(EST_TZ).date()
         ev_user_dt = ev_dt.astimezone(user_tz)
@@ -137,7 +343,8 @@ def get_economic_calendar_context(
                 "status": status,
                 "status_desc": status_desc,
                 "directive": directive,
-                "elapsed_hours": diff_hours if is_completed else 0.0
+                "elapsed_hours": diff_hours if is_completed else 0.0,
+                "is_catalytic": is_catalytic
             })
 
         elif ev_date == tomorrow_et_date:
@@ -147,7 +354,8 @@ def get_economic_calendar_context(
                 "event_datetime_user": ev_user_dt.isoformat(),
                 "time_display": time_display,
                 "status": "TOMORROW",
-                "status_desc": f"Scheduled for tomorrow at {time_display}"
+                "status_desc": f"Scheduled for tomorrow at {time_display}",
+                "is_catalytic": is_catalytic
             })
 
         elif today_et_date < ev_date <= end_7d_date:
@@ -157,19 +365,40 @@ def get_economic_calendar_context(
                 "event_datetime_user": ev_user_dt.isoformat(),
                 "time_display": f"{ev_dt.strftime('%A, %b %d')} at {time_display}",
                 "status": "UPCOMING",
-                "days_away": (ev_date - today_et_date).days
+                "days_away": (ev_date - today_et_date).days,
+                "is_catalytic": is_catalytic
             })
+
+    # Ingest Live Federal Reserve Monetary Bulletins
+    live_bulletins = []
+    if include_live_bulletins:
+        try:
+            live_bulletins = fetch_live_fed_bulletins(max_age_hours=72.0)
+        except Exception as e:
+            logger.debug("Live Fed bulletin retrieval failed: %s", e)
 
     return {
         "as_of_user": as_of_user.isoformat(),
         "as_of_et": as_of_et.isoformat(),
         "today_date": str(today_et_date),
         "tomorrow_date": str(tomorrow_et_date),
+        "catalytic_only": catalytic_only,
         "today_events": today_events,
         "tomorrow_events": tomorrow_events,
         "upcoming_events_7d": upcoming_events_7d,
         "has_completed_fomc_today": any(e["status"] == "COMPLETED" and e["category"] == "CENTRAL_BANK" for e in today_events),
-        "has_fomc_tomorrow": any(e["category"] == "CENTRAL_BANK" for e in tomorrow_events)
+        "has_fomc_tomorrow": any(e["category"] == "CENTRAL_BANK" for e in tomorrow_events),
+        "live_fed_bulletins": live_bulletins,
+        "feed_urls": {
+            "ics": "/api/economic/calendar.ics",
+            "ics_catalytic": "/api/economic/calendar.ics?catalytic_only=true",
+        },
+        "stats": {
+            "today_count": len(today_events),
+            "tomorrow_count": len(tomorrow_events),
+            "upcoming_7d_count": len(upcoming_events_7d),
+            "live_bulletin_count": len(live_bulletins)
+        }
     }
 
 
@@ -181,6 +410,14 @@ def format_economic_calendar_for_prompt(calendar_ctx: Dict[str, Any]) -> str:
     lines = [
         "🏛️ MACROECONOMIC & CENTRAL BANK CALENDAR GROUND TRUTH:"
     ]
+
+    # Live Federal Reserve Bulletins (if active)
+    live_bulletins = calendar_ctx.get("live_fed_bulletins", [])
+    if live_bulletins:
+        lines.append("⚡ LIVE FEDERAL RESERVE MONETARY POLICY PULSE (RECENT BULLETINS):")
+        for b in live_bulletins[:2]:
+            lines.append(f"  - [LIVE ANNOUNCEMENT] {b.get('title')}")
+            lines.append(f"    Published: {b.get('published', 'Recent')} | Source: {b.get('source')}")
 
     today_events = calendar_ctx.get("today_events", [])
     tomorrow_events = calendar_ctx.get("tomorrow_events", [])
@@ -208,3 +445,4 @@ def format_economic_calendar_for_prompt(calendar_ctx: Dict[str, Any]) -> str:
             lines.append(f"  - {ev['name']} ({ev['time_display']})")
 
     return "\n".join(lines)
+

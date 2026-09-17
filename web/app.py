@@ -209,6 +209,7 @@ async def security_and_auth_middleware(request: Request, call_next):
             "/api/auth/register",
             "/api/telegram/webhook",
             "/api/schedule/status",
+            "/api/economic/calendar.ics",
             "/healthz",
             "/health",
             "/api/health"
@@ -908,14 +909,38 @@ async def api_get_earnings_calendar(user: Dict[str, Any] = Depends(require_user)
     }
 
 
+@app.get("/api/economic/calendar.ics")
+async def api_get_economic_calendar_ics(catalytic_only: bool = True):
+    """
+    Serves the live RFC 5545 iCalendar (.ics) subscription feed.
+    Compatible with Google Calendar, Apple Calendar (macOS/iOS), and Microsoft Outlook.
+    Does not require session cookies so background calendar crawlers can poll reliably.
+    """
+    from fastapi.responses import Response
+    from analytics.economic_calendar import generate_economic_calendar_ics
+    ics_text = generate_economic_calendar_ics(catalytic_only=catalytic_only)
+    return Response(
+        content=ics_text,
+        media_type="text/calendar; charset=utf-8",
+        headers={
+            "Content-Disposition": 'inline; filename="financial_sentinel_macro.ics"',
+            "Cache-Control": "max-age=1800, public",
+        }
+    )
+
+
 @app.get("/api/economic/calendar")
-async def api_get_economic_calendar(user: Dict[str, Any] = Depends(require_user)):
+async def api_get_economic_calendar(
+    catalytic_only: bool = False,
+    user: Dict[str, Any] = Depends(require_user)
+):
     from analytics.economic_calendar import get_economic_calendar_context
-    ctx = get_economic_calendar_context()
+    ctx = get_economic_calendar_context(catalytic_only=catalytic_only)
     return {
         "status": "success",
         "calendar": ctx
     }
+
 
 
 @app.post("/api/analyze/{ticker}")

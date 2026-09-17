@@ -813,7 +813,109 @@ async function loadEarningsCalendar() {
 }
 
 /**
- * Deterministic Macroeconomic & Central Bank Calendar Loader
+ * Live Macroeconomic & Catalytic Calendar State & Functions
+ */
+let economicCalendarCatalyticOnly = true;
+
+function setEconomicCalendarFilter(isCatalytic) {
+    economicCalendarCatalyticOnly = isCatalytic;
+    const btnCat = document.getElementById('btn-filter-catalytic');
+    const btnAll = document.getElementById('btn-filter-all');
+    if (btnCat && btnAll) {
+        if (isCatalytic) {
+            btnCat.className = 'px-2.5 py-1 rounded-md text-amber-300 bg-amber-500/10 border border-amber-500/20 font-semibold transition';
+            btnAll.className = 'px-2.5 py-1 rounded-md text-slate-400 hover:text-slate-200 transition';
+        } else {
+            btnCat.className = 'px-2.5 py-1 rounded-md text-slate-400 hover:text-slate-200 transition';
+            btnAll.className = 'px-2.5 py-1 rounded-md text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 font-semibold transition';
+        }
+    }
+    loadEconomicCalendar(false);
+}
+
+function toggleCalendarSyncMenu(event) {
+    if (event) event.stopPropagation();
+    const menu = document.getElementById('calendar-sync-menu');
+    if (!menu) return;
+    const isHidden = menu.classList.contains('hidden');
+    if (isHidden) {
+        menu.classList.remove('hidden');
+        const dismissListener = (e) => {
+            if (!menu.contains(e.target) && e.target.id !== 'btn-calendar-sync') {
+                menu.classList.add('hidden');
+                document.removeEventListener('click', dismissListener);
+            }
+        };
+        setTimeout(() => document.addEventListener('click', dismissListener), 10);
+    } else {
+        menu.classList.add('hidden');
+    }
+}
+
+function getEconomicCalendarIcsUrl() {
+    const protocol = window.location.protocol;
+    const host = window.location.host;
+    return `${protocol}//${host}/api/economic/calendar.ics?catalytic_only=${economicCalendarCatalyticOnly}`;
+}
+
+function getEconomicCalendarWebcalUrl() {
+    const host = window.location.host;
+    return `webcal://${host}/api/economic/calendar.ics?catalytic_only=${economicCalendarCatalyticOnly}`;
+}
+
+function subscribeAppleCalendar() {
+    const webcalUrl = getEconomicCalendarWebcalUrl();
+    window.location.href = webcalUrl;
+    const menu = document.getElementById('calendar-sync-menu');
+    if (menu) menu.classList.add('hidden');
+}
+
+function subscribeGoogleCalendar() {
+    const icsUrl = getEconomicCalendarIcsUrl();
+    const googleCalUrl = `https://calendar.google.com/calendar/render?cid=${encodeURIComponent(icsUrl)}`;
+    window.open(googleCalUrl, '_blank');
+    const menu = document.getElementById('calendar-sync-menu');
+    if (menu) menu.classList.add('hidden');
+}
+
+function copyIcsFeedUrl() {
+    const icsUrl = getEconomicCalendarIcsUrl();
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(icsUrl).then(() => {
+            const textEl = document.getElementById('btn-copy-ics-text');
+            if (textEl) {
+                const original = textEl.textContent;
+                textEl.textContent = '✅ Copied to Clipboard!';
+                setTimeout(() => { textEl.textContent = original; }, 2000);
+            }
+            if (typeof showBanner === 'function') {
+                showBanner('✅ Live calendar feed URL copied. Paste into Outlook, Google Calendar, or Apple Calendar.');
+            }
+        }).catch(() => {
+            prompt('Copy the live calendar .ics URL below:', icsUrl);
+        });
+    } else {
+        prompt('Copy the live calendar .ics URL below:', icsUrl);
+    }
+}
+
+function buildGoogleCalendarEventUrl(ev) {
+    if (!ev || !ev.event_datetime_et) return '#';
+    try {
+        const startDt = new Date(ev.event_datetime_et);
+        const endDt = new Date(startDt.getTime() + (ev.name.includes('Press Conference') ? 60 : 30) * 60000);
+        const toGCalIso = (d) => d.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+        const datesParam = `${toGCalIso(startDt)}/${toGCalIso(endDt)}`;
+        const title = encodeURIComponent(`🏛️ ${ev.name}`);
+        const details = encodeURIComponent(`${ev.directive || ev.status_desc}\n\nFinancial Sentinel Macroeconomic Ground Truth`);
+        return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${datesParam}&details=${details}`;
+    } catch (e) {
+        return '#';
+    }
+}
+
+/**
+ * Live Macroeconomic & Catalytic Calendar Loader
  */
 async function loadEconomicCalendar(isManual = false) {
     const container = document.getElementById('economic-calendar-container');
@@ -837,7 +939,7 @@ async function loadEconomicCalendar(isManual = false) {
     const minDelay = isManual ? 400 : 0;
 
     try {
-        const fetchPromise = fetch(`/api/economic/calendar?t=${Date.now()}`, { cache: 'no-store' });
+        const fetchPromise = fetch(`/api/economic/calendar?catalytic_only=${economicCalendarCatalyticOnly}&t=${Date.now()}`, { cache: 'no-store' });
         const [res] = await Promise.all([
             fetchPromise,
             new Promise(resolve => setTimeout(resolve, minDelay))
@@ -850,6 +952,7 @@ async function loadEconomicCalendar(isManual = false) {
             const todayEvents = cal.today_events || [];
             const tomorrowEvents = cal.tomorrow_events || [];
             const upcomingEvents = cal.upcoming_events_7d || [];
+            const liveBulletins = cal.live_fed_bulletins || [];
 
             const renderStatusBadge = (status) => {
                 if (status === 'COMPLETED') {
@@ -871,6 +974,33 @@ async function loadEconomicCalendar(isManual = false) {
 
             container.innerHTML = `
                 <div class="space-y-4 w-full">
+                    ${liveBulletins.length > 0 ? `
+                        <!-- Live Federal Reserve Pulse Alert Banner -->
+                        <div class="p-3.5 bg-amber-950/25 border border-amber-500/35 rounded-2xl space-y-2 shadow-md">
+                            <div class="flex items-center justify-between border-b border-amber-500/20 pb-1.5">
+                                <div class="flex items-center space-x-2">
+                                    <span class="text-amber-400 animate-pulse">⚡</span>
+                                    <span class="text-xs font-bold text-amber-200">Live Federal Reserve Monetary Policy Pulse</span>
+                                    <span class="px-1.5 py-0.5 bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded text-[9px] font-mono font-bold">OFFICIAL FEED</span>
+                                </div>
+                                <span class="text-[10px] font-mono text-slate-400">${liveBulletins.length} Recent Bulletins</span>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                ${liveBulletins.slice(0, 4).map(b => `
+                                    <div class="p-2.5 bg-dark-950/80 border border-amber-500/20 rounded-xl text-xs space-y-1">
+                                        <div class="flex items-start justify-between gap-1.5">
+                                            <a href="${esc(b.link)}" target="_blank" rel="noopener noreferrer" class="font-medium text-slate-200 hover:text-amber-300 transition line-clamp-1">
+                                                ${esc(b.title)} ↗
+                                            </a>
+                                            ${b.is_rate_action ? '<span class="px-1.5 py-0.2 bg-rose-500/20 text-rose-300 border border-rose-500/30 rounded text-[8px] font-mono font-bold">POLICY</span>' : ''}
+                                        </div>
+                                        <div class="text-[10px] text-slate-400 font-mono">${esc(b.published)} (${b.age_hours}h ago)</div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    ` : ''}
+
                     <!-- Section 1: Today's Macro Catalysts -->
                     <div class="p-4 bg-dark-950 border border-slate-800/90 rounded-2xl space-y-3 shadow-md">
                         <div class="flex items-center justify-between border-b border-slate-800/80 pb-2">
@@ -896,8 +1026,11 @@ async function loadEconomicCalendar(isManual = false) {
                                                     <span>🕒 ${esc(ev.time_display)}</span>
                                                 </div>
                                             </div>
-                                            <div>
+                                            <div class="flex flex-col items-end gap-1">
                                                 ${renderStatusBadge(ev.status)}
+                                                <a href="${buildGoogleCalendarEventUrl(ev)}" target="_blank" rel="noopener noreferrer" class="text-[10px] text-slate-500 hover:text-indigo-300 font-mono transition">
+                                                    + Add to Cal ↗
+                                                </a>
                                             </div>
                                         </div>
                                         <div class="text-[11px] text-slate-300 bg-dark-950/60 p-2 rounded-lg border border-slate-800/60 leading-relaxed">
@@ -907,7 +1040,7 @@ async function loadEconomicCalendar(isManual = false) {
                                 `).join('')}
                             </div>
                         ` : `
-                            <div class="text-slate-500 text-xs italic py-2">No tier-1 macroeconomic releases scheduled for today (${cal.today_date}).</div>
+                            <div class="text-slate-500 text-xs italic py-2">No ${economicCalendarCatalyticOnly ? 'tier-1 catalytic' : ''} macroeconomic releases scheduled for today (${cal.today_date}).</div>
                         `}
                     </div>
 
@@ -935,12 +1068,17 @@ async function loadEconomicCalendar(isManual = false) {
                                                 </div>
                                                 <div class="text-[10px] text-slate-400 font-mono">${esc(ev.time_display)}</div>
                                             </div>
-                                            ${renderStatusBadge('TOMORROW')}
+                                            <div class="flex items-center space-x-2">
+                                                <a href="${buildGoogleCalendarEventUrl(ev)}" target="_blank" rel="noopener noreferrer" class="text-[10px] text-slate-500 hover:text-blue-300 font-mono transition">
+                                                    + Cal ↗
+                                                </a>
+                                                ${renderStatusBadge('TOMORROW')}
+                                            </div>
                                         </div>
                                     `).join('')}
                                 </div>
                             ` : `
-                                <div class="text-slate-500 text-xs italic py-2">No major macroeconomic releases scheduled for tomorrow (${cal.tomorrow_date}).</div>
+                                <div class="text-slate-500 text-xs italic py-2">No ${economicCalendarCatalyticOnly ? 'tier-1 catalytic' : ''} releases scheduled for tomorrow (${cal.tomorrow_date}).</div>
                             `}
                         </div>
 
@@ -966,14 +1104,19 @@ async function loadEconomicCalendar(isManual = false) {
                                                 </div>
                                                 <div class="text-[10px] text-slate-400 font-mono">${esc(ev.time_display)}</div>
                                             </div>
-                                            <span class="px-2 py-0.5 bg-slate-800 text-slate-300 border border-slate-700 rounded text-[10px] font-mono">
-                                                in ${ev.days_away}d
-                                            </span>
+                                            <div class="flex items-center space-x-2">
+                                                <a href="${buildGoogleCalendarEventUrl(ev)}" target="_blank" rel="noopener noreferrer" class="text-[10px] text-slate-500 hover:text-cyan-300 font-mono transition">
+                                                    + Cal ↗
+                                                </a>
+                                                <span class="px-2 py-0.5 bg-slate-800 text-slate-300 border border-slate-700 rounded text-[10px] font-mono">
+                                                    in ${ev.days_away}d
+                                                </span>
+                                            </div>
                                         </div>
                                     `).join('')}
                                 </div>
                             ` : `
-                                <div class="text-slate-500 text-xs italic py-2">No upcoming major catalysts within the 7-day window.</div>
+                                <div class="text-slate-500 text-xs italic py-2">No upcoming ${economicCalendarCatalyticOnly ? 'tier-1 catalysts' : 'events'} within the 7-day window.</div>
                             `}
                         </div>
                     </div>
@@ -1013,10 +1156,11 @@ async function loadEconomicCalendar(isManual = false) {
                 btnIcon.classList.remove('animate-spin');
                 btnIcon.textContent = '🔄';
             }
-            if (btnText) btnText.textContent = 'Refresh Macro Calendar';
+            if (btnText) btnText.textContent = 'Refresh';
         }, isManual ? 1200 : 0);
     }
 }
+
 
 /**
  * Market Intelligence Briefings Archive & Reader
@@ -1312,6 +1456,14 @@ window.sendQuickChat = sendQuickChat;
 window.handleChatSubmit = handleChatSubmit;
 window.loadEarningsCalendar = loadEarningsCalendar;
 window.loadEconomicCalendar = loadEconomicCalendar;
+window.setEconomicCalendarFilter = setEconomicCalendarFilter;
+window.toggleCalendarSyncMenu = toggleCalendarSyncMenu;
+window.subscribeAppleCalendar = subscribeAppleCalendar;
+window.subscribeGoogleCalendar = subscribeGoogleCalendar;
+window.copyIcsFeedUrl = copyIcsFeedUrl;
+window.buildGoogleCalendarEventUrl = buildGoogleCalendarEventUrl;
+window.getEconomicCalendarIcsUrl = getEconomicCalendarIcsUrl;
+window.getEconomicCalendarWebcalUrl = getEconomicCalendarWebcalUrl;
 window.formatBriefingTimestamp = formatBriefingTimestamp;
 window.formatFullBriefingTimestamp = formatFullBriefingTimestamp;
 window.loadMarketBriefings = loadMarketBriefings;
@@ -1321,3 +1473,4 @@ window.selectBriefing = selectBriefing;
 window.triggerGenerateBriefing = triggerGenerateBriefing;
 window.copyCurrentBriefingText = copyCurrentBriefingText;
 window.dispatchCurrentBriefingToTelegram = dispatchCurrentBriefingToTelegram;
+
