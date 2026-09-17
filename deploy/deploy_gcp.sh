@@ -5,6 +5,9 @@
 
 set -e
 
+export PATH="/Users/frank/google-cloud-sdk/bin:$PATH"
+export CLOUDSDK_PYTHON="${CLOUDSDK_PYTHON:-/Users/frank/python311/bin/python3}"
+
 PROJECT_ID=$(gcloud config get-value project 2>/dev/null || echo "")
 REGION="us-central1"
 SERVICE_NAME="financial-sentinel"
