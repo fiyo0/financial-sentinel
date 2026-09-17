@@ -235,3 +235,40 @@ def test_fetch_live_fed_bulletins_mock(monkeypatch):
     assert "LIVE FEDERAL RESERVE MONETARY POLICY PULSE" in prompt_str
     assert "25 bps rate cut" in prompt_str
 
+
+def test_prospective_3month_horizon_events():
+    """
+    Verify get_economic_calendar_context captures forward catalysts across
+    a 90-day (3-month) prospective horizon (e.g. Oct and Dec 2026 FOMC decisions),
+    while preserving upcoming_events_7d for backwards compatibility.
+    """
+    as_of = datetime(2026, 9, 16, 17, 0, tzinfo=EST)
+    ctx = get_economic_calendar_context(as_of=as_of, horizon_days=90)
+
+    assert ctx["horizon_days"] == 90
+    assert "upcoming_events_90d" in ctx
+    assert "upcoming_events" in ctx
+    assert "upcoming_events_7d" in ctx
+
+    # Oct 28, 2026 FOMC (42 days out) and Dec 9, 2026 FOMC (84 days out) must be in 90d horizon
+    names_90d = [e["name"] for e in ctx["upcoming_events_90d"]]
+    assert any("FOMC Interest Rate Decision" in n for n in names_90d)
+    assert ctx["stats"]["upcoming_90d_count"] >= 2
+    assert ctx["stats"]["upcoming_count"] == ctx["stats"]["upcoming_90d_count"]
+
+    # Check forward dates present
+    dates_90d = [e["date"] for e in ctx["upcoming_events_90d"]]
+    assert "2026-10-28" in dates_90d
+    assert "2026-12-09" in dates_90d
+
+    # upcoming_events_7d should be a strict subset of upcoming_events_90d
+    assert len(ctx["upcoming_events_7d"]) <= len(ctx["upcoming_events_90d"])
+    for ev_7d in ctx["upcoming_events_7d"]:
+        assert ev_7d in ctx["upcoming_events_90d"]
+
+    # Verify prompt formatting contains the prospective 3-month section
+    prompt_str = format_economic_calendar_for_prompt(ctx)
+    assert "PROSPECTIVE 3-MONTH CATALYTIC HORIZON" in prompt_str
+    assert "2026-10-28" in prompt_str or "Wednesday, Oct 28" in prompt_str
+
+

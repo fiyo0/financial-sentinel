@@ -951,7 +951,7 @@ async function loadEconomicCalendar(isManual = false) {
             const cal = data.calendar;
             const todayEvents = cal.today_events || [];
             const tomorrowEvents = cal.tomorrow_events || [];
-            const upcomingEvents = cal.upcoming_events_7d || [];
+            const upcomingEvents = cal.upcoming_events_90d || cal.upcoming_events || cal.upcoming_events_7d || [];
             const liveBulletins = cal.live_fed_bulletins || [];
 
             const renderStatusBadge = (status) => {
@@ -1044,7 +1044,7 @@ async function loadEconomicCalendar(isManual = false) {
                         `}
                     </div>
 
-                    <!-- Section 2: Tomorrow & Upcoming 7-Day Releases -->
+                    <!-- Section 2: Tomorrow & Prospective 3-Month Macro Horizon -->
                     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
                         <!-- Tomorrow -->
                         <div class="p-4 bg-dark-950 border border-slate-800/90 rounded-2xl space-y-3 shadow-md">
@@ -1082,19 +1082,19 @@ async function loadEconomicCalendar(isManual = false) {
                             `}
                         </div>
 
-                        <!-- Next 7 Days -->
+                        <!-- Prospective 3-Month Macro Horizon -->
                         <div class="p-4 bg-dark-950 border border-slate-800/90 rounded-2xl space-y-3 shadow-md">
                             <div class="flex items-center justify-between border-b border-slate-800/80 pb-2">
                                 <div class="font-bold text-sm text-cyan-400 flex items-center space-x-2">
                                     <span>📆</span>
-                                    <span>Upcoming 7-Day Macro Horizon</span>
+                                    <span>Prospective 3-Month Macro Horizon</span>
                                 </div>
                                 <span class="text-[10px] font-mono text-slate-400 bg-dark-900 px-2 py-0.5 rounded border border-slate-800">
-                                    ${upcomingEvents.length} Key Catalysts
+                                    ${upcomingEvents.length} Catalysts (Next 90 Days)
                                 </span>
                             </div>
                             ${upcomingEvents.length > 0 ? `
-                                <div class="space-y-2">
+                                <div class="space-y-2 max-h-[420px] overflow-y-auto pr-1">
                                     ${upcomingEvents.map(ev => `
                                         <div class="p-2.5 bg-dark-900/90 border border-slate-800/80 rounded-xl flex items-center justify-between text-xs">
                                             <div class="space-y-0.5">
@@ -1116,7 +1116,7 @@ async function loadEconomicCalendar(isManual = false) {
                                     `).join('')}
                                 </div>
                             ` : `
-                                <div class="text-slate-500 text-xs italic py-2">No upcoming ${economicCalendarCatalyticOnly ? 'tier-1 catalysts' : 'events'} within the 7-day window.</div>
+                                <div class="text-slate-500 text-xs italic py-2">No upcoming ${economicCalendarCatalyticOnly ? 'tier-1 catalysts' : 'events'} within the next 3 months.</div>
                             `}
                         </div>
                     </div>

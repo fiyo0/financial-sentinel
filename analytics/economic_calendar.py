@@ -281,12 +281,13 @@ def get_economic_calendar_context(
     as_of: Optional[datetime] = None,
     timezone_str: str = "America/Los_Angeles",
     catalytic_only: bool = False,
-    include_live_bulletins: bool = True
+    include_live_bulletins: bool = True,
+    horizon_days: int = 90
 ) -> Dict[str, Any]:
     """
     Evaluates the macroeconomic and central bank calendar against the reference timestamp.
     Determines status (COMPLETED vs PENDING/IMMINENT) for today's events, identifies tomorrow's
-    catalysts, and lists key releases for the upcoming 7 calendar days.
+    catalysts, and lists key releases for both the immediate 7-day window and prospective 3-month (90-day) horizon.
     Also incorporates live Federal Reserve policy bulletins and live iCalendar sync URLs.
     """
     user_tz = ZoneInfo(timezone_str)
@@ -301,12 +302,46 @@ def get_economic_calendar_context(
     today_et_date = as_of_et.date()
     tomorrow_et_date = today_et_date + timedelta(days=1)
     end_7d_date = today_et_date + timedelta(days=7)
+    end_horizon_date = today_et_date + timedelta(days=horizon_days)
 
     today_events = []
     tomorrow_events = []
     upcoming_events_7d = []
+    upcoming_events_90d = []
 
-    for event in KEY_MACRO_RELEASES_2026:
+    # Merge monthly release table and multi-year FOMC schedule
+    events_pool = []
+    seen_keys = set()
+    for ev in KEY_MACRO_RELEASES_2026:
+        key = (ev["date"], ev["time_et"], ev["name"])
+        seen_keys.add(key)
+        events_pool.append(ev)
+
+    for fomc in FOMC_SCHEDULE:
+        key_rate = (fomc["date"], fomc["time_et"], fomc["desc"])
+        if key_rate not in seen_keys:
+            seen_keys.add(key_rate)
+            events_pool.append({
+                "date": fomc["date"],
+                "time_et": fomc["time_et"],
+                "category": "CENTRAL_BANK",
+                "name": fomc["desc"],
+                "importance": "CRITICAL"
+            })
+        key_presser = (fomc["date"], "14:30", "Federal Reserve Chair Press Conference")
+        if key_presser not in seen_keys:
+            seen_keys.add(key_presser)
+            events_pool.append({
+                "date": fomc["date"],
+                "time_et": "14:30",
+                "category": "CENTRAL_BANK",
+                "name": "Federal Reserve Chair Press Conference",
+                "importance": "CRITICAL"
+            })
+
+    events_pool.sort(key=lambda x: (x["date"], x["time_et"]))
+
+    for event in events_pool:
         is_catalytic = event.get("importance") in ("CRITICAL", "HIGH") or event.get("category") == "CENTRAL_BANK"
         if catalytic_only and not is_catalytic:
             continue
@@ -358,16 +393,20 @@ def get_economic_calendar_context(
                 "is_catalytic": is_catalytic
             })
 
-        elif today_et_date < ev_date <= end_7d_date:
-            upcoming_events_7d.append({
+        elif today_et_date < ev_date <= end_horizon_date:
+            days_away = (ev_date - today_et_date).days
+            upcoming_entry = {
                 **event,
                 "event_datetime_et": ev_dt.isoformat(),
                 "event_datetime_user": ev_user_dt.isoformat(),
                 "time_display": f"{ev_dt.strftime('%A, %b %d')} at {time_display}",
                 "status": "UPCOMING",
-                "days_away": (ev_date - today_et_date).days,
+                "days_away": days_away,
                 "is_catalytic": is_catalytic
-            })
+            }
+            upcoming_events_90d.append(upcoming_entry)
+            if ev_date <= end_7d_date:
+                upcoming_events_7d.append(upcoming_entry)
 
     # Ingest Live Federal Reserve Monetary Bulletins
     live_bulletins = []
@@ -383,8 +422,11 @@ def get_economic_calendar_context(
         "today_date": str(today_et_date),
         "tomorrow_date": str(tomorrow_et_date),
         "catalytic_only": catalytic_only,
+        "horizon_days": horizon_days,
         "today_events": today_events,
         "tomorrow_events": tomorrow_events,
+        "upcoming_events": upcoming_events_90d,
+        "upcoming_events_90d": upcoming_events_90d,
         "upcoming_events_7d": upcoming_events_7d,
         "has_completed_fomc_today": any(e["status"] == "COMPLETED" and e["category"] == "CENTRAL_BANK" for e in today_events),
         "has_fomc_tomorrow": any(e["category"] == "CENTRAL_BANK" for e in tomorrow_events),
@@ -396,7 +438,9 @@ def get_economic_calendar_context(
         "stats": {
             "today_count": len(today_events),
             "tomorrow_count": len(tomorrow_events),
+            "upcoming_count": len(upcoming_events_90d),
             "upcoming_7d_count": len(upcoming_events_7d),
+            "upcoming_90d_count": len(upcoming_events_90d),
             "live_bulletin_count": len(live_bulletins)
         }
     }
@@ -421,7 +465,8 @@ def format_economic_calendar_for_prompt(calendar_ctx: Dict[str, Any]) -> str:
 
     today_events = calendar_ctx.get("today_events", [])
     tomorrow_events = calendar_ctx.get("tomorrow_events", [])
-    upcoming = calendar_ctx.get("upcoming_events_7d", [])
+    upcoming_7d = calendar_ctx.get("upcoming_events_7d", [])
+    upcoming_3m = calendar_ctx.get("upcoming_events_90d", calendar_ctx.get("upcoming_events", []))
 
     if today_events:
         lines.append(f"• TODAY'S EVENTS ({calendar_ctx.get('today_date')}):")
@@ -439,10 +484,18 @@ def format_economic_calendar_for_prompt(calendar_ctx: Dict[str, Any]) -> str:
     else:
         lines.append(f"• TOMORROW'S SCHEDULED CATALYSTS ({calendar_ctx.get('tomorrow_date')}): No tier-1 macro events scheduled for tomorrow.")
 
-    if upcoming:
+    if upcoming_7d:
         lines.append("• UPCOMING (NEXT 7 DAYS):")
-        for ev in upcoming[:4]:
+        for ev in upcoming_7d[:4]:
             lines.append(f"  - {ev['name']} ({ev['time_display']})")
 
+    # Forward 3-Month Catalytic Anchors
+    beyond_7d = [e for e in upcoming_3m if e.get("days_away", 0) > 7 and (e.get("importance") == "CRITICAL" or e.get("category") == "CENTRAL_BANK")]
+    if beyond_7d:
+        lines.append("• PROSPECTIVE 3-MONTH CATALYTIC HORIZON (FORWARD CENTRAL BANK & TIER-1 ANCHORS):")
+        for ev in beyond_7d[:5]:
+            lines.append(f"  - [{ev.get('importance', 'HIGH')}] {ev['name']} ({ev['time_display']}) [in {ev.get('days_away')}d]")
+
     return "\n".join(lines)
+
 
