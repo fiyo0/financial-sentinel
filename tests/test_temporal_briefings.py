@@ -194,3 +194,55 @@ def test_state_store_get_recent_news(tmp_path):
     assert len(all_news) == 2
     assert all_news[0].id == "item_new"
     assert all_news[1].id == "item_old"
+
+
+def test_market_briefings_no_tier1_boilerplate(sample_portfolio):
+    """
+    Verify all market briefings (Pre, Mid, Post, Weekend) do NOT contain 'tier-1' puffery,
+    that intraday briefs omit the 3-month forward schedule, and that Rule 4 is present.
+    """
+    agent = MarketBriefingAgent()
+    # A calm day without FOMC decisions or scheduled releases
+    as_of_pst = datetime(2026, 9, 21, 10, 0, tzinfo=PST)
+
+    captured_prompts = []
+    agent.query_llm_text = lambda prompt, **kwargs: (captured_prompts.append(prompt), "☀️ <b>MID-MARKET PULSE</b>")[1]
+
+    overview = {"indices": {"SPY": {"current_price": 550.0, "change_pct": 0.2}}}
+
+    # Mid-Market Pulse
+    agent.generate_midmarket_briefing(
+        portfolio=sample_portfolio,
+        market_overview=overview,
+        news_items=[],
+        api_key="test_key",
+        as_of=as_of_pst
+    )
+    assert len(captured_prompts) == 1
+    mid_prompt = captured_prompts[0]
+
+    # Verify no "tier-1" jargon appears
+    assert "tier-1" not in mid_prompt.lower()
+    # Verify Rule 4 exists
+    assert "Selective & Relevant Macro / Fed Coverage" in mid_prompt
+    assert "Do NOT mention the absence of data or write filler" in mid_prompt
+    # Verify intraday prompt omits the 3-month prospective horizon
+    assert "PROSPECTIVE 3-MONTH CENTRAL BANK SCHEDULE" not in mid_prompt
+
+    # Weekend Briefing
+    captured_prompts.clear()
+    weekend_dt = datetime(2026, 9, 20, 21, 0, tzinfo=PST)
+    agent.generate_weekend_eod_briefing(
+        portfolio=sample_portfolio,
+        market_overview=overview,
+        news_items=[],
+        api_key="test_key",
+        as_of=weekend_dt
+    )
+    assert len(captured_prompts) == 1
+    weekend_prompt = captured_prompts[0]
+
+    # Weekend prompt should have the 3-month schedule without 'tier-1'
+    assert "tier-1" not in weekend_prompt.lower()
+    assert "PROSPECTIVE 3-MONTH CENTRAL BANK SCHEDULE" in weekend_prompt
+    assert "Selective & Relevant Macro / Fed Coverage" in weekend_prompt

@@ -446,7 +446,7 @@ def get_economic_calendar_context(
     }
 
 
-def format_economic_calendar_for_prompt(calendar_ctx: Dict[str, Any]) -> str:
+def format_economic_calendar_for_prompt(calendar_ctx: Dict[str, Any], include_horizon: bool = False) -> str:
     """
     Builds a high-visibility, authoritative macroeconomic ground-truth context block
     for injection into CIO briefing prompts.
@@ -475,26 +475,30 @@ def format_economic_calendar_for_prompt(calendar_ctx: Dict[str, Any]) -> str:
             lines.append(f"    Timing: {ev['status_desc']}")
             lines.append(f"    Instruction: {ev['directive']}")
     else:
-        lines.append(f"• TODAY'S EVENTS ({calendar_ctx.get('today_date')}): No major tier-1 macroeconomic releases scheduled today.")
+        lines.append(f"• TODAY'S EVENTS ({calendar_ctx.get('today_date')}): None scheduled.")
 
     if tomorrow_events:
         lines.append(f"• TOMORROW'S SCHEDULED CATALYSTS ({calendar_ctx.get('tomorrow_date')}):")
         for ev in tomorrow_events:
             lines.append(f"  - [TOMORROW] {ev['name']} ({ev['time_display']})")
     else:
-        lines.append(f"• TOMORROW'S SCHEDULED CATALYSTS ({calendar_ctx.get('tomorrow_date')}): No tier-1 macro events scheduled for tomorrow.")
+        lines.append(f"• TOMORROW'S SCHEDULED CATALYSTS ({calendar_ctx.get('tomorrow_date')}): None scheduled.")
 
     if upcoming_7d:
         lines.append("• UPCOMING (NEXT 7 DAYS):")
         for ev in upcoming_7d[:4]:
             lines.append(f"  - {ev['name']} ({ev['time_display']})")
 
-    # Forward 3-Month Catalytic Anchors
-    beyond_7d = [e for e in upcoming_3m if e.get("days_away", 0) > 7 and (e.get("importance") == "CRITICAL" or e.get("category") == "CENTRAL_BANK")]
-    if beyond_7d:
-        lines.append("• PROSPECTIVE 3-MONTH CATALYTIC HORIZON (FORWARD CENTRAL BANK & TIER-1 ANCHORS):")
-        for ev in beyond_7d[:5]:
-            lines.append(f"  - [{ev.get('importance', 'HIGH')}] {ev['name']} ({ev['time_display']}) [in {ev.get('days_away')}d]")
+    # Forward 3-Month Schedule (only included for weekend/weekly previews or when explicitly requested)
+    if include_horizon:
+        beyond_7d = [e for e in upcoming_3m if e.get("days_away", 0) > 7 and (e.get("importance") == "CRITICAL" or e.get("category") == "CENTRAL_BANK")]
+        if beyond_7d:
+            lines.append("• PROSPECTIVE 3-MONTH CENTRAL BANK SCHEDULE:")
+            for ev in beyond_7d[:5]:
+                lines.append(f"  - [{ev.get('importance', 'HIGH')}] {ev['name']} ({ev['time_display']}) [in {ev.get('days_away')}d]")
+
+    if not today_events and not tomorrow_events:
+        lines.append("• NOTE ON MACRO DATA: No releases scheduled today or tomorrow. Do NOT mention the absence of data or write filler about a quiet macro calendar. Focus directly on market price action, sector flows, and company catalysts.")
 
     return "\n".join(lines)
 

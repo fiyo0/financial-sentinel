@@ -51,7 +51,8 @@ def test_september_16_postmarket_completed_status():
 
     prompt_str = format_economic_calendar_for_prompt(ctx)
     assert "[COMPLETED] Federal Reserve FOMC Interest Rate Decision" in prompt_str
-    assert "TOMORROW'S SCHEDULED CATALYSTS (2026-09-17): No tier-1 macro events" in prompt_str
+    assert "TOMORROW'S SCHEDULED CATALYSTS (2026-09-17): None scheduled." in prompt_str
+    assert "tier-1" not in prompt_str.lower()
 
 
 def test_september_16_premarket_pending_status():
@@ -266,9 +267,15 @@ def test_prospective_3month_horizon_events():
     for ev_7d in ctx["upcoming_events_7d"]:
         assert ev_7d in ctx["upcoming_events_90d"]
 
-    # Verify prompt formatting contains the prospective 3-month section
-    prompt_str = format_economic_calendar_for_prompt(ctx)
-    assert "PROSPECTIVE 3-MONTH CATALYTIC HORIZON" in prompt_str
-    assert "2026-10-28" in prompt_str or "Wednesday, Oct 28" in prompt_str
+    # Verify prompt formatting contains the prospective 3-month section when include_horizon=True
+    prompt_str_horizon = format_economic_calendar_for_prompt(ctx, include_horizon=True)
+    assert "PROSPECTIVE 3-MONTH CENTRAL BANK SCHEDULE" in prompt_str_horizon
+    assert "2026-10-28" in prompt_str_horizon or "Wednesday, Oct 28" in prompt_str_horizon
+    assert "tier-1" not in prompt_str_horizon.lower()
+
+    # Default include_horizon=False omits the 3-month section for routine intraday pulses
+    prompt_str_intraday = format_economic_calendar_for_prompt(ctx, include_horizon=False)
+    assert "PROSPECTIVE 3-MONTH CENTRAL BANK SCHEDULE" not in prompt_str_intraday
+    assert "tier-1" not in prompt_str_intraday.lower()
 
 

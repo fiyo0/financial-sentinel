@@ -27,6 +27,10 @@ COMMUNICATION & RECOMMENDATION DISCIPLINE:
    - If a central bank or economic catalyst has status [COMPLETED], it CONCLUDED EARLIER TODAY. Analyze its outcome, market reaction, and day-end impact; NEVER refer to it as happening "tomorrow" or "upcoming".
    - Only refer to an event as happening "tomorrow" if it is explicitly scheduled for tomorrow's date.
    - Cross-reference news headlines against their relative age timestamps. Do not cite yesterday's preview speculation as today's market drivers.
+4. Selective & Relevant Macro / Fed Coverage:
+   - Only cite Federal Reserve decisions, policy statements, or macroeconomic indicators if an active event occurred today or is explicitly scheduled for tomorrow.
+   - In the absence of scheduled releases or Fed announcements, DO NOT generate negative filler or boilerplate commentary (e.g., "In the absence of major macroeconomic data...", "With no major economic releases on the docket...", "Investors navigated a quiet macro session...").
+   - When the economic calendar is clear, focus strictly on price action, sector rotation, volume breadth, and company-specific earnings catalysts.
 """
 
 
@@ -159,7 +163,7 @@ class MarketBriefingAgent(BaseAgent):
         as_of_et = ref_dt.astimezone(ZoneInfo("America/New_York"))
 
         economic_ctx = get_economic_calendar_context(as_of_pst)
-        economic_str = format_economic_calendar_for_prompt(economic_ctx)
+        economic_str = format_economic_calendar_for_prompt(economic_ctx, include_horizon=False)
 
         movers_context = self._extract_significant_portfolio_movers(portfolio, news_items, threshold_pct=1.5)
         indices_str = self._format_indices_summary(market_overview)
@@ -242,7 +246,7 @@ class MarketBriefingAgent(BaseAgent):
         as_of_et = ref_dt.astimezone(ZoneInfo("America/New_York"))
 
         economic_ctx = get_economic_calendar_context(as_of_pst)
-        economic_str = format_economic_calendar_for_prompt(economic_ctx)
+        economic_str = format_economic_calendar_for_prompt(economic_ctx, include_horizon=False)
 
         movers_context = self._extract_significant_portfolio_movers(portfolio, news_items, threshold_pct=1.5)
         indices_str = self._format_indices_summary(market_overview)
@@ -276,7 +280,7 @@ class MarketBriefingAgent(BaseAgent):
         ☀️ <b>MID-MARKET PULSE & MOMENTUM (10:00 AM PST)</b>
 
         📈 <b>Intraday Market Action:</b>
-        - Broad market direction, leading/lagging sectors, and morning economic/Fed data digestion.
+        - Broad market direction, leading/lagging sectors, and morning market digestion. (Analyze economic/Fed data only if a release occurred this morning; otherwise, focus on price action and sector flows).
 
         💼 <b>Portfolio Standing / Notable Movers:</b>
         - If specific holdings experienced notable intraday moves (>=1.5%) or breaking catalysts, analyze ONLY those tickers. If calm, include a crisp 1-line note.
@@ -285,9 +289,9 @@ class MarketBriefingAgent(BaseAgent):
         - Highlight 1-2 emerging midday setups or secular themes with credible volume or analyst catalysts. Be selective and critical—do not highlight speculative or random tickers without proven fundamental backing.
 
         🛡️ <b>Afternoon Posture:</b>
-        - Key levels or afternoon Fed/economic events to watch before the closing session.
+        - Key levels, sector rotation, and risk posture heading into the closing session. (Only cite Fed or economic events if one is explicitly scheduled for this afternoon).
 
-        Keep it institutional, balanced, objective, and formatted with clean HTML tags. Avoid unwarranted puffery or hyperbole.
+        Keep it balanced, objective, and formatted with clean HTML tags. Avoid unwarranted puffery or hyperbole.
         """
         effective_key = api_key or self.api_key
         if not effective_key:
@@ -326,7 +330,7 @@ class MarketBriefingAgent(BaseAgent):
         as_of_et = ref_dt.astimezone(ZoneInfo("America/New_York"))
 
         economic_ctx = get_economic_calendar_context(as_of_pst)
-        economic_str = format_economic_calendar_for_prompt(economic_ctx)
+        economic_str = format_economic_calendar_for_prompt(economic_ctx, include_horizon=False)
 
         movers_context = self._extract_significant_portfolio_movers(portfolio, news_items, threshold_pct=1.5)
         indices_str = self._format_indices_summary(market_overview)
@@ -423,7 +427,7 @@ class MarketBriefingAgent(BaseAgent):
         as_of_et = ref_dt.astimezone(ZoneInfo("America/New_York"))
 
         economic_ctx = get_economic_calendar_context(as_of_pst)
-        economic_str = format_economic_calendar_for_prompt(economic_ctx)
+        economic_str = format_economic_calendar_for_prompt(economic_ctx, include_horizon=True)
 
         movers_context = self._extract_significant_portfolio_movers(portfolio, news_items, threshold_pct=1.5)
         news_str = self._format_news_summary(news_items, as_of=as_of_pst)
@@ -462,9 +466,9 @@ class MarketBriefingAgent(BaseAgent):
         - If any portfolio holdings have major scheduled earnings or direct catalyst events this week, mention ONLY those specific holdings. Otherwise, provide a 1-line note confirming a balanced posture.
 
         💡 <b>Secular Opportunities & Themes:</b>
-        - 1-2 secular themes or institutional-grade investment ideas to watch as markets open. Prioritize companies with durable moats, proven cash generation, or recent positive analyst revisions.
+        - 1-2 secular themes or high-conviction investment ideas to watch as markets open. Prioritize companies with durable moats, proven cash generation, or recent positive analyst revisions.
 
-        Keep it forward-looking, institutional, grounded, and styled with clean HTML. Avoid unwarranted puffery or false profundity.
+        Keep it forward-looking, disciplined, grounded, and styled with clean HTML. Avoid unwarranted puffery or false profundity.
         """
 
         effective_key = api_key or self.api_key
