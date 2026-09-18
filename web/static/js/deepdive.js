@@ -78,7 +78,7 @@ async function runSingleTickerAnalysis() {
     if (title) title.textContent = `Analyzing ${ticker}...`;
     if (meta) meta.textContent = 'Computing RSI, MACD, Bollinger Bands & Ingesting Social Sentiment...';
     if (indRow) indRow.innerHTML = '<div class="col-span-full text-center text-xs text-slate-400 py-3">Fetching verified 250 daily bars, StockTwits streams & Reddit threads...</div>';
-    if (body) body.innerHTML = '<div class="text-center py-6 text-slate-500">Gemini 3.8 Flash evaluating fundamental moats, technical momentum & capital sizing...</div>';
+    if (body) body.innerHTML = '<div class="text-center py-6 text-slate-400 text-sm">Gemini 3.8 Flash evaluating fundamental moats, technical momentum & capital sizing...</div>';
 
     // Synchronize URL with active ticker
     if (window.history && window.history.replaceState) {
@@ -98,11 +98,11 @@ async function runSingleTickerAnalysis() {
             loadDeepDivesArchive();
         } else {
             if (title) title.textContent = `Analysis Failed for ${ticker}`;
-            if (body) body.innerHTML = `<div class="text-rose-400 text-xs">${esc(data.detail || 'Unable to generate analysis.')}</div>`;
+            if (body) body.innerHTML = `<div class="text-rose-400 text-sm p-3">${esc(data.detail || 'Unable to generate analysis.')}</div>`;
         }
     } catch (e) {
         if (title) title.textContent = `Error Analyzing ${ticker}`;
-        if (body) body.innerHTML = `<div class="text-rose-400 text-xs">Failed to reach analysis endpoint: ${esc(e.message)}</div>`;
+        if (body) body.innerHTML = `<div class="text-rose-400 text-sm p-3">Failed to reach analysis endpoint: ${esc(e.message)}</div>`;
     } finally {
         if (btn) {
             btn.disabled = false;
@@ -498,22 +498,22 @@ function formatAnalysisContent(text) {
     html = html.replace(/&lt;strong&gt;([\s\S]*?)&lt;\/strong&gt;/gi, '<strong class="text-white font-semibold">$1</strong>');
     html = html.replace(/&lt;i&gt;([\s\S]*?)&lt;\/i&gt;/gi, '<em class="text-slate-300 italic">$1</em>');
     html = html.replace(/&lt;em&gt;([\s\S]*?)&lt;\/em&gt;/gi, '<em class="text-slate-300 italic">$1</em>');
-    html = html.replace(/&lt;code&gt;([\s\S]*?)&lt;\/code&gt;/gi, '<code class="px-1.5 py-0.5 bg-dark-950 text-cyan-300 rounded font-mono text-[11px] border border-slate-800">$1</code>');
-    html = html.replace(/&lt;pre&gt;([\s\S]*?)&lt;\/pre&gt;/gi, '<pre class="p-2 bg-dark-950 text-cyan-300 rounded font-mono text-[11px] border border-slate-800 overflow-x-auto">$1</pre>');
+    html = html.replace(/&lt;code&gt;([\s\S]*?)&lt;\/code&gt;/gi, '<code class="px-1.5 py-0.5 bg-dark-950 text-cyan-300 rounded font-mono text-[13px] border border-slate-800">$1</code>');
+    html = html.replace(/&lt;pre&gt;([\s\S]*?)&lt;\/pre&gt;/gi, '<pre class="p-3 bg-dark-950 text-cyan-300 rounded font-mono text-[13px] border border-slate-800 overflow-x-auto">$1</pre>');
     // Only allow http:// and https:// URLs for anchors; reject javascript: or data: schemes
     html = html.replace(/&lt;a\s+href=&quot;(https?:\/\/[^&"]+)&quot;[^&]*&gt;([\s\S]*?)&lt;\/a&gt;/gi, '<a href="$1" target="_blank" rel="noopener noreferrer" class="text-cyan-400 hover:underline">$2</a>');
 
     // 3. Format markdown bold & inline code
     html = html.replace(/\*\*([^*]+)\*\*/g, '<strong class="text-white font-semibold">$1</strong>');
-    html = html.replace(/`([^`]+)`/g, '<code class="px-1.5 py-0.5 bg-dark-950 text-cyan-300 rounded font-mono text-[11px] border border-slate-800">$1</code>');
+    html = html.replace(/`([^`]+)`/g, '<code class="px-1.5 py-0.5 bg-dark-950 text-cyan-300 rounded font-mono text-[13px] border border-slate-800">$1</code>');
 
     // 4. Bullet points (•, -, *)
-    html = html.replace(/^\s*[•\-\*]\s+(.*)$/gm, '<li class="ml-4 list-disc text-slate-300 my-0.5">$1</li>');
+    html = html.replace(/^\s*[•\-\*]\s+(.*)$/gm, '<li class="ml-4 list-disc text-slate-200 my-1 leading-relaxed">$1</li>');
     // Numbered lists
-    html = html.replace(/^\s*(\d+)\.\s+(.*)$/gm, '<li class="ml-4 list-decimal text-slate-300 my-0.5">$2</li>');
+    html = html.replace(/^\s*(\d+)\.\s+(.*)$/gm, '<li class="ml-4 list-decimal text-slate-200 my-1 leading-relaxed">$2</li>');
 
     // 5. Line breaks & spacing
-    html = html.replace(/\n\n/g, '<div class="h-2"></div>');
+    html = html.replace(/\n\n/g, '<div class="h-3"></div>');
     html = html.replace(/\n/g, '<br>');
     html = html.replace(/<\/li>\s*<br\s*\/?>/gi, '</li>');
 

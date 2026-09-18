@@ -87,8 +87,26 @@
             color: #38bdf8;
             text-decoration: underline;
         }
-    
 
+        /* Single Stock Analysis Area Readability Enhancements */
+        #st-analysis-body {
+            font-size: 0.95rem; /* ~15.2px: crisp, institutional readability */
+            line-height: 1.75;
+            letter-spacing: 0.01em;
+        }
+        #st-analysis-body li {
+            margin-top: 0.35rem;
+            margin-bottom: 0.35rem;
+            font-size: 0.95rem;
+        }
+        #st-analysis-body code {
+            font-size: 0.88em;
+            padding: 0.18rem 0.45rem;
+        }
+        #st-analysis-body strong, #st-analysis-body b {
+            font-size: 0.975rem;
+            color: #ffffff;
+        }
     </style>
 </head>
 <body class="bg-dark-950 text-slate-100 min-h-screen flex flex-col antialiased">
@@ -708,7 +726,7 @@
                                         <h4 id="st-result-title" class="text-base font-bold text-white">Stock Analysis Result</h4>
                                         <div id="st-provenance-badge" class="hidden"></div>
                                     </div>
-                                    <div id="st-result-meta" class="text-[11px] font-mono text-cyan-400">Live Quote & Momentum</div>
+                                    <div id="st-result-meta" class="text-xs font-mono text-cyan-400">Live Quote & Momentum</div>
                                 </div>
                             </div>
                             <button onclick="document.getElementById('single-ticker-result-card').classList.add('hidden')" class="text-slate-400 hover:text-white px-2.5 py-1 bg-dark-950 rounded-lg border border-slate-800 text-xs transition">&times; Clear</button>
@@ -721,11 +739,11 @@
                         <div id="st-kpi-row" class="hidden grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3"></div>
 
                         <!-- CIO Analysis Text Body -->
-                        <div id="st-analysis-body" class="p-4 bg-dark-950/80 border border-slate-800 rounded-xl text-xs text-slate-200 leading-relaxed font-sans space-y-3 briefing-html-content">
+                        <div id="st-analysis-body" class="p-5 bg-dark-950/80 border border-slate-800 rounded-xl text-sm sm:text-[14.5px] text-slate-200 leading-relaxed sm:leading-7 font-sans space-y-3 briefing-html-content">
                             <div class="text-center py-8 text-slate-400 space-y-2">
                                 <div class="text-3xl">🔬</div>
-                                <div class="font-bold text-white text-sm">No Ticker Analyzed Yet</div>
-                                <p class="text-xs text-slate-400 max-w-md mx-auto">
+                                <div class="font-bold text-white text-base">No Ticker Analyzed Yet</div>
+                                <p class="text-sm text-slate-400 max-w-md mx-auto">
                                     Enter any ticker symbol above (e.g. <code>NVDA</code>, <code>AAPL</code>, <code>CEG</code>), select an archived report on the left, or click a quick suggestion to run a full institutional deep dive.
                                 </p>
                             </div>
