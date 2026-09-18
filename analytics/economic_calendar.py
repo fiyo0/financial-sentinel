@@ -242,7 +242,7 @@ def generate_economic_calendar_ics(
             f"Category: {ev.get('category', 'MACRO')}",
             f"Importance: {ev.get('importance', 'HIGH')}",
             f"Scheduled Time: {ev['time_et']} Eastern Time / {_build_event_datetime(ev['date'], ev['time_et']).astimezone(PST_TZ).strftime('%I:%M %p')} Pacific",
-            "Institutional Directive: Monitor implied volatility, rate curve reaction, and cross-asset liquidity.",
+            "Trading Directive: Monitor implied volatility, rate curve reaction, and cross-asset liquidity.",
             "Live Trading Desk: Financial Sentinel Portfolio Intelligence"
         ]
         description = "\\n\\n".join(desc_parts)

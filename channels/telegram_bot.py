@@ -340,7 +340,7 @@ class FinancialSentinelTelegramBot:
 
     def _execute_ticker_analysis(self, target_ticker: str, chat_id: str, user_id: str, user_gemini_key: Optional[str]):
         """
-        Executes an institutional-grade, multi-agent single ticker deep dive via AnalysisService.
+        Executes a comprehensive, multi-agent single ticker deep dive via AnalysisService.
         Progressively streams status to Telegram, computes technical momentum,
         social sentiment velocity, news catalysts, fundamental moats, and portfolio fit.
         Automatically preserves the generated analysis in the user's web Deep Dive Archive.
@@ -456,7 +456,7 @@ class FinancialSentinelTelegramBot:
                 f"💰 <b>/cash</b> — Deployable cash reserves & dry powder\n"
                 f"⚡ <b>/scan</b> — Multi-agent risk & opportunity discovery cycle\n\n"
                 f"<b>Alpha Discovery & Stock Deep Dives:</b>\n"
-                f"🔬 <b>/[ticker]</b> or <b>/analysis [ticker]</b> — Institutional deep dive & Buy/Hold verdict (e.g. <code>/NVDA</code>, <code>/AAPL</code>)\n"
+                f"🔬 <b>/[ticker]</b> or <b>/analysis [ticker]</b> — In-depth technical analysis & Buy/Hold verdict (e.g. <code>/NVDA</code>, <code>/AAPL</code>)\n"
                 f"🔭 <b>/opportunity</b> — Top market opportunities tailored to your portfolio\n"
                 f"🚀 <b>/moonshots</b> — High-asymmetry deep tech alpha radar\n\n"
                 f"💬 <i>Or ask any market/portfolio question directly!</i>"

@@ -1,5 +1,5 @@
 /**
- * deepdive.js - Single Ticker Institutional Deep Dive & Retail Sentiment Engine
+ * deepdive.js - Single Ticker Deep Dive & Retail Sentiment Engine
  * Part of Financial Sentinel Modular Architecture
  */
 
@@ -52,7 +52,7 @@ function analyzeQuickTicker(sym) {
 }
 
 /**
- * Execute real-time single ticker institutional and retail crowd analysis.
+ * Execute real-time single ticker technical and retail crowd analysis.
  */
 async function runSingleTickerAnalysis() {
     const input = document.getElementById('single-ticker-input');
@@ -254,7 +254,7 @@ function renderDeepDiveResult(data) {
 
             kpiRow.innerHTML = `
                 <div class="p-3 rounded-xl border ${verdictBg} space-y-1">
-                    <div class="text-[10px] uppercase font-semibold tracking-wider text-slate-400">Institutional Verdict</div>
+                    <div class="text-[10px] uppercase font-semibold tracking-wider text-slate-400">Analysis Verdict</div>
                     <div class="text-sm font-extrabold ${verdictColor} flex items-center space-x-1 truncate">
                         <span>${verdictEmoji}</span>
                         <span>${esc(data.verdict || 'ANALYZED')}</span>
@@ -475,7 +475,7 @@ async function deleteArchivedDeepDive(deepdiveId, event) {
 }
 
 /**
- * Robust institutional report formatter: converts Telegram HTML, markdown, and bullets to styled Tailwind HTML.
+ * Robust report formatter: converts Telegram HTML, markdown, and bullets to styled Tailwind HTML.
  */
 function formatAnalysisContent(text) {
     if (!text) return '';
