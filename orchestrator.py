@@ -46,21 +46,73 @@ class FinancialSentinelOrchestrator:
                 return Portfolio(**data)
         elif file_path.endswith(".csv"):
             holdings = []
-            with open(file_path, "r") as f:
+            cash_val = 0.0
+            with open(file_path, "r", encoding="utf-8-sig") as f:
                 reader = csv.DictReader(f)
                 for row in reader:
+                    clean_row = {}
+                    for k, v in row.items():
+                        if k:
+                            norm_k = "".join(c for c in k.lower() if c.isalnum())
+                            clean_row[norm_k] = v.strip() if isinstance(v, str) else v
+
+                    ticker = (
+                        clean_row.get("ticker") or clean_row.get("symbol") or clean_row.get("stock")
+                        or clean_row.get("sym") or clean_row.get("security") or ""
+                    )
+                    ticker_upper = str(ticker).strip().upper()
+                    name = str(clean_row.get("name") or clean_row.get("description") or clean_row.get("company") or ticker_upper).strip()
+
+                    def _parse_num(val: Any, default: float = 0.0) -> float:
+                        if val is None or str(val).strip() == "":
+                            return default
+                        try:
+                            s = str(val).replace("$", "").replace(",", "").replace("%", "").strip()
+                            return float(s)
+                        except Exception:
+                            return default
+
+                    shares = _parse_num(clean_row.get("shares") or clean_row.get("quantity") or clean_row.get("qty") or clean_row.get("units"))
+                    avg_price = _parse_num(clean_row.get("avgprice") or clean_row.get("costbasis") or clean_row.get("averagecost") or clean_row.get("price"))
+                    current_price = _parse_num(clean_row.get("currentprice") or clean_row.get("lastprice") or clean_row.get("marketprice") or avg_price)
+
+                    # Handle cash lines dynamically
+                    if ticker_upper in ("CASH", "USD", "SPAXX", "FDRXX", "SWVXX", "MMF", "CORE", "FCASH") or "CASH" in name.upper() or "MONEY MARKET" in name.upper():
+                        cash_amount = (shares * avg_price) if (shares > 0 and avg_price > 0) else (shares if shares > 0 else (avg_price if avg_price > 0 else current_price))
+                        if cash_amount > 0:
+                            cash_val += cash_amount
+                        continue
+
+                    if not ticker_upper or ticker_upper in ("TOTAL", "--", "ACCOUNT TOTAL", "TOTALS") or shares <= 0:
+                        continue
+
+                    # Lookup canonical sector if available
+                    canonical_sec = None
+                    if hasattr(self, "state_store") and self.state_store:
+                        try:
+                            canonical_sec = self.state_store.get_ticker_sector(ticker_upper)
+                        except Exception:
+                            pass
+
+                    raw_sec = clean_row.get("sector") or clean_row.get("industry") or clean_row.get("assetclass")
+                    sector = raw_sec.strip() if raw_sec else (canonical_sec or "Unclassified")
+
+                    tags_str = clean_row.get("thematictags") or clean_row.get("tags") or clean_row.get("theme") or ""
+                    thematic_tags = [t.strip() for t in str(tags_str).split(",") if t.strip()]
+
                     holdings.append(PortfolioHolding(
-                        ticker=row["ticker"].strip().upper(),
-                        name=row.get("name", row["ticker"]).strip(),
-                        shares=float(row.get("shares", 0)),
-                        avg_price=float(row.get("avg_price", 0)),
-                        current_price=float(row.get("current_price", row.get("avg_price", 0))),
-                        sector=row.get("sector", "Technology").strip(),
-                        thematic_tags=[t.strip() for t in row.get("thematic_tags", "").split(",") if t.strip()]
+                        ticker=ticker_upper,
+                        name=name,
+                        shares=shares,
+                        avg_price=avg_price if avg_price > 0 else current_price,
+                        current_price=current_price if current_price > 0 else avg_price,
+                        sector=sector,
+                        thematic_tags=thematic_tags
                     ))
-            p = Portfolio(name="Imported CSV Portfolio", cash=0.0, holdings=holdings)
+            p = Portfolio(name="Imported CSV Portfolio", cash=cash_val, holdings=holdings)
             p.recalculate_weights()
             return p
+
         else:
             raise ValueError("Supported portfolio formats: .json, .csv")
 
@@ -112,12 +164,12 @@ class FinancialSentinelOrchestrator:
                 if os.path.exists(my_csv):
                     try:
                         p = self.load_portfolio_from_file(my_csv)
-                        p.cash = 12500.0
                         p.deduplicate_and_aggregate()
                         self.persist_active_portfolio(p, user_id=user_id)
                         return p
                     except Exception:
                         pass
+
 
                 sample_json = os.path.join(data_dir, "sample_portfolio.json")
                 if os.path.exists(sample_json):

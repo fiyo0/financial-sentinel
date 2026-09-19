@@ -96,7 +96,15 @@ class PortfolioService:
                 logger.warning(f"Failed to fetch live quote for {clean_ticker}: {e}")
 
         resolved_name = name or quote.get("name") or clean_ticker
-        resolved_sector = sector or quote.get("sector") or "Technology"
+        canonical_sec = None
+        if hasattr(self.orchestrator, "state_store") and self.orchestrator.state_store:
+            try:
+                canonical_sec = self.orchestrator.state_store.get_ticker_sector(clean_ticker)
+            except Exception:
+                pass
+        resolved_sector = sector or quote.get("sector") or canonical_sec or "Unclassified"
+
+
         quote_price = float(quote.get("current_price", 0.0) or 0.0)
         resolved_price = price if (price is not None and price > 0) else (quote_price if quote_price > 0 else 100.0)
         resolved_current_price = current_price if (current_price is not None and current_price > 0) else (quote_price if quote_price > 0 else resolved_price)

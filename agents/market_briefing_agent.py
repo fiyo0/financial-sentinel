@@ -49,7 +49,7 @@ class MarketBriefingAgent(BaseAgent):
         threshold_pct: float = 1.5
     ) -> str:
         """
-        Identifies holdings that had significant price movement (>= 1.5% intraday change)
+        Identifies holdings that had significant price movement (beta/volatility-adaptive threshold)
         or direct breaking news catalysts.
         Returns a concise context string for the prompt.
         """
@@ -64,25 +64,34 @@ class MarketBriefingAgent(BaseAgent):
         significant_movers = []
         for h in portfolio.holdings:
             chg = getattr(h, "daily_change_pct", 0.0) or 0.0
-            has_price_move = abs(chg) >= threshold_pct
+            sec = h.sector or "Unclassified"
+            beta = 1.0
+            try:
+                from analytics.quant_risk import SECTOR_MACRO_SENSITIVITIES
+                beta = SECTOR_MACRO_SENSITIVITIES.get(sec, {}).get("growth_beta", 1.0)
+            except Exception:
+                pass
+            adaptive_thresh = round(max(0.75, min(2.50, threshold_pct * beta)), 2)
+            has_price_move = abs(chg) >= adaptive_thresh
             has_news = h.ticker.upper() in news_tickers
             if has_price_move or has_news:
-                significant_movers.append((h, chg, has_news))
+                significant_movers.append((h, chg, has_news, adaptive_thresh))
 
         if not significant_movers:
             return (
-                "PORTFOLIO MOVER STATUS: Core holdings calm with low volatility (<1.5% price movement) and no direct breaking news catalysts.\n"
+                "PORTFOLIO MOVER STATUS: Core holdings calm with low volatility (within beta-adaptive volatility bands) and no direct breaking news catalysts.\n"
                 "INSTRUCTION FOR PORTFOLIO SECTION: Do NOT list or re-explain every static holding. Simply output: '💼 <b>Portfolio Standing:</b> Core holdings calm with low volatility.'"
             )
 
         lines = [
-            f"PORTFOLIO HOLDINGS WITH SIGNIFICANT MOVEMENT / CATALYSTS (Threshold >= {threshold_pct}% or Direct News):"
+            "PORTFOLIO HOLDINGS WITH SIGNIFICANT MOVEMENT / CATALYSTS (Beta-Adaptive Thresholds or Direct News):"
         ]
-        for h, chg, has_news in significant_movers:
+        for h, chg, has_news, adaptive_thresh in significant_movers:
             sign = "+" if chg > 0 else ""
             news_flag = " | ⚡ Active News Catalyst" if has_news else ""
-            lines.append(f"- {h.ticker} ({h.name}, {h.sector}): ${h.current_price:.2f} ({sign}{chg:.2f}% day change){news_flag}")
+            lines.append(f"- {h.ticker} ({h.name}, {h.sector}): ${h.current_price:.2f} ({sign}{chg:.2f}% day change | Threshold: {adaptive_thresh}%){news_flag}")
         lines.append("\nINSTRUCTION: ONLY mention and analyze the specific holdings listed above that had notable moves. Do NOT recite the rest of the static holdings.")
+
         return "\n".join(lines)
 
     def _format_indices_summary(self, market_overview: Dict[str, Any]) -> str:
@@ -121,11 +130,12 @@ class MarketBriefingAgent(BaseAgent):
                 pub_et = pub_aware.astimezone(ZoneInfo("America/New_York"))
                 age_h = max(0.0, (ref_et - pub_et).total_seconds() / 3600.0)
                 if pub_et.date() == ref_et.date():
-                    time_tag = f"Today {pub_et.strftime('%I:%M %p')} EDT ({age_h:.1f}h ago)"
+                    time_tag = f"Today {pub_et.strftime('%I:%M %p %Z')} ({age_h:.1f}h ago)"
                 elif (ref_et.date() - pub_et.date()).days == 1:
-                    time_tag = f"Yesterday {pub_et.strftime('%b %d, %I:%M %p')} EDT ({age_h:.1f}h ago)"
+                    time_tag = f"Yesterday {pub_et.strftime('%b %d, %I:%M %p %Z')} ({age_h:.1f}h ago)"
                 else:
-                    time_tag = f"{pub_et.strftime('%b %d, %I:%M %p')} EDT ({age_h:.1f}h ago)"
+                    time_tag = f"{pub_et.strftime('%b %d, %I:%M %p %Z')} ({age_h:.1f}h ago)"
+
             else:
                 time_tag = "Recent"
 
@@ -181,8 +191,9 @@ class MarketBriefingAgent(BaseAgent):
 
         CURRENT TIME & SESSION GROUND TRUTH:
         • Calendar Date: {as_of_pst.strftime('%A, %B %d, %Y')}
-        • Current Time: {as_of_pst.strftime('%I:%M %p')} PST / {as_of_et.strftime('%I:%M %p')} EDT
-        • Session Phase: Pre-Market Opening (U.S. cash equity markets open at 6:30 AM PST / 9:30 AM EDT)
+        • Current Time: {as_of_pst.strftime('%I:%M %p %Z')} / {as_of_et.strftime('%I:%M %p %Z')}
+        • Session Phase: Pre-Market Opening (U.S. cash equity markets open at 6:30 AM {as_of_pst.strftime('%Z')} / 9:30 AM {as_of_et.strftime('%Z')})
+
 
         {economic_str}
 
@@ -264,7 +275,8 @@ class MarketBriefingAgent(BaseAgent):
 
         CURRENT TIME & SESSION GROUND TRUTH:
         • Calendar Date: {as_of_pst.strftime('%A, %B %d, %Y')}
-        • Current Time: {as_of_pst.strftime('%I:%M %p')} PST / {as_of_et.strftime('%I:%M %p')} EDT
+        • Current Time: {as_of_pst.strftime('%I:%M %p %Z')} / {as_of_et.strftime('%I:%M %p %Z')}
+
         • Session Phase: Mid-Day Trading (Morning cash session complete; entering midday positioning)
 
         {economic_str}
@@ -359,8 +371,9 @@ class MarketBriefingAgent(BaseAgent):
 
         CURRENT TIME & SESSION GROUND TRUTH:
         • Calendar Date: {as_of_pst.strftime('%A, %B %d, %Y')}
-        • Current Time: {as_of_pst.strftime('%I:%M %p')} PST / {as_of_et.strftime('%I:%M %p')} EDT
-        • Session Phase: Post-Market Closing Wrap (Regular trading ended at 1:00 PM PST / 4:00 PM EDT)
+        • Current Time: {as_of_pst.strftime('%I:%M %p %Z')} / {as_of_et.strftime('%I:%M %p %Z')}
+        • Session Phase: Post-Market Closing Wrap (Regular trading ended at 1:00 PM {as_of_pst.strftime('%Z')} / 4:00 PM {as_of_et.strftime('%Z')})
+
 
         {economic_str}
 
@@ -444,7 +457,8 @@ class MarketBriefingAgent(BaseAgent):
 
         CURRENT TIME & SESSION GROUND TRUTH:
         • Calendar Date: {as_of_pst.strftime('%A, %B %d, %Y')}
-        • Current Time: {as_of_pst.strftime('%I:%M %p')} PST / {as_of_et.strftime('%I:%M %p')} EDT
+        • Current Time: {as_of_pst.strftime('%I:%M %p %Z')} / {as_of_et.strftime('%I:%M %p %Z')}
+
         • Session Phase: Weekend Transition / Week-Ahead Setup
 
         {economic_str}

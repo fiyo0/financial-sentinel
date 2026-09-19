@@ -162,6 +162,144 @@ def generate_statutory_macro_schedule(start_date: date, end_date: date) -> List[
     return events
 
 
+def _find_nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
+    """Find the nth occurrence of weekday (0=Mon, 2=Wed) in year/month."""
+    first_day = date(year, month, 1)
+    days_to_target = (weekday - first_day.weekday()) % 7
+    return first_day + timedelta(days=days_to_target + (n - 1) * 7)
+
+
+def _find_last_weekday(year: int, month: int, weekday: int) -> date:
+    """Find the last occurrence of weekday in year/month."""
+    if month == 12:
+        next_month = date(year + 1, 1, 1)
+    else:
+        next_month = date(year, month + 1, 1)
+    last_day = next_month - timedelta(days=1)
+    days_back = (last_day.weekday() - weekday) % 7
+    return last_day - timedelta(days=days_back)
+
+
+def generate_statutory_fomc_schedule(start_date: date, end_date: date) -> List[Dict[str, Any]]:
+    """
+    Perpetually generates the Federal Reserve FOMC schedule (rate decisions, press conferences,
+    and 21-day delayed meeting minutes) for any date horizon.
+    Retains verified published dates from FOMC_SCHEDULE through March 2027, and projects
+    the statutory 8-meeting cycle for any date range thereafter.
+    """
+    events: List[Dict[str, Any]] = []
+    seen_keys = set()
+
+    # 1. Ingest verified historical and near-term schedule through March 2027
+    for item in FOMC_SCHEDULE:
+        d = datetime.strptime(item["date"], "%Y-%m-%d").date()
+        if start_date <= d <= end_date:
+            rate_key = (item["date"], item["time_et"], item["desc"])
+            if rate_key not in seen_keys:
+                seen_keys.add(rate_key)
+                events.append({
+                    "date": item["date"],
+                    "time_et": item["time_et"],
+                    "category": "CENTRAL_BANK",
+                    "name": item["desc"],
+                    "importance": "CRITICAL"
+                })
+
+            # Press Conference (30 mins after rate decision)
+            presser_name = "Federal Reserve Chair Press Conference"
+            presser_key = (item["date"], "14:30", presser_name)
+            if presser_key not in seen_keys:
+                seen_keys.add(presser_key)
+                events.append({
+                    "date": item["date"],
+                    "time_et": "14:30",
+                    "category": "CENTRAL_BANK",
+                    "name": presser_name,
+                    "importance": "CRITICAL"
+                })
+
+            # Meeting Minutes (released 21 days later at 14:00 ET)
+            minutes_d = d + timedelta(days=21)
+            if start_date <= minutes_d <= end_date:
+                month_name = d.strftime("%B")
+                min_name = f"FOMC {month_name} Meeting Minutes"
+                min_key = (minutes_d.strftime("%Y-%m-%d"), "14:00", min_name)
+                if min_key not in seen_keys:
+                    seen_keys.add(min_key)
+                    events.append({
+                        "date": minutes_d.strftime("%Y-%m-%d"),
+                        "time_et": "14:00",
+                        "category": "CENTRAL_BANK",
+                        "name": min_name,
+                        "importance": "MEDIUM"
+                    })
+
+    # 2. Project statutory cycle beyond March 2027
+    max_verified_date = date(2027, 3, 17)
+    if end_date > max_verified_date:
+        start_year = max(2027, start_date.year)
+        end_year = end_date.year
+
+        for yr in range(start_year, end_year + 1):
+            meetings = [
+                (_find_last_weekday(yr, 1, 2), False),       # Meeting 1: Jan
+                (_find_nth_weekday(yr, 3, 2, 3), True),       # Meeting 2: Mar (SEP)
+                (_find_nth_weekday(yr, 5, 2, 1), False),      # Meeting 3: May
+                (_find_nth_weekday(yr, 6, 2, 3), True),       # Meeting 4: Jun (SEP)
+                (_find_last_weekday(yr, 7, 2), False),       # Meeting 5: Jul
+                (_find_nth_weekday(yr, 9, 2, 3), True),       # Meeting 6: Sep (SEP)
+                (_find_nth_weekday(yr, 11, 2, 1), False),     # Meeting 7: Nov
+                (_find_nth_weekday(yr, 12, 2, 2), True),      # Meeting 8: Dec (SEP)
+            ]
+
+            for m_date, has_sep in meetings:
+                if m_date <= max_verified_date:
+                    continue
+                if start_date <= m_date <= end_date:
+                    desc = "Federal Reserve FOMC Interest Rate Decision & Summary of Economic Projections" if has_sep else "Federal Reserve FOMC Interest Rate Decision"
+                    d_str = m_date.strftime("%Y-%m-%d")
+                    r_key = (d_str, "14:00", desc)
+                    if r_key not in seen_keys:
+                        seen_keys.add(r_key)
+                        events.append({
+                            "date": d_str,
+                            "time_et": "14:00",
+                            "category": "CENTRAL_BANK",
+                            "name": desc,
+                            "importance": "CRITICAL"
+                        })
+
+                    p_key = (d_str, "14:30", "Federal Reserve Chair Press Conference")
+                    if p_key not in seen_keys:
+                        seen_keys.add(p_key)
+                        events.append({
+                            "date": d_str,
+                            "time_et": "14:30",
+                            "category": "CENTRAL_BANK",
+                            "name": "Federal Reserve Chair Press Conference",
+                            "importance": "CRITICAL"
+                        })
+
+                min_date = m_date + timedelta(days=21)
+                if min_date > max_verified_date and start_date <= min_date <= end_date:
+                    month_name = m_date.strftime("%B")
+                    min_desc = f"FOMC {month_name} Meeting Minutes"
+                    min_key = (min_date.strftime("%Y-%m-%d"), "14:00", min_desc)
+                    if min_key not in seen_keys:
+                        seen_keys.add(min_key)
+                        events.append({
+                            "date": min_date.strftime("%Y-%m-%d"),
+                            "time_et": "14:00",
+                            "category": "CENTRAL_BANK",
+                            "name": min_desc,
+                            "importance": "MEDIUM"
+                        })
+
+    events.sort(key=lambda x: (x["date"], x["time_et"]))
+    return events
+
+
+
 def _build_event_datetime(date_str: str, time_et_str: str) -> datetime:
     """Combines a date string YYYY-MM-DD and Eastern time HH:MM into an aware datetime."""
     d = datetime.strptime(date_str, "%Y-%m-%d").date()
@@ -258,33 +396,14 @@ def generate_economic_calendar_ics(
             seen_keys.add(key)
             events_to_include.append(ev)
 
-    # 2. Collect FOMC schedule across 2025-2027
-    for fomc in FOMC_SCHEDULE:
-        # Main Rate Decision
-        fomc_name = fomc["desc"]
-        key = (fomc["date"], fomc["time_et"], fomc_name)
+    # 2. Collect statutory FOMC schedule across 2025-2027
+    fomc_events = generate_statutory_fomc_schedule(date(2025, 1, 1), date(2027, 12, 31))
+    for fomc_ev in fomc_events:
+        key = (fomc_ev["date"], fomc_ev["time_et"], fomc_ev["name"])
         if key not in seen_keys:
             seen_keys.add(key)
-            events_to_include.append({
-                "date": fomc["date"],
-                "time_et": fomc["time_et"],
-                "category": "CENTRAL_BANK",
-                "name": fomc_name,
-                "importance": "CRITICAL"
-            })
+            events_to_include.append(fomc_ev)
 
-        # Accompanying Press Conference (30 minutes after rate decision)
-        presser_name = "Federal Reserve Chair Press Conference"
-        key_presser = (fomc["date"], "14:30", presser_name)
-        if key_presser not in seen_keys:
-            seen_keys.add(key_presser)
-            events_to_include.append({
-                "date": fomc["date"],
-                "time_et": "14:30",
-                "category": "CENTRAL_BANK",
-                "name": presser_name,
-                "importance": "CRITICAL"
-            })
 
     # Sort chronologically
     events_to_include.sort(key=lambda x: (x["date"], x["time_et"]))
@@ -398,27 +517,12 @@ def get_economic_calendar_context(
         seen_keys.add(key)
         events_pool.append(ev)
 
-    for fomc in FOMC_SCHEDULE:
-        key_rate = (fomc["date"], fomc["time_et"], fomc["desc"])
-        if key_rate not in seen_keys:
-            seen_keys.add(key_rate)
-            events_pool.append({
-                "date": fomc["date"],
-                "time_et": fomc["time_et"],
-                "category": "CENTRAL_BANK",
-                "name": fomc["desc"],
-                "importance": "CRITICAL"
-            })
-        key_presser = (fomc["date"], "14:30", "Federal Reserve Chair Press Conference")
-        if key_presser not in seen_keys:
-            seen_keys.add(key_presser)
-            events_pool.append({
-                "date": fomc["date"],
-                "time_et": "14:30",
-                "category": "CENTRAL_BANK",
-                "name": "Federal Reserve Chair Press Conference",
-                "importance": "CRITICAL"
-            })
+    dynamic_fomc = generate_statutory_fomc_schedule(today_et_date - timedelta(days=2), end_horizon_date)
+    for fomc_ev in dynamic_fomc:
+        key = (fomc_ev["date"], fomc_ev["time_et"], fomc_ev["name"])
+        if key not in seen_keys:
+            seen_keys.add(key)
+            events_pool.append(fomc_ev)
 
     events_pool.sort(key=lambda x: (x["date"], x["time_et"]))
 
@@ -431,7 +535,7 @@ def get_economic_calendar_context(
         ev_date = ev_dt.astimezone(EST_TZ).date()
         ev_user_dt = ev_dt.astimezone(user_tz)
 
-        time_display = f"{ev_dt.strftime('%I:%M %p')} EDT ({ev_user_dt.strftime('%I:%M %p')} {user_tz.key.split('/')[-1]})"
+        time_display = f"{ev_dt.strftime('%I:%M %p %Z')} ({ev_user_dt.strftime('%I:%M %p %Z')})"
 
         if ev_date == today_et_date:
             is_completed = as_of_et >= ev_dt
@@ -439,7 +543,8 @@ def get_economic_calendar_context(
 
             if is_completed:
                 status = "COMPLETED"
-                status_desc = f"Concluded earlier today ({diff_hours:.1f}h ago at {ev_dt.strftime('%I:%M %p')} EDT)"
+                status_desc = f"Concluded earlier today ({diff_hours:.1f}h ago at {ev_dt.strftime('%I:%M %p %Z')})"
+
                 directive = (
                     "CRITICAL DIRECTIVE: This catalyst CONCLUDED EARLIER TODAY. "
                     "Analyze its outcome, market reaction, and closing bell aftermath. "

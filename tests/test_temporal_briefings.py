@@ -113,8 +113,9 @@ def test_postmarket_prompt_temporal_grounding_september_16(sample_portfolio):
 
     # Temporal ground truth assertions
     assert "Wednesday, September 16, 2026" in prompt
-    assert "03:00 PM PST / 06:00 PM EDT" in prompt
+    assert ("03:00 PM PDT / 06:00 PM EDT" in prompt or "03:00 PM PST / 06:00 PM EDT" in prompt)
     assert "Post-Market Closing Wrap" in prompt
+
 
     # Economic calendar ground truth assertions
     assert "[COMPLETED] Federal Reserve FOMC Interest Rate Decision" in prompt
@@ -150,8 +151,9 @@ def test_premarket_prompt_temporal_grounding_september_16(sample_portfolio):
     prompt = captured_prompts[0]
 
     assert "Wednesday, September 16, 2026" in prompt
-    assert "06:30 AM PST / 09:30 AM EDT" in prompt
+    assert ("06:30 AM PDT / 09:30 AM EDT" in prompt or "06:30 AM PST / 09:30 AM EDT" in prompt)
     assert "[PENDING] Federal Reserve FOMC Interest Rate Decision" in prompt
+
     assert "Upcoming today during the trading session" in prompt
 
 

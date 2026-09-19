@@ -117,8 +117,9 @@ class Portfolio(BaseModel):
                     existing.current_price = h.current_price
                 if h.name and h.name != ticker_upper:
                     existing.name = h.name
-                if h.sector and h.sector != "Technology":
+                if h.sector and (existing.sector in ("Unclassified", "", None) or h.sector != "Unclassified"):
                     existing.sector = h.sector
+
             else:
                 aggregated[ticker_upper] = h
         self.holdings = list(aggregated.values())

@@ -296,7 +296,12 @@ class PortfolioAnalysisAgent(BaseAgent):
         quote = quote_data or {}
         price = float(quote.get("current_price", 0.0) or 0.0)
         company_name = quote.get("name", sym)
-        sector = quote.get("sector", "Technology")
+        canonical_sec = self.state_store.get_ticker_sector(sym) if self.state_store else None
+        sector = quote.get("sector") or canonical_sec or "Unclassified"
+
+
+
+
 
         # Backwards compatibility check: If analyze_single_ticker is mocked or overridden
         orig_fn = getattr(PortfolioAnalysisAgent.analyze_single_ticker, "__func__", PortfolioAnalysisAgent.analyze_single_ticker)
@@ -454,11 +459,28 @@ class PortfolioAnalysisAgent(BaseAgent):
         top_sectors_list = [f"{s} ({w:.1f}%)" for s, w in sorted_sectors[:3] if w > 0]
         top_sectors_str = ", ".join(top_sectors_list) if top_sectors_list else f"{sector}"
 
-        known_broad_etfs = {"SPY", "VOO", "QQQ", "IVV", "VTI", "IWM", "DIA", "SCHD", "SFY", "VEA", "VWO", "XLK", "XLF", "XLE", "XLV"}
+        def is_etf_holding(holding: PortfolioHolding) -> bool:
+            h_sec = (holding.sector or "").strip()
+            if h_sec == "Index ETF / Fund":
+                return True
+            if (getattr(holding, "asset_class", "") or "").upper() == "ETF":
+                return True
+            h_name = (holding.name or "").upper()
+            if any(k in h_name for k in ["ETF", "INDEX", "FUND", "TRUST", "SPDR", "ISHARES", "VANGUARD"]):
+                return True
+            if self.state_store:
+                try:
+                    if self.state_store.get_ticker_sector(holding.ticker) == "Index ETF / Fund":
+                        return True
+                except Exception:
+                    pass
+            return False
+
         found_etfs = [
             h.ticker.upper() for h in portfolio.holdings
-            if h.ticker.upper() in known_broad_etfs or (getattr(h, "asset_class", "") or "").upper() == "ETF" or "ETF" in (h.name or "").upper()
+            if is_etf_holding(h)
         ]
+
         etf_phrase = f" (including active index ETF allocations: {', '.join(sorted(set(found_etfs)))})" if found_etfs else ""
 
         if portfolio.holdings:

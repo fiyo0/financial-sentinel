@@ -19,27 +19,12 @@ NEWS_FEED_CACHE: Dict[str, tuple[float, List[NewsItem]]] = {}
 NEWS_CACHE_TTL_SECONDS = 180.0  # 3 minutes TTL
 
 
-# Source reliability index based on domain governance
-SOURCE_RELIABILITY_MAP = {
-    "sec.gov": 0.99,
-    "federalreserve.gov": 0.99,
-    "reuters.com": 0.92,
-    "bloomberg.com": 0.92,
-    "wsj.com": 0.90,
-    "cnbc.com": 0.85,
-    "marketwatch.com": 0.85,
-    "news.google.com": 0.85,
-    "google.com": 0.85,
-    "finance.yahoo.com": 0.80,
-    "seekingalpha.com": 0.70,
-    "benzinga.com": 0.65,
-}
-
 # In-memory runtime dynamic ticker alias cache (seeded with common corporate/brand divergences)
 _DYNAMIC_TICKER_CACHE: Dict[str, List[str]] = {}
 
 # Deprecated: Retained as empty dictionary for backward compatibility with external scripts
 COMMON_TICKER_ALIASES: Dict[str, List[str]] = {}
+
 
 
 
@@ -314,23 +299,61 @@ class NewsIngestionAgent(BaseAgent):
                     found_tickers.add(sym)
                     break
 
-        # 4. Dynamic Sector Identification based on contextual semantics
+        # 4. Propagate canonical sectors from recognized tickers
         found_sectors = set()
-        if any(w in text_lower for w in ["semiconductor", "chip", "gpu", "wafer", "foundry"]):
+        for sym in found_tickers:
+            sec = None
+            if self.state_store:
+                try:
+                    sec = self.state_store.get_ticker_sector(sym)
+                except Exception:
+                    pass
+            if not sec:
+                try:
+                    import os, json
+                    ref_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "storage", "reference_equities.json")
+                    if os.path.exists(ref_path):
+                        with open(ref_path, "r", encoding="utf-8") as f:
+                            for e in json.load(f):
+                                if e.get("ticker", "").upper() == sym:
+                                    sec = e.get("sector")
+                                    break
+                except Exception:
+                    pass
+            if sec and sec != "Unclassified":
+                found_sectors.add(sec)
+
+        # 5. Dynamic 11-GICS Sector Identification based on contextual semantics
+        if any(w in text_lower for w in ["semiconductor", "semi", "chip", "chips", "gpu", "wafer", "foundry", "lithography"]):
             found_sectors.add("Semiconductors")
-        if any(w in text_lower for w in ["software", "cloud", "saas", "cybersecurity", "ai model"]):
+        if any(w in text_lower for w in ["software", "cloud", "saas", "cybersecurity", "ai model", "operating system", "data center"]):
             found_sectors.add("Technology")
-        if any(w in text_lower for w in ["oil", "gas", "energy", "nuclear", "power grid", "utility"]):
+        if any(w in text_lower for w in ["oil", "gas", "petroleum", "crude", "drilling", "refining", "fossil fuel", "renewable energy", "solar power"]):
             found_sectors.add("Energy")
-        if any(w in text_lower for w in ["bank", "banking", "fed", "interest rate", "yield", "treasury", "credit", "broker", "brokerage", "lending", "fintech", "clearing", "exchange"]):
+        if any(w in text_lower for w in ["bank", "banking", "fed", "interest rate", "yield", "treasury", "credit", "broker", "brokerage", "lending", "fintech", "clearing", "exchange", "insurance", "asset management"]):
             found_sectors.add("Financials")
-        if any(w in text_lower for w in ["fda", "drug", "clinical", "biotech", "pharma", "trial"]):
+        if any(w in text_lower for w in ["fda", "drug", "clinical", "biotech", "pharma", "trial", "therapeutics", "medical device", "healthcare", "vaccine", "oncology"]):
             found_sectors.add("Healthcare")
+        if any(w in text_lower for w in ["aerospace", "defense", "machinery", "aviation", "freight", "railroad", "shipping", "logistics", "industrial equipment", "manufacturing", "caterpillar"]):
+            found_sectors.add("Industrials")
+        if any(w in text_lower for w in ["mining", "chemicals", "metals", "steel", "lithium", "gold", "copper", "aluminum", "fertilizer", "materials"]):
+            found_sectors.add("Materials")
+        if any(w in text_lower for w in ["reit", "real estate", "commercial real estate", "property leases", "housing starts"]):
+            found_sectors.add("Real Estate")
+        if any(w in text_lower for w in ["electric utility", "power grid", "water utility", "gas utility", "utilities", "nuclear power"]):
+            found_sectors.add("Utilities")
+        if any(w in text_lower for w in ["grocery", "supermarket", "beverage", "packaged food", "household products", "personal care", "consumer staples"]):
+            found_sectors.add("Consumer Staples")
+        if any(w in text_lower for w in ["automotive", "ev automaker", "retailer", "apparel", "luxury goods", "restaurant", "leisure", "consumer discretionary"]):
+            found_sectors.add("Consumer Discretionary")
+        if any(w in text_lower for w in ["telecom", "telecommunications", "broadcasting", "streaming media", "social media", "wireless carrier", "cable network"]):
+            found_sectors.add("Communication Services")
 
         return {
             "tickers": sorted(list(found_tickers)),
             "sectors": sorted(list(found_sectors)) if found_sectors else ["Unclassified"]
         }
+
 
     def infer_category(self, title: str, summary: str, feed_category: str) -> NewsCategory:
         text = f"{title} {summary}".lower()

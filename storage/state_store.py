@@ -256,9 +256,19 @@ class StateStore:
                     ticker TEXT PRIMARY KEY,
                     company_name TEXT,
                     aliases_json TEXT,
+                    sector TEXT,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            try:
+                cursor.execute("PRAGMA table_info(ticker_aliases);")
+                alias_cols = [c[1] for c in cursor.fetchall()]
+                if "sector" not in alias_cols:
+                    cursor.execute("ALTER TABLE ticker_aliases ADD COLUMN sector TEXT;")
+                    conn.commit()
+            except Exception as e:
+                logger.debug(f"Error verifying ticker_aliases sector column: {e}")
+
 
             # Multi-User Identity & Security
             cursor.execute("""
@@ -402,15 +412,17 @@ class StateStore:
 
     def _seed_canonical_equities_if_needed(self):
         """
-        Hermetically self-seeds canonical equity aliases from reference dataset
-        into ticker_aliases if the registry is uninitialized.
+        Hermetically self-seeds canonical equity aliases and sectors from reference dataset
+        into ticker_aliases if the registry is uninitialized or missing sectors.
         """
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("SELECT COUNT(*) FROM ticker_aliases")
                 count = cursor.fetchone()[0]
-                if count > 0:
+                cursor.execute("SELECT COUNT(*) FROM ticker_aliases WHERE sector IS NOT NULL")
+                with_sector = cursor.fetchone()[0]
+                if count > 0 and with_sector >= count:
                     return
 
                 ref_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reference_equities.json")
@@ -425,16 +437,23 @@ class StateStore:
                     sym = entry["ticker"].strip().upper()
                     name = entry.get("name", sym)
                     aliases = entry.get("aliases", [sym])
-                    rows.append((sym, name, json.dumps(aliases)))
+                    sec = entry.get("sector", "Unclassified")
+                    rows.append((sym, name, json.dumps(aliases), sec))
 
                 cursor.executemany("""
-                    INSERT OR IGNORE INTO ticker_aliases (ticker, company_name, aliases_json, updated_at)
-                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                    INSERT INTO ticker_aliases (ticker, company_name, aliases_json, sector, updated_at)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(ticker) DO UPDATE SET
+                        company_name = excluded.company_name,
+                        aliases_json = excluded.aliases_json,
+                        sector = excluded.sector,
+                        updated_at = CURRENT_TIMESTAMP
                 """, rows)
                 conn.commit()
-                logger.info(f"Self-seeded {len(rows)} canonical equities into ticker_aliases registry.")
+                logger.info(f"Self-seeded {len(rows)} canonical equities with sectors into ticker_aliases registry.")
         except Exception as e:
             logger.debug(f"Canonical equity auto-seeding skipped or failed: {e}")
+
 
 
 
@@ -604,9 +623,9 @@ class StateStore:
                 ))
         return items
 
-    def save_ticker_aliases(self, ticker: str, company_name: str, aliases: List[str]) -> bool:
+    def save_ticker_aliases(self, ticker: str, company_name: str, aliases: List[str], sector: Optional[str] = None) -> bool:
         """
-        Persists dynamically resolved brand aliases for a ticker.
+        Persists dynamically resolved brand aliases and sector for a ticker.
         """
         clean_ticker = ticker.strip().upper()
         clean_aliases = sorted(list(set(aliases)))
@@ -614,18 +633,48 @@ class StateStore:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    INSERT INTO ticker_aliases (ticker, company_name, aliases_json, updated_at)
-                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                    INSERT INTO ticker_aliases (ticker, company_name, aliases_json, sector, updated_at)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
                     ON CONFLICT(ticker) DO UPDATE SET
                         company_name = excluded.company_name,
                         aliases_json = excluded.aliases_json,
+                        sector = COALESCE(excluded.sector, ticker_aliases.sector),
                         updated_at = CURRENT_TIMESTAMP
-                """, (clean_ticker, company_name, json.dumps(clean_aliases)))
+                """, (clean_ticker, company_name, json.dumps(clean_aliases), sector))
                 conn.commit()
             return True
         except Exception as e:
             logger.warning(f"Error saving ticker aliases for {clean_ticker}: {e}")
             return False
+
+    def get_ticker_sector(self, ticker: str) -> Optional[str]:
+        """
+        Retrieves canonical sector for a ticker from SQLite or canonical reference equities.
+        """
+        clean_ticker = ticker.strip().upper()
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT sector FROM ticker_aliases WHERE ticker = ?", (clean_ticker,))
+                row = cursor.fetchone()
+                if row and row[0]:
+                    return row[0]
+        except Exception:
+            pass
+
+        # Fallback to direct reference dataset check if DB has not yet initialized this ticker
+        try:
+            ref_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reference_equities.json")
+            if os.path.exists(ref_path):
+                with open(ref_path, "r", encoding="utf-8") as f:
+                    entries = json.load(f)
+                for e in entries:
+                    if e.get("ticker", "").upper() == clean_ticker:
+                        return e.get("sector")
+        except Exception:
+            pass
+        return None
+
 
     def get_ticker_aliases(self, ticker: str) -> Optional[List[str]]:
         """

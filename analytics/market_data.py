@@ -51,13 +51,32 @@ def classify_equity_sector(ticker: str, name: str, explicit_type: Optional[str] 
     clean_ticker = ticker.strip().upper()
     name_lower = name.lower()
 
-    # 1. Broad Index ETFs / Mutual Funds
-    if (
-        explicit_type == "etf" or
-        clean_ticker in {"SPY", "VOO", "QQQ", "IVV", "VTI", "IWM", "DIA", "SCHD", "SFY", "VEA", "VWO", "XLK", "XLF", "XLE", "XLV", "XLI", "XLY", "XLP", "XLU", "XLB", "XLC", "XLRE"} or
-        any(k in name_lower for k in ["etf", "index", "s&p 500", "nasdaq 100", "russell 2000", "total stock", "yield fund", "treasury fund"])
-    ):
+    # 1. Broad Index ETFs / Mutual Funds / Closed-End Funds
+    is_etf = (
+        (explicit_type or "").lower() == "etf" or
+        any(k in name_lower for k in [
+            "etf", "index", "fund", "trust", "spdr", "ishares", "vanguard",
+            "invesco", "proshares", "direxion", "schwab", "total stock", "yield fund",
+            "treasury fund", "s&p 500", "nasdaq 100", "russell 2000"
+        ])
+    )
+    if not is_etf:
+        try:
+            import os, json
+            ref_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "storage", "reference_equities.json")
+            if os.path.exists(ref_path):
+                with open(ref_path, "r", encoding="utf-8") as f:
+                    for e in json.load(f):
+                        if e.get("ticker", "").upper() == clean_ticker:
+                            if e.get("sector") == "Index ETF / Fund":
+                                is_etf = True
+                            break
+        except Exception:
+            pass
+
+    if is_etf:
         return "Index ETF / Fund"
+
 
     # 2. Healthcare & Biotechnology
     if any(k in name_lower for k in ["health", "healthcare", "pharma", "pharmaceutical", "biotech", "therapeutics", "medical", "biosciences", "life sciences", "diagnostics", "clinical", "hospital", "genomics"]):
