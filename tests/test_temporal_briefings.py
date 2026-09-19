@@ -2,7 +2,7 @@
 Unit tests for temporal grounding and timestamped briefings in MarketBriefingAgent and StateStore.
 """
 import pytest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from models import Portfolio, PortfolioHolding, NewsItem, NewsCategory
 from agents.market_briefing_agent import MarketBriefingAgent

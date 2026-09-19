@@ -10,6 +10,7 @@ import time
 import logging
 import httpx
 from analytics.provenance import Provenance
+from storage.cache_manager import cache_manager
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +176,13 @@ def _fetch_historical_bars(ticker: str, force_fresh: bool = False) -> List[Dict[
     """
     clean_ticker = ticker.strip().upper()
     now = time.time()
+
+    if not force_fresh:
+        cached = cache_manager.get("bars", clean_ticker)
+        if cached and len(cached) >= 20:
+            BARS_CACHE[clean_ticker] = (now, cached)
+            return cached
+
     if not force_fresh and clean_ticker in BARS_CACHE:
         ts, cached_bars = BARS_CACHE[clean_ticker]
         if now - ts < BARS_CACHE_TTL_SECONDS and len(cached_bars) >= 20:
@@ -206,6 +214,7 @@ def _fetch_historical_bars(ticker: str, force_fresh: bool = False) -> List[Dict[
                 ]
                 if len(parsed_bars) >= 20:
                     BARS_CACHE[clean_ticker] = (now, parsed_bars)
+                    cache_manager.set("bars", clean_ticker, parsed_bars, ttl_seconds=BARS_CACHE_TTL_SECONDS)
                     BARS_SOURCE_MAP[clean_ticker] = "robinhood"
                     return parsed_bars
     except Exception as e:
@@ -239,6 +248,7 @@ def _fetch_historical_bars(ticker: str, force_fresh: bool = False) -> List[Dict[
                     })
             if len(bars) >= 20:
                 BARS_CACHE[clean_ticker] = (now, bars)
+                cache_manager.set("bars", clean_ticker, bars, ttl_seconds=BARS_CACHE_TTL_SECONDS)
                 BARS_SOURCE_MAP[clean_ticker] = "yahoo"
                 return bars
     except Exception as e:

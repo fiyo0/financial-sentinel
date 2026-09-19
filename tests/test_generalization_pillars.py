@@ -8,10 +8,8 @@ Comprehensive unit tests for the 6 Generalization Pillars:
 - Pillar 6: Equity-Anchored Social Sentiment Search Query Construction
 """
 
-import pytest
 import httpx
 from datetime import date, datetime
-from typing import List, Dict
 
 from models import Portfolio, PortfolioHolding
 from agents.analysis_agent import PortfolioAnalysisAgent
@@ -26,7 +24,6 @@ from agents.news_ingestion import (
 )
 from analytics.economic_calendar import (
     generate_statutory_macro_schedule,
-    KEY_MACRO_RELEASES_2026,
     FOMC_SCHEDULE,
 )
 from analytics.sentiment_stream import _fetch_reddit_discussion

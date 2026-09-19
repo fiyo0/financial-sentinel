@@ -8,8 +8,6 @@ Verifies:
 """
 import os
 import json
-import pytest
-from unittest.mock import MagicMock
 
 from storage.state_store import StateStore
 from agents.news_ingestion import NewsIngestionAgent

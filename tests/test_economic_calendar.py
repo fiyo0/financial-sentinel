@@ -1,7 +1,6 @@
 """
 Unit tests for analytics/economic_calendar.py
 """
-import pytest
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from analytics.economic_calendar import (
@@ -11,7 +10,6 @@ from analytics.economic_calendar import (
     fetch_live_fed_bulletins,
     escape_ics_text,
     _macro_cache,
-    KEY_MACRO_RELEASES_2026,
     FOMC_SCHEDULE
 )
 

@@ -4,7 +4,7 @@ Data models and schemas for the Financial Multi-Agent System.
 from datetime import datetime
 from enum import Enum
 from typing import List, Optional, Dict, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class DirectionalImpact(str, Enum):
@@ -31,9 +31,6 @@ class CriticVerdict(str, Enum):
     APPROVED_WITH_CAVEATS = "APPROVED_WITH_CAVEATS"
     REJECTED_SPECULATIVE = "REJECTED_SPECULATIVE"
     REJECTED_LOW_CREDIBILITY = "REJECTED_LOW_CREDIBILITY"
-
-
-from pydantic import computed_field
 
 
 class PortfolioHolding(BaseModel):

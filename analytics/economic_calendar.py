@@ -4,7 +4,7 @@ Tracks scheduled Federal Reserve FOMC rate decisions, press conferences, minutes
 and catalytic high-impact economic releases (CPI, PPI, Jobs/NFP, PCE, GDP) with exact timestamps,
 real-time completion status, live Federal Reserve policy bulletins, and RFC 5545 iCalendar sync.
 """
-from datetime import datetime, date, time as dt_time, timedelta
+from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 from typing import List, Dict, Any, Optional
 import logging

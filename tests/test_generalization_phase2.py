@@ -9,10 +9,9 @@ Covers:
 6. Clean Portfolio CSV Ingestion, Dynamic Cash Resolution & Eradication of "Technology" Default
 7. Dead Code Removal Verification
 """
-import pytest
-from datetime import datetime, date, timedelta, timezone
+from datetime import datetime, date, timezone
 from zoneinfo import ZoneInfo
-from models import Portfolio, PortfolioHolding, NewsItem, NewsCategory
+from models import Portfolio, PortfolioHolding, NewsItem
 from agents.news_ingestion import NewsIngestionAgent, evaluate_source_reliability
 from agents.market_briefing_agent import MarketBriefingAgent
 from agents.analysis_agent import PortfolioAnalysisAgent

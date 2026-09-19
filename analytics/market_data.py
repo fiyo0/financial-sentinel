@@ -5,10 +5,10 @@ If a live price cannot be fetched, it explicitly reports failure instead of fall
 """
 import time
 import logging
-import re
 from typing import Dict, Any, Optional, List, Tuple
 import httpx
 from models import Portfolio
+from storage.cache_manager import cache_manager
 
 logger = logging.getLogger(__name__)
 
@@ -54,21 +54,12 @@ def classify_equity_sector(ticker: str, name: str, explicit_type: Optional[str] 
     name_lower = name.lower()
 
     # 1. Tier 1: Canonical Registry-First Resolution
-    canonical_sec = None
-    try:
-        import os, json
-        ref_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "storage", "reference_equities.json")
-        if os.path.exists(ref_path):
-            with open(ref_path, "r", encoding="utf-8") as f:
-                for e in json.load(f):
-                    if e.get("ticker", "").upper() == clean_ticker:
-                        canonical_sec = e.get("sector")
-                        break
-    except Exception:
-        pass
-
-    if canonical_sec and canonical_sec != "Unclassified":
-        return canonical_sec
+    from storage.state_store import get_reference_equities, get_sector_taxonomy
+    ref_data = get_reference_equities()
+    if clean_ticker in ref_data:
+        sec = ref_data[clean_ticker].get("sector")
+        if sec and sec != "Unclassified":
+            return sec
 
     # 2. Broad Index ETFs / Mutual Funds / Closed-End Funds
     is_etf = (
@@ -83,16 +74,7 @@ def classify_equity_sector(ticker: str, name: str, explicit_type: Optional[str] 
         return "Index ETF / Fund"
 
     # 3. Dynamic Sector Taxonomy Resolution from external asset
-    taxonomy = {}
-    try:
-        import os, json
-        tax_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "storage", "sector_taxonomy.json")
-        if os.path.exists(tax_path):
-            with open(tax_path, "r", encoding="utf-8") as f:
-                taxonomy = json.load(f)
-    except Exception:
-        pass
-
+    taxonomy = get_sector_taxonomy()
     if taxonomy:
         priority_order = [
             "Semiconductors", "Healthcare", "Communication Services", "Technology",
@@ -117,6 +99,12 @@ def fetch_live_quote(ticker: str) -> Dict[str, Any]:
     """
     clean_ticker = ticker.strip().upper()
     now = time.time()
+
+    # Check centralized thread-safe cache first
+    cached_quote = cache_manager.get("prices", clean_ticker)
+    if cached_quote:
+        PRICE_CACHE[clean_ticker] = (now, cached_quote)
+        return cached_quote
 
     if clean_ticker in PRICE_CACHE:
         cached_time, cached_data = PRICE_CACHE[clean_ticker]
@@ -212,6 +200,7 @@ def fetch_live_quote(ticker: str) -> Dict[str, Any]:
 
     if fetch_success:
         PRICE_CACHE[clean_ticker] = (now, quote)
+        cache_manager.set("prices", clean_ticker, quote, ttl_seconds=CACHE_TTL_SECONDS)
 
     return quote
 

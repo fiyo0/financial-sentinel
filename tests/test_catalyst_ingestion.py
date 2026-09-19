@@ -2,15 +2,14 @@
 Unit tests for SEC catalyst ingestion, dynamic ticker alias resolution,
 headline salience scoring, anti-inflation clickbait filtering, and catalyst routing.
 """
-import pytest
 from datetime import datetime
 from unittest.mock import patch, MagicMock
-from models import NewsItem, NewsCategory, Portfolio, PortfolioHolding
+from models import NewsItem, NewsCategory, Portfolio
 from storage.state_store import StateStore
 from agents.news_ingestion import (
     NewsIngestionAgent, resolve_ticker_aliases, extract_stem_aliases,
     is_primary_headline_subject, is_low_signal_clickbait,
-    categorize_catalyst_provenance, COMMON_TICKER_ALIASES
+    categorize_catalyst_provenance
 )
 from agents.analysis_agent import PortfolioAnalysisAgent
 

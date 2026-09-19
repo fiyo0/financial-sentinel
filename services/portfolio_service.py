@@ -100,8 +100,8 @@ class PortfolioService:
         if hasattr(self.orchestrator, "state_store") and self.orchestrator.state_store:
             try:
                 canonical_sec = self.orchestrator.state_store.get_ticker_sector(clean_ticker)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Could not retrieve canonical sector for {clean_ticker}: {e}")
         resolved_sector = sector or quote.get("sector") or canonical_sec or "Unclassified"
 
 
@@ -113,8 +113,8 @@ class PortfolioService:
         try:
             from agents.news_ingestion import resolve_ticker_aliases
             resolve_ticker_aliases(clean_ticker, resolved_name, state_store=self.orchestrator.state_store)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Could not register ticker aliases for {clean_ticker}: {e}")
 
         portfolio = self.orchestrator.get_active_portfolio(user_id=user_id)
         existing = next((h for h in portfolio.holdings if h.ticker.upper() == clean_ticker), None)

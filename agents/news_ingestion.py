@@ -22,9 +22,6 @@ NEWS_CACHE_TTL_SECONDS = 180.0  # 3 minutes TTL
 # In-memory runtime dynamic ticker alias cache (seeded with common corporate/brand divergences)
 _DYNAMIC_TICKER_CACHE: Dict[str, List[str]] = {}
 
-# Deprecated: Retained as empty dictionary for backward compatibility with external scripts
-COMMON_TICKER_ALIASES: Dict[str, List[str]] = {}
-
 
 
 
@@ -313,35 +310,18 @@ class NewsIngestionAgent(BaseAgent):
                     pass
             if not sec:
                 try:
-                    import os, json
-                    ref_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "storage", "reference_equities.json")
-                    if os.path.exists(ref_path):
-                        with open(ref_path, "r", encoding="utf-8") as f:
-                            for e in json.load(f):
-                                if e.get("ticker", "").upper() == sym:
-                                    sec = e.get("sector")
-                                    break
+                    from storage.state_store import get_reference_equities
+                    ref_data = get_reference_equities()
+                    if sym in ref_data:
+                        sec = ref_data[sym].get("sector")
                 except Exception:
                     pass
             if sec and sec != "Unclassified":
                 found_sectors.add(sec)
 
         # 5. Dynamic 11-GICS Sector Identification based on externalized taxonomy (Tier 2)
-        taxonomy = {}
-        if self.state_store:
-            try:
-                taxonomy = self.state_store.get_sector_taxonomy()
-            except Exception:
-                pass
-        if not taxonomy:
-            try:
-                import os, json
-                tax_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "storage", "sector_taxonomy.json")
-                if os.path.exists(tax_path):
-                    with open(tax_path, "r", encoding="utf-8") as f:
-                        taxonomy = json.load(f)
-            except Exception:
-                pass
+        from storage.state_store import get_sector_taxonomy
+        taxonomy = self.state_store.get_sector_taxonomy() if self.state_store else get_sector_taxonomy()
 
         for sector_name, meta in taxonomy.items():
             if sector_name in ("Index ETF / Fund",):

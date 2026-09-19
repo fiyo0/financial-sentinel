@@ -24,8 +24,58 @@ _GCS_BACKUP_WORKER_LOCK = threading.Lock()
 _GCS_BACKUP_PENDING = False
 _GCS_BACKUP_THREAD: Optional[threading.Thread] = None
 
-# Cached externalized sector taxonomy
+# Cached externalized sector taxonomy & reference equities
 _SECTOR_TAXONOMY_CACHE: Optional[Dict[str, Any]] = None
+_REFERENCE_EQUITIES_CACHE: Optional[Dict[str, Dict[str, Any]]] = None
+
+
+def get_reference_equities() -> Dict[str, Dict[str, Any]]:
+    """
+    Retrieves the canonical reference equities mapped by ticker symbol (e.g., 'AAPL': {...}).
+    Cached in-memory as a singleton to eliminate redundant disk I/O across agents.
+    """
+    global _REFERENCE_EQUITIES_CACHE
+    if _REFERENCE_EQUITIES_CACHE is not None:
+        return _REFERENCE_EQUITIES_CACHE
+
+    res: Dict[str, Dict[str, Any]] = {}
+    try:
+        ref_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reference_equities.json")
+        if os.path.exists(ref_path):
+            with open(ref_path, "r", encoding="utf-8") as f:
+                entries = json.load(f)
+            for e in entries:
+                sym = e.get("ticker", "").strip().upper()
+                if sym:
+                    res[sym] = e
+            _REFERENCE_EQUITIES_CACHE = res
+            return _REFERENCE_EQUITIES_CACHE
+    except Exception as e:
+        logger.debug(f"Failed to load reference_equities.json: {e}")
+
+    _REFERENCE_EQUITIES_CACHE = res
+    return _REFERENCE_EQUITIES_CACHE
+
+
+def get_sector_taxonomy() -> Dict[str, Any]:
+    """
+    Retrieves the canonical 11-GICS sector taxonomy and macro topical keywords.
+    Cached in-memory for O(1) evaluation speed across agents.
+    """
+    global _SECTOR_TAXONOMY_CACHE
+    if _SECTOR_TAXONOMY_CACHE is not None:
+        return _SECTOR_TAXONOMY_CACHE
+
+    try:
+        tax_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sector_taxonomy.json")
+        if os.path.exists(tax_path):
+            with open(tax_path, "r", encoding="utf-8") as f:
+                _SECTOR_TAXONOMY_CACHE = json.load(f)
+                return _SECTOR_TAXONOMY_CACHE
+    except Exception as e:
+        logger.debug(f"Failed to load sector_taxonomy.json: {e}")
+
+    return {}
 
 
 class StateStore:
@@ -665,17 +715,10 @@ class StateStore:
         except Exception:
             pass
 
-        # Fallback to direct reference dataset check if DB has not yet initialized this ticker
-        try:
-            ref_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reference_equities.json")
-            if os.path.exists(ref_path):
-                with open(ref_path, "r", encoding="utf-8") as f:
-                    entries = json.load(f)
-                for e in entries:
-                    if e.get("ticker", "").upper() == clean_ticker:
-                        return e.get("sector")
-        except Exception:
-            pass
+        # Fallback to in-memory cached reference dataset check
+        equities = get_reference_equities()
+        if clean_ticker in equities:
+            return equities[clean_ticker].get("sector")
         return None
 
 
@@ -719,20 +762,7 @@ class StateStore:
         Retrieves the canonical 11-GICS sector taxonomy and macro topical keywords.
         Cached in-memory for O(1) evaluation speed across agents.
         """
-        global _SECTOR_TAXONOMY_CACHE
-        if _SECTOR_TAXONOMY_CACHE:
-            return _SECTOR_TAXONOMY_CACHE
-
-        try:
-            tax_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sector_taxonomy.json")
-            if os.path.exists(tax_path):
-                with open(tax_path, "r", encoding="utf-8") as f:
-                    _SECTOR_TAXONOMY_CACHE = json.load(f)
-                    return _SECTOR_TAXONOMY_CACHE
-        except Exception as e:
-            logger.debug(f"Failed to load sector_taxonomy.json: {e}")
-
-        return {}
+        return get_sector_taxonomy()
 
     def save_briefing(self, briefing: BriefingReport, user_id: Optional[str] = None):
         target_user = user_id or briefing.user_id
