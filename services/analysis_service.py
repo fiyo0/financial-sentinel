@@ -10,6 +10,7 @@ from typing import Optional, Dict, Any, Callable
 import analytics.market_data as market_data
 import analytics.technical_indicators as technical_indicators
 import analytics.sentiment_stream as sentiment_stream
+from agents.news_ingestion import resolve_ticker_aliases
 from orchestrator import FinancialSentinelOrchestrator
 
 logger = logging.getLogger(__name__)
@@ -71,10 +72,34 @@ class AnalysisService:
         rvol_val = tech_snap.rvol if (tech_snap and tech_snap.is_live) else None
         sent_snap = sentiment_stream.fetch_social_sentiment_snapshot(clean_sym, rvol=rvol_val)
 
-        # Step 4: News Feeds
-        news_items = self.orchestrator.news_agent.ingest_all_feeds(
-            live=True, portfolio_tickers=[clean_sym], api_key=resolved_key
+        # Step 4: News Feeds & Dynamic Ticker Alias Resolution
+        resolved_company_name = quote.get("name") or clean_sym
+        aliases = resolve_ticker_aliases(
+            clean_sym,
+            company_name=resolved_company_name,
+            state_store=self.orchestrator.state_store,
+            use_market_lookup=True
         )
+
+        # Ingest live feeds with force_fresh=True to ensure target ticker and Google News RSS are fetched
+        live_news = self.orchestrator.news_agent.ingest_all_feeds(
+            live=True, portfolio_tickers=[clean_sym], force_fresh=True, api_key=resolved_key
+        )
+
+        # Merge recent 48-hour news matching ticker or aliases from state_store
+        stored_news = []
+        if self.orchestrator.state_store:
+            stored_news = self.orchestrator.state_store.get_recent_news_for_ticker(
+                ticker=clean_sym, aliases=aliases, hours=48, limit=20
+            )
+
+        # Combine and deduplicate by raw_hash
+        seen_hashes = set()
+        news_items = []
+        for n in live_news + stored_news:
+            if n.raw_hash not in seen_hashes:
+                seen_hashes.add(n.raw_hash)
+                news_items.append(n)
 
         # Step 5: Gemini Structured Thinking
         if progress_callback:

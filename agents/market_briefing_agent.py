@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from typing import Dict, Any, List, Optional
 from agents.base_agent import BaseAgent
-from models import Portfolio, NewsItem
+from models import Portfolio, NewsItem, NewsCategory
 from analytics.economic_calendar import get_economic_calendar_context, format_economic_calendar_for_prompt
 
 
@@ -129,7 +129,12 @@ class MarketBriefingAgent(BaseAgent):
             else:
                 time_tag = "Recent"
 
-            lines.append(f"- [{n.source} | {time_tag}] {n.title}: {n.summary[:150]}")
+            src_lower = (n.source or "").lower()
+            is_sec = "sec" in src_lower or getattr(n, "category", None) == NewsCategory.SEC_FILING
+            is_fed = "federal reserve" in src_lower or "fed" in src_lower
+            action_tag = "⚡ [SEC REGULATORY ACTION] " if is_sec else ("⚡ [FEDERAL RESERVE ACTION] " if is_fed else "")
+
+            lines.append(f"- {action_tag}[{n.source} | {time_tag}] {n.title}: {n.summary[:150]}")
         return "\n".join(lines)
 
     def _format_holdings_summary(self, portfolio: Portfolio) -> str:

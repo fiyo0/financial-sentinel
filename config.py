@@ -54,7 +54,8 @@ class SystemConfig(BaseModel):
             {"name": "Yahoo Finance Top", "url": "https://finance.yahoo.com/news/rssindex", "category": "BREAKING"},
             {"name": "CNBC Finance", "url": "https://search.cnbc.com/rs/search/combinedlist/view.xml?partnerId=wrss01&id=10000664", "category": "BREAKING"},
             {"name": "MarketWatch Top Stories", "url": "http://feeds.marketwatch.com/marketwatch/topstories/", "category": "MACRO"},
-            {"name": "SEC 8-K Latest", "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&CIK=&type=8-K&company=&dateb=&owner=include&start=0&count=40&output=atom", "category": "SEC_FILING"},
+            {"name": "SEC Press Releases", "url": "https://www.sec.gov/news/pressreleases.rss", "category": "SEC_FILING"},
+            {"name": "SEC Regulatory Statements", "url": "https://www.sec.gov/news/statements.rss", "category": "SEC_FILING"},
             {"name": "Federal Reserve Press", "url": "https://www.federalreserve.gov/feeds/press_all.xml", "category": "MACRO"},
         ]
     )

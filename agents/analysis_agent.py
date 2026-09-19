@@ -11,6 +11,10 @@ from models import (
     DirectionalImpact, AlertPriority, SingleTickerAnalysis
 )
 from agents.base_agent import BaseAgent
+from agents.news_ingestion import (
+    resolve_ticker_aliases, is_primary_headline_subject,
+    is_low_signal_clickbait, categorize_catalyst_provenance
+)
 
 logger = logging.getLogger(__name__)
 
@@ -281,12 +285,60 @@ class PortfolioAnalysisAgent(BaseAgent):
         cash_pct = (portfolio.cash / tot_eq * 100.0) if tot_eq > 0 else 0.0
         holdings_summary = [f"{h.ticker} ({h.name}, {h.sector}, {h.weight_pct:.1f}% weight)" for h in portfolio.holdings]
 
-        # Prompt injection defense: isolate untrusted external headlines in boundary tags
+        # Dynamically resolve company brand aliases (e.g. HOOD -> Robinhood Markets, Robinhood)
+        aliases = resolve_ticker_aliases(sym, company_name, state_store=self.state_store, use_market_lookup=True)
+
+        # Smart Tiered News Curation for Target Ticker:
+        # Tier 1: Primary Ticker Catalysts (company or brand in headline, or explicit related ticker)
+        # Tier 2: Authoritative Regulatory / SEC / Central Bank Actions
+        # Tier 3: Sector & Macro Context
+        primary_catalysts: List[NewsItem] = []
+        regulatory_actions: List[NewsItem] = []
+        sector_context: List[NewsItem] = []
+        other_news: List[NewsItem] = []
+
+        clean_sym_upper = sym.upper()
+
+        for n in news_items:
+            # Anti-clickbait defense: filter low-signal retail SEO listicles unless from wire with >= 0.90 reliability
+            if is_low_signal_clickbait(n.title) and (n.source_reliability_score or 0.8) < 0.90:
+                continue
+
+            provenance = categorize_catalyst_provenance(n)
+            is_ticker_match = (
+                clean_sym_upper in [t.upper() for t in n.related_tickers] or
+                is_primary_headline_subject(n.title, clean_sym_upper, aliases)
+            )
+
+            if is_ticker_match:
+                primary_catalysts.append(n)
+            elif provenance == "REGULATORY / SEC ACTION" or "sec.gov" in (n.source or "").lower():
+                regulatory_actions.append(n)
+            elif sector and sector in n.related_sectors:
+                sector_context.append(n)
+            else:
+                other_news.append(n)
+
+        # Assemble curated news list (up to 5 primary ticker, up to 3 regulatory, up to 2 context)
+        selected_news: List[NewsItem] = []
+        selected_news.extend(primary_catalysts[:5])
+        selected_news.extend(regulatory_actions[:3])
+        remaining_slots = 10 - len(selected_news)
+        if remaining_slots > 0:
+            selected_news.extend(sector_context[:min(2, remaining_slots)])
+        remaining_slots = 10 - len(selected_news)
+        if remaining_slots > 0 and len(selected_news) < 4:
+            selected_news.extend(other_news[:remaining_slots])
+
+        # Prompt injection defense & provenance labeling
         news_summary = []
-        for n in news_items[:8]:
+        for n in selected_news:
             clean_title = str(n.title).replace("<", "").replace(">", "").strip()
             clean_source = str(n.source).replace("<", "").replace(">", "").strip()
-            news_summary.append(f"- <<<UNTRUSTED_HEADLINE source=\"{clean_source}\">>>{clean_title}<<</UNTRUSTED_HEADLINE>>>")
+            provenance_tag = categorize_catalyst_provenance(n)
+            news_summary.append(
+                f"- [{provenance_tag}] <<<UNTRUSTED_HEADLINE source=\"{clean_source}\">>>{clean_title}<<</UNTRUSTED_HEADLINE>>>"
+            )
 
         tech_block_text = technical_snapshot.to_telegram_block() if technical_snapshot else "📈 <i>Technical momentum data unavailable.</i>"
         sent_block_text = sentiment_snapshot.to_telegram_block() if sentiment_snapshot else "💬 <i>Social sentiment stream unavailable.</i>"
@@ -355,6 +407,12 @@ class PortfolioAnalysisAgent(BaseAgent):
 
         INGESTED EXTERNAL HEADLINES & DATA STREAM:
         {chr(10).join(news_summary) if news_summary else "• No breaking external headlines recorded."}
+
+        CRITICAL CATALYST & PROVENANCE SIFTING DIRECTIVE:
+        • Distinguish between PRIMARY COMPANY CATALYSTS vs. INCIDENTAL MENTIONS. Only treat an external event as a material catalyst if the company is a direct beneficiary, primary subject, or structural driver.
+        • Do NOT inflate generic syndicated listicles ('3 stocks to buy', 'Why X moved today'), incidental name-dropping, or speculative retail clickbait into corporate catalysts.
+        • Pay rigorous attention to [REGULATORY / SEC ACTION] and [CORPORATE CATALYST] events (exemptive orders, rule approvals, statutory filings, product launches) that expand the company's addressable market, operational rights, or core product moat.
+        • If recent headlines lack material substance, explicitly rely on structural fundamental business drivers (revenue expansion, unit economics, net interest income, operating leverage) rather than hallucinating significance from trivial news.
 
         TASK & REQUIRED "telegram_html" STRUCTURE:
         In the "telegram_html" field, write an in-depth, multi-paragraph institutional briefing memo using clean Telegram HTML tags (<b>, <i>, <code>). Do not write a superficial or compressed summary. Each section must provide substantive, multi-sentence analytical depth:

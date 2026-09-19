@@ -250,6 +250,16 @@ class StateStore:
                 )
             """)
 
+            # Dynamic Ticker Brand & Alias Registry
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS ticker_aliases (
+                    ticker TEXT PRIMARY KEY,
+                    company_name TEXT,
+                    aliases_json TEXT,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
             # Multi-User Identity & Security
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS users (
@@ -471,6 +481,85 @@ class StateStore:
                     related_sectors=[]
                 ))
         return items
+
+    def get_recent_news_for_ticker(self, ticker: str, aliases: Optional[List[str]] = None, hours: int = 48, limit: int = 30) -> List[NewsItem]:
+        """
+        Retrieves stored news items for a specific ticker and its brand aliases from SQLite.
+        """
+        import re
+        all_recent = self.get_recent_news(hours=hours, limit=250)
+        clean_ticker = ticker.strip().upper()
+        alias_tokens = [clean_ticker.lower()]
+        if aliases:
+            alias_tokens.extend([a.lower() for a in aliases if a.strip()])
+
+        matched: List[NewsItem] = []
+        for item in all_recent:
+            if clean_ticker in [t.upper() for t in item.related_tickers]:
+                matched.append(item)
+                continue
+            title_lower = (item.title or "").lower()
+            if any(re.search(r'\b' + re.escape(tok) + r'\b', title_lower) for tok in alias_tokens):
+                matched.append(item)
+        return matched[:limit]
+
+    def save_ticker_aliases(self, ticker: str, company_name: str, aliases: List[str]) -> bool:
+        """
+        Persists dynamically resolved brand aliases for a ticker.
+        """
+        clean_ticker = ticker.strip().upper()
+        clean_aliases = sorted(list(set(aliases)))
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO ticker_aliases (ticker, company_name, aliases_json, updated_at)
+                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(ticker) DO UPDATE SET
+                        company_name = excluded.company_name,
+                        aliases_json = excluded.aliases_json,
+                        updated_at = CURRENT_TIMESTAMP
+                """, (clean_ticker, company_name, json.dumps(clean_aliases)))
+                conn.commit()
+            return True
+        except Exception as e:
+            logger.warning(f"Error saving ticker aliases for {clean_ticker}: {e}")
+            return False
+
+    def get_ticker_aliases(self, ticker: str) -> Optional[List[str]]:
+        """
+        Retrieves cached brand aliases for a ticker from SQLite.
+        """
+        clean_ticker = ticker.strip().upper()
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT aliases_json FROM ticker_aliases WHERE ticker = ?", (clean_ticker,))
+                row = cursor.fetchone()
+                if row and row[0]:
+                    return json.loads(row[0])
+        except Exception:
+            pass
+        return None
+
+    def get_all_ticker_aliases(self) -> Dict[str, List[str]]:
+        """
+        Retrieves all dynamically cached ticker aliases across the system.
+        """
+        res: Dict[str, List[str]] = {}
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT ticker, aliases_json FROM ticker_aliases")
+                for row in cursor.fetchall():
+                    if row[0] and row[1]:
+                        try:
+                            res[row[0]] = json.loads(row[1])
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+        return res
 
     def save_briefing(self, briefing: BriefingReport, user_id: Optional[str] = None):
         target_user = user_id or briefing.user_id
