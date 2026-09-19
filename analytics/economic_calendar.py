@@ -448,25 +448,43 @@ def get_economic_calendar_context(
 
 def format_economic_calendar_for_prompt(calendar_ctx: Dict[str, Any], include_horizon: bool = False) -> str:
     """
-    Builds a high-visibility, authoritative macroeconomic ground-truth context block
+    Builds an authoritative macroeconomic ground-truth context block
     for injection into CIO briefing prompts.
     """
+    live_bulletins = calendar_ctx.get("live_fed_bulletins", [])
+    today_events = calendar_ctx.get("today_events", [])
+    tomorrow_events = calendar_ctx.get("tomorrow_events", [])
+    upcoming_7d = calendar_ctx.get("upcoming_events_7d", [])
+    upcoming_3m = calendar_ctx.get("upcoming_events_90d", calendar_ctx.get("upcoming_events", []))
+
+    # On calm days with no live Fed bulletins and no scheduled events today or tomorrow:
+    # Suppress the multi-line event schedule to avoid prompting the LLM into generating calendar filler.
+    if not live_bulletins and not today_events and not tomorrow_events:
+        lines = [
+            "🏛️ CENTRAL BANK & ECONOMIC CALENDAR: No releases or central bank statements scheduled for today or tomorrow. Focus commentary entirely on equities, sectors, volume, and company earnings."
+        ]
+        if upcoming_7d and include_horizon:
+            lines.append("• UPCOMING (NEXT 7 DAYS):")
+            for ev in upcoming_7d[:4]:
+                lines.append(f"  - {ev['name']} ({ev['time_display']})")
+        if include_horizon:
+            beyond_7d = [e for e in upcoming_3m if e.get("days_away", 0) > 7 and (e.get("importance") == "CRITICAL" or e.get("category") == "CENTRAL_BANK")]
+            if beyond_7d:
+                lines.append("• PROSPECTIVE 3-MONTH CENTRAL BANK SCHEDULE:")
+                for ev in beyond_7d[:5]:
+                    lines.append(f"  - [{ev.get('importance', 'HIGH')}] {ev['name']} ({ev['time_display']}) [in {ev.get('days_away')}d]")
+        return "\n".join(lines)
+
     lines = [
         "🏛️ MACROECONOMIC & CENTRAL BANK CALENDAR GROUND TRUTH:"
     ]
 
     # Live Federal Reserve Bulletins (if active)
-    live_bulletins = calendar_ctx.get("live_fed_bulletins", [])
     if live_bulletins:
         lines.append("⚡ LIVE FEDERAL RESERVE MONETARY POLICY PULSE (RECENT BULLETINS):")
         for b in live_bulletins[:2]:
             lines.append(f"  - [LIVE ANNOUNCEMENT] {b.get('title')}")
             lines.append(f"    Published: {b.get('published', 'Recent')} | Source: {b.get('source')}")
-
-    today_events = calendar_ctx.get("today_events", [])
-    tomorrow_events = calendar_ctx.get("tomorrow_events", [])
-    upcoming_7d = calendar_ctx.get("upcoming_events_7d", [])
-    upcoming_3m = calendar_ctx.get("upcoming_events_90d", calendar_ctx.get("upcoming_events", []))
 
     if today_events:
         lines.append(f"• TODAY'S EVENTS ({calendar_ctx.get('today_date')}):")
@@ -496,9 +514,6 @@ def format_economic_calendar_for_prompt(calendar_ctx: Dict[str, Any], include_ho
             lines.append("• PROSPECTIVE 3-MONTH CENTRAL BANK SCHEDULE:")
             for ev in beyond_7d[:5]:
                 lines.append(f"  - [{ev.get('importance', 'HIGH')}] {ev['name']} ({ev['time_display']}) [in {ev.get('days_away')}d]")
-
-    if not today_events and not tomorrow_events:
-        lines.append("• NOTE ON MACRO DATA: No releases scheduled today or tomorrow. Do NOT mention the absence of data or write filler about a quiet macro calendar. Focus directly on market price action, sector flows, and company catalysts.")
 
     return "\n".join(lines)
 

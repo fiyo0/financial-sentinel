@@ -196,11 +196,12 @@ def test_state_store_get_recent_news(tmp_path):
     assert all_news[1].id == "item_old"
 
 
-def test_market_briefings_no_tier1_boilerplate(sample_portfolio):
+def test_market_briefings_no_tier1_boilerplate(sample_portfolio, monkeypatch):
     """
     Verify all market briefings (Pre, Mid, Post, Weekend) do NOT contain 'tier-1' puffery,
     that intraday briefs omit the 3-month forward schedule, and that Rule 4 is present.
     """
+    monkeypatch.setattr("analytics.economic_calendar.fetch_live_fed_bulletins", lambda *args, **kwargs: [])
     agent = MarketBriefingAgent()
     # A calm day without FOMC decisions or scheduled releases
     as_of_pst = datetime(2026, 9, 21, 10, 0, tzinfo=PST)
@@ -225,7 +226,7 @@ def test_market_briefings_no_tier1_boilerplate(sample_portfolio):
     assert "tier-1" not in mid_prompt.lower()
     # Verify Rule 4 exists
     assert "Selective & Relevant Macro / Fed Coverage" in mid_prompt
-    assert "Do NOT mention the absence of data or write filler" in mid_prompt
+    assert "No releases or central bank statements scheduled for today or tomorrow" in mid_prompt
     # Verify intraday prompt omits the 3-month prospective horizon
     assert "PROSPECTIVE 3-MONTH CENTRAL BANK SCHEDULE" not in mid_prompt
 
