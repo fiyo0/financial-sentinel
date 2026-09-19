@@ -45,13 +45,32 @@ def get_market_http_client() -> httpx.Client:
 
 def classify_equity_sector(ticker: str, name: str, explicit_type: Optional[str] = None) -> str:
     """
-    Universally classifies equities into standard GICS sectors or index funds
-    using semantic industry keywords without hardcoded company lists.
+    Universally classifies equities into standard GICS sectors or index funds.
+    Tier 1: Canonical Registry-First (reference_equities.json / SQLite).
+    Tier 2: Broad Index ETF / Fund asset-class detection.
+    Tier 3: Dynamic Sector Taxonomy from storage/sector_taxonomy.json.
     """
     clean_ticker = ticker.strip().upper()
     name_lower = name.lower()
 
-    # 1. Broad Index ETFs / Mutual Funds / Closed-End Funds
+    # 1. Tier 1: Canonical Registry-First Resolution
+    canonical_sec = None
+    try:
+        import os, json
+        ref_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "storage", "reference_equities.json")
+        if os.path.exists(ref_path):
+            with open(ref_path, "r", encoding="utf-8") as f:
+                for e in json.load(f):
+                    if e.get("ticker", "").upper() == clean_ticker:
+                        canonical_sec = e.get("sector")
+                        break
+    except Exception:
+        pass
+
+    if canonical_sec and canonical_sec != "Unclassified":
+        return canonical_sec
+
+    # 2. Broad Index ETFs / Mutual Funds / Closed-End Funds
     is_etf = (
         (explicit_type or "").lower() == "etf" or
         any(k in name_lower for k in [
@@ -60,71 +79,32 @@ def classify_equity_sector(ticker: str, name: str, explicit_type: Optional[str] 
             "treasury fund", "s&p 500", "nasdaq 100", "russell 2000"
         ])
     )
-    if not is_etf:
-        try:
-            import os, json
-            ref_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "storage", "reference_equities.json")
-            if os.path.exists(ref_path):
-                with open(ref_path, "r", encoding="utf-8") as f:
-                    for e in json.load(f):
-                        if e.get("ticker", "").upper() == clean_ticker:
-                            if e.get("sector") == "Index ETF / Fund":
-                                is_etf = True
-                            break
-        except Exception:
-            pass
-
     if is_etf:
         return "Index ETF / Fund"
 
+    # 3. Dynamic Sector Taxonomy Resolution from external asset
+    taxonomy = {}
+    try:
+        import os, json
+        tax_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "storage", "sector_taxonomy.json")
+        if os.path.exists(tax_path):
+            with open(tax_path, "r", encoding="utf-8") as f:
+                taxonomy = json.load(f)
+    except Exception:
+        pass
 
-    # 2. Healthcare & Biotechnology
-    if any(k in name_lower for k in ["health", "healthcare", "pharma", "pharmaceutical", "biotech", "therapeutics", "medical", "biosciences", "life sciences", "diagnostics", "clinical", "hospital", "genomics"]):
-        return "Healthcare"
-
-    # 3. Semiconductors (Sub-industry of Tech with distinct cyclicality)
-    if any(k in name_lower for k in ["semiconductor", "semi", "chip", "chips", "wafer", "foundry", "integrated circuit", "lithography"]):
-        return "Semiconductors"
-
-    # 4. Communication Services
-    if any(k in name_lower for k in ["telecom", "telecommunications", "media", "broadcasting", "cable", "wireless", "interactive media", "social media", "publishing", "advertising"]):
-        return "Communication Services"
-
-    # 5. Information Technology
-    if any(re.search(r'\b' + re.escape(k) + r'\b', name_lower) for k in ["software", "technology", "tech", "cloud", "saas", "cybersecurity", "hardware", "systems", "micro", "data", "digital", "computing", "artificial intelligence", "platform"]):
-        return "Technology"
-
-    # 5. Financials
-    if any(k in name_lower for k in ["bank", "banking", "financial", "finance", "capital", "insurance", "credit", "asset management", "brokerage", "trust", "fund", "holdings", "bancorp", "fintech", "clearing", "exchange", "mortgage", "lending"]):
-        return "Financials"
-
-    # 6. Energy
-    if any(k in name_lower for k in ["energy", "oil", "gas", "petroleum", "pipeline", "drilling", "refining", "exploration", "renewable", "solar", "nuclear", "fuel", "clean power"]):
-        return "Energy"
-
-    # 7. Consumer Discretionary
-    if any(k in name_lower for k in ["automotive", "motor", "motors", "retail", "apparel", "luxury", "entertainment", "restaurant", "dining", "leisure", "cruise", "hotel", "resort", "footwear", "homebuilder", "e-commerce"]):
-        return "Consumer Discretionary"
-
-    # 8. Consumer Staples
-    if any(k in name_lower for k in ["beverage", "beverages", "food", "tobacco", "household", "personal care", "grocery", "supermarket"]):
-        return "Consumer Staples"
-
-    # 9. Industrials
-    if any(k in name_lower for k in ["industrial", "machinery", "aerospace", "defense", "aviation", "logistics", "freight", "railroad", "shipping", "transportation", "construction", "manufacturing", "engineering", "electrical equipment"]):
-        return "Industrials"
-
-    # 10. Utilities
-    if any(k in name_lower for k in ["utility", "utilities", "electric", "power", "water utility", "gas utility"]):
-        return "Utilities"
-
-    # 11. Real Estate
-    if any(k in name_lower for k in ["reit", "real estate", "property", "properties", "realty", "residential", "commercial real estate"]):
-        return "Real Estate"
-
-    # 12. Materials
-    if any(k in name_lower for k in ["materials", "chemical", "chemicals", "mining", "metals", "steel", "gold", "copper", "aluminum", "paper", "packaging", "fertilizer"]):
-        return "Materials"
+    if taxonomy:
+        priority_order = [
+            "Semiconductors", "Healthcare", "Communication Services", "Technology",
+            "Financials", "Energy", "Consumer Discretionary", "Consumer Staples",
+            "Industrials", "Utilities", "Real Estate", "Materials"
+        ]
+        for sector_name in priority_order:
+            if sector_name not in taxonomy:
+                continue
+            keywords = taxonomy[sector_name].get("macro_keywords", [])
+            if any(k in name_lower for k in keywords):
+                return sector_name
 
     return "Unclassified"
 

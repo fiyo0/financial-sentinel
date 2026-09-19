@@ -24,6 +24,9 @@ _GCS_BACKUP_WORKER_LOCK = threading.Lock()
 _GCS_BACKUP_PENDING = False
 _GCS_BACKUP_THREAD: Optional[threading.Thread] = None
 
+# Cached externalized sector taxonomy
+_SECTOR_TAXONOMY_CACHE: Optional[Dict[str, Any]] = None
+
 
 class StateStore:
 
@@ -710,6 +713,26 @@ class StateStore:
         except Exception:
             pass
         return res
+
+    def get_sector_taxonomy(self) -> Dict[str, Any]:
+        """
+        Retrieves the canonical 11-GICS sector taxonomy and macro topical keywords.
+        Cached in-memory for O(1) evaluation speed across agents.
+        """
+        global _SECTOR_TAXONOMY_CACHE
+        if _SECTOR_TAXONOMY_CACHE:
+            return _SECTOR_TAXONOMY_CACHE
+
+        try:
+            tax_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sector_taxonomy.json")
+            if os.path.exists(tax_path):
+                with open(tax_path, "r", encoding="utf-8") as f:
+                    _SECTOR_TAXONOMY_CACHE = json.load(f)
+                    return _SECTOR_TAXONOMY_CACHE
+        except Exception as e:
+            logger.debug(f"Failed to load sector_taxonomy.json: {e}")
+
+        return {}
 
     def save_briefing(self, briefing: BriefingReport, user_id: Optional[str] = None):
         target_user = user_id or briefing.user_id

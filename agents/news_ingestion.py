@@ -265,9 +265,12 @@ class NewsIngestionAgent(BaseAgent):
         )
         self.state_store = state_store or StateStore(config.db_path)
 
-    def extract_entities(self, text: str) -> Dict[str, List[str]]:
+    def extract_entities(self, text: str, user_id: Optional[str] = None) -> Dict[str, List[str]]:
         """
         Dynamically extracts ticker symbols and relevant market sectors from headline and article text.
+        Tier 1: Canonical Entity Registry (brand aliases, tickers, and authoritative sector propagation).
+        Tier 2: Externalized Dynamic Sector Taxonomy (macro/thematic industry keywords).
+        Tier 3: Semantic Zero-Shot Fallback (LLM classification for non-ticker macro news).
         """
         found_tickers = set()
 
@@ -323,31 +326,63 @@ class NewsIngestionAgent(BaseAgent):
             if sec and sec != "Unclassified":
                 found_sectors.add(sec)
 
-        # 5. Dynamic 11-GICS Sector Identification based on contextual semantics
-        if any(w in text_lower for w in ["semiconductor", "semi", "chip", "chips", "gpu", "wafer", "foundry", "lithography"]):
-            found_sectors.add("Semiconductors")
-        if any(w in text_lower for w in ["software", "cloud", "saas", "cybersecurity", "ai model", "operating system", "data center"]):
-            found_sectors.add("Technology")
-        if any(w in text_lower for w in ["oil", "gas", "petroleum", "crude", "drilling", "refining", "fossil fuel", "renewable energy", "solar power"]):
-            found_sectors.add("Energy")
-        if any(w in text_lower for w in ["bank", "banking", "fed", "interest rate", "yield", "treasury", "credit", "broker", "brokerage", "lending", "fintech", "clearing", "exchange", "insurance", "asset management"]):
-            found_sectors.add("Financials")
-        if any(w in text_lower for w in ["fda", "drug", "clinical", "biotech", "pharma", "trial", "therapeutics", "medical device", "healthcare", "vaccine", "oncology"]):
-            found_sectors.add("Healthcare")
-        if any(w in text_lower for w in ["aerospace", "defense", "machinery", "aviation", "freight", "railroad", "shipping", "logistics", "industrial equipment", "manufacturing", "caterpillar"]):
-            found_sectors.add("Industrials")
-        if any(w in text_lower for w in ["mining", "chemicals", "metals", "steel", "lithium", "gold", "copper", "aluminum", "fertilizer", "materials"]):
-            found_sectors.add("Materials")
-        if any(w in text_lower for w in ["reit", "real estate", "commercial real estate", "property leases", "housing starts"]):
-            found_sectors.add("Real Estate")
-        if any(w in text_lower for w in ["electric utility", "power grid", "water utility", "gas utility", "utilities", "nuclear power"]):
-            found_sectors.add("Utilities")
-        if any(w in text_lower for w in ["grocery", "supermarket", "beverage", "packaged food", "household products", "personal care", "consumer staples"]):
-            found_sectors.add("Consumer Staples")
-        if any(w in text_lower for w in ["automotive", "ev automaker", "retailer", "apparel", "luxury goods", "restaurant", "leisure", "consumer discretionary"]):
-            found_sectors.add("Consumer Discretionary")
-        if any(w in text_lower for w in ["telecom", "telecommunications", "broadcasting", "streaming media", "social media", "wireless carrier", "cable network"]):
-            found_sectors.add("Communication Services")
+        # 5. Dynamic 11-GICS Sector Identification based on externalized taxonomy (Tier 2)
+        taxonomy = {}
+        if self.state_store:
+            try:
+                taxonomy = self.state_store.get_sector_taxonomy()
+            except Exception:
+                pass
+        if not taxonomy:
+            try:
+                import os, json
+                tax_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "storage", "sector_taxonomy.json")
+                if os.path.exists(tax_path):
+                    with open(tax_path, "r", encoding="utf-8") as f:
+                        taxonomy = json.load(f)
+            except Exception:
+                pass
+
+        for sector_name, meta in taxonomy.items():
+            if sector_name in ("Index ETF / Fund",):
+                continue
+            keywords = meta.get("macro_keywords", [])
+            if any(w in text_lower for w in keywords):
+                found_sectors.add(sector_name)
+
+        # 6. Semantic Zero-Shot Fallback for Macro/Thematic Headlines (Tier 3)
+        if not found_sectors and self.use_llm:
+            effective_key = None
+            if user_id and self.state_store:
+                try:
+                    user_record = self.state_store.get_user_by_id(user_id)
+                    if user_record and user_record.get("encrypted_gemini_key"):
+                        from security.encryption import get_encryption_manager
+                        enc_mgr = get_encryption_manager()
+                        effective_key = enc_mgr.decrypt(user_record["encrypted_gemini_key"])
+                except Exception:
+                    pass
+            if not effective_key:
+                effective_key = config.gemini_api_key
+
+            if effective_key:
+                try:
+                    valid_sectors = [s for s in taxonomy.keys() if s != "Index ETF / Fund"]
+                    prompt = f"""
+                    Classify the primary economic sector for this macroeconomic or market news text:
+                    "{text}"
+
+                    Select exactly one of these official sectors: {valid_sectors}.
+                    Return JSON matching: {{"sector": "<SectorName>", "confidence": <float_between_0_and_1>}}
+                    """
+                    llm_res = self.query_llm_json(prompt, api_key=effective_key)
+                    if llm_res and isinstance(llm_res, dict):
+                        detected = llm_res.get("sector")
+                        conf = float(llm_res.get("confidence", 0.0))
+                        if detected in valid_sectors and conf >= 0.5:
+                            found_sectors.add(detected)
+                except Exception:
+                    pass
 
         return {
             "tickers": sorted(list(found_tickers)),
