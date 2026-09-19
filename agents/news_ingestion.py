@@ -75,9 +75,46 @@ CLICKBAIT_HEADLINE_PATTERNS = [
     re.compile(r'\bmillionaire-maker\b', re.IGNORECASE),
     re.compile(r'^\d+\s+(?:artificial intelligence|ai)\s+stocks?\b', re.IGNORECASE),
     re.compile(r'\bhere\'s why\b.*\bsoared\b', re.IGNORECASE),
-    re.compile(r'\bis\s+.*\ba\s+(?:buy|sell)\b', re.IGNORECASE),
+    re.compile(r'^\s*is\s+.*\ba\s+(?:buy|sell)\b', re.IGNORECASE),
     re.compile(r'\bwhy\s+.*\b(?:soared|crashed|plunged|jumped)\b', re.IGNORECASE),
 ]
+
+CATALYST_OVERRIDE_REGEX = re.compile(
+    r'\b(sec\b|tokeniz\w+|innovation exemption|exemption|antitrust|fda\b|patent|lawsuit|earnings beat|acquisition|merger|buyout|restructuring)\b',
+    re.IGNORECASE
+)
+
+
+def matches_ticker_equity_context(text: str, ticker: str, aliases: Optional[List[str]] = None) -> bool:
+    """
+    Validates whether an article legitimately references an equity asset rather than an unrelated homonym.
+    Checks for cashtag ($TICKER), recognized brand aliases, or the ticker symbol accompanied by financial/market terms.
+    """
+    clean_ticker = ticker.strip().upper().replace("$", "")
+    text_lower = text.lower()
+
+    # 1. Direct cashtag ($TICKER) is definitive equity proof
+    if f"${clean_ticker.lower()}" in text_lower:
+        return True
+
+    # 2. Recognized company/brand aliases (e.g. "Robinhood", "Caterpillar", "Palantir")
+    if aliases:
+        for a in aliases:
+            if a.upper() != clean_ticker:
+                if re.search(r'\b' + re.escape(a.lower()) + r'\b', text_lower):
+                    return True
+
+    # 3. Ticker symbol as standalone word — verify financial context to eliminate homonym false positives
+    if re.search(r'\b' + re.escape(clean_ticker.lower()) + r'\b', text_lower):
+        financial_context_words = [
+            "stock", "stocks", "shares", "nasdaq", "nyse", "market", "trading", "investor", "investors",
+            "valuation", "earnings", "broker", "brokerage", "revenue", "quarterly", "analyst", "price target",
+            "bullish", "bearish", "sec", "finra", "etf", "holdings", "options", "dividend", "yield"
+        ]
+        if any(re.search(r'\b' + kw + r'\b', text_lower) for kw in financial_context_words):
+            return True
+
+    return False
 
 
 def extract_stem_aliases(clean_ticker: str, company_name: str) -> List[str]:
@@ -173,8 +210,12 @@ def is_primary_headline_subject(title: str, ticker: str, aliases: Optional[List[
 def is_low_signal_clickbait(title: str) -> bool:
     """
     Detects low-signal SEO listicles, speculative retail clickbait, and content-farm headlines.
+    High-impact structural regulatory or corporate catalysts are strictly exempted.
     """
-    return any(pat.search(title.strip()) for pat in CLICKBAIT_HEADLINE_PATTERNS)
+    clean_title = title.strip()
+    if CATALYST_OVERRIDE_REGEX.search(clean_title):
+        return False
+    return any(pat.search(clean_title) for pat in CLICKBAIT_HEADLINE_PATTERNS)
 
 
 def categorize_catalyst_provenance(item: NewsItem) -> str:
@@ -184,13 +225,26 @@ def categorize_catalyst_provenance(item: NewsItem) -> str:
     src = (item.source or "").lower()
     title = (item.title or "").lower()
 
-    if "sec.gov" in src or "sec " in title or "securities and exchange commission" in title or item.category == NewsCategory.SEC_FILING:
+    if (
+        "sec.gov" in src or
+        bool(re.search(r'\bsec\b', title)) or
+        "securities and exchange commission" in title or
+        item.category == NewsCategory.SEC_FILING
+    ):
         return "REGULATORY / SEC ACTION"
-    if "federalreserve.gov" in src or "federal reserve" in src or "fomc" in title or "interest rate" in title:
+    if (
+        "federalreserve.gov" in src or
+        "federal reserve" in src or
+        bool(re.search(r'\b(fomc|federal reserve)\b', title)) or
+        "interest rate" in title
+    ):
         return "CENTRAL BANK / MACRO"
-    if item.category == NewsCategory.EARNINGS or any(k in title for k in ["earnings", "revenue", "eps", "quarterly result", "guidance", "q1", "q2", "q3", "q4"]):
+    if (
+        item.category == NewsCategory.EARNINGS or
+        any(k in title for k in ["earnings", "revenue", "eps", "quarterly result", "guidance", "q1", "q2", "q3", "q4"])
+    ):
         return "EARNINGS / GUIDANCE"
-    if any(k in title for k in ["launches", "acquires", "acquisition", "merger", "partnership", "unveils", "fda approval", "tokenized", "tokenization"]):
+    if any(k in title for k in ["launches", "acquires", "acquisition", "merger", "partnership", "unveils", "fda approval", "tokenized", "tokenization", "innovation exemption"]):
         return "CORPORATE CATALYST"
     return "MARKET MOVERS & CONTEXT"
 
@@ -257,9 +311,23 @@ class NewsIngestionAgent(BaseAgent):
 
     def infer_category(self, title: str, summary: str, feed_category: str) -> NewsCategory:
         text = f"{title} {summary}".lower()
-        if "sec" in text or "form 8-k" in text or "10-q" in text or "item 1.01" in text or "innovation exemption" in text or "tokenized" in text:
+        if (
+            bool(re.search(r'\bsec\b', text)) or
+            "securities and exchange commission" in text or
+            "form 8-k" in text or
+            "10-q" in text or
+            "item 1.01" in text or
+            "innovation exemption" in text or
+            "exemptive order" in text
+        ):
             return NewsCategory.SEC_FILING
-        if "federal reserve" in text or "fomc" in text or "cpi" in text or "inflation" in text or "interest rate" in text:
+        if (
+            "federal reserve" in text or
+            bool(re.search(r'\b(fomc|fed)\b', text)) or
+            "cpi" in text or
+            "inflation" in text or
+            "interest rate" in text
+        ):
             return NewsCategory.MACRO
         if "earnings" in text or "revenue" in text or "eps" in text or "quarterly result" in text or "guidance" in text:
             return NewsCategory.EARNINGS
@@ -458,22 +526,32 @@ class NewsIngestionAgent(BaseAgent):
                 for ticker in set(t.strip().upper() for t in portfolio_tickers if t.strip()):
                     aliases = resolve_ticker_aliases(ticker, state_store=self.state_store, use_market_lookup=True)
                     brand_aliases = [a for a in aliases if a.upper() != ticker]
-                    brand_term = f' OR "{brand_aliases[0]}"' if brand_aliases else ""
-                    search_query = urllib.parse.quote(f"{ticker}{brand_term}")
+                    primary_brand = brand_aliases[0] if brand_aliases else ticker
+
+                    # Universal equity search query anchoring:
+                    # Combines the primary brand name, cashtag $TICKER, and equity descriptor.
+                    # Universally prevents homonym noise for dictionary-word tickers (e.g. HOOD, ON, CAT, NOW, BOX)
+                    if brand_aliases:
+                        search_expr = f'("{primary_brand}" OR "${ticker}" OR "{ticker} stock")'
+                    else:
+                        search_expr = f'("${ticker}" OR "{ticker} stock")'
+                    search_query = urllib.parse.quote(search_expr)
 
                     # Google News RSS for real-time breaking ticker & brand news
                     all_feed_configs.append({
                         "name": f"Google News ({ticker})",
                         "url": f"https://news.google.com/rss/search?q={search_query}&hl=en-US&gl=US&ceid=US:en",
                         "category": "BREAKING",
-                        "_target_ticker": ticker
+                        "_target_ticker": ticker,
+                        "_target_aliases": aliases
                     })
                     # Yahoo Finance RSS 2.0 headline feed
                     all_feed_configs.append({
                         "name": f"Yahoo Finance ({ticker})",
                         "url": f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US",
                         "category": "EARNINGS",
-                        "_target_ticker": ticker
+                        "_target_ticker": ticker,
+                        "_target_aliases": aliases
                     })
 
             with ThreadPoolExecutor(max_workers=min(16, len(all_feed_configs) or 1)) as executor:
@@ -486,9 +564,11 @@ class NewsIngestionAgent(BaseAgent):
                     try:
                         fetched = future.result()
                         target_ticker = cfg.get("_target_ticker")
+                        target_aliases = cfg.get("_target_aliases")
                         for item in fetched:
                             if target_ticker and target_ticker not in item.related_tickers:
-                                item.related_tickers.append(target_ticker)
+                                if matches_ticker_equity_context(f"{item.title} {item.summary}", target_ticker, target_aliases):
+                                    item.related_tickers.append(target_ticker)
                             if force_fresh or not self.state_store.is_news_processed(item.raw_hash):
                                 if not self.state_store.is_news_processed(item.raw_hash):
                                     self.state_store.save_news_item(item)

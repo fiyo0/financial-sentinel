@@ -5,6 +5,7 @@ Zero hardcoded ecosystem dictionaries.
 """
 
 import logging
+import re
 from typing import List, Optional, Dict, Any
 from models import (
     Portfolio, PortfolioHolding, NewsItem, HoldingExposureAnalysis,
@@ -17,6 +18,49 @@ from agents.news_ingestion import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def deduplicate_and_prioritize_regulatory_items(items: List[NewsItem], max_items: int = 4) -> List[NewsItem]:
+    """
+    Universally prioritizes formal regulatory rulings, exemptive orders, and rule proposals over speeches,
+    and clusters multiple speeches/remarks from the same event to prevent slot exhaustion.
+    """
+    if not items:
+        return []
+
+    def _priority_score(item: NewsItem) -> int:
+        title = (item.title or "").lower()
+        if any(k in title for k in ["sec issues", "exemptive order", "innovation exemption to facilitate", "order", "proposes"]):
+            return 4
+        if any(k in title for k in ["innovation exemption", "exemption", "rule", "framework", "announces"]):
+            return 3
+        if any(k in title for k in ["charges", "statement", "joint", "press release"]):
+            return 2
+        return 1
+
+    sorted_items = sorted(items, key=lambda x: (_priority_score(x), x.published_at), reverse=True)
+
+    curated: List[NewsItem] = []
+    seen_event_clusters: Dict[str, int] = {}
+
+    for item in sorted_items:
+        title_lower = (item.title or "").lower()
+        cluster_key = None
+        for pattern in [r'24[- ]hour trading', r'proxy solicitation', r'shareholder proposal', r'investor advisory committee', r'tokeniz\w+', r'innovation exemption', r'crypto rules']:
+            if re.search(pattern, title_lower):
+                cluster_key = 'tokenization_exemption' if ('tokeniz' in pattern or 'innovation' in pattern) else pattern
+                break
+
+        if cluster_key:
+            if seen_event_clusters.get(cluster_key, 0) >= 1:
+                continue
+            seen_event_clusters[cluster_key] = seen_event_clusters.get(cluster_key, 0) + 1
+
+        curated.append(item)
+        if len(curated) >= max_items:
+            break
+
+    return curated
 
 
 class PortfolioAnalysisAgent(BaseAgent):
@@ -319,15 +363,19 @@ class PortfolioAnalysisAgent(BaseAgent):
             else:
                 other_news.append(n)
 
-        # Assemble curated news list (up to 5 primary ticker, up to 3 regulatory, up to 2 context)
+        # Deduplicate & prioritize regulatory actions so formal commission orders/exemptions
+        # are not crowded out by multiple speech transcripts from a single roundtable/event
+        curated_regulatory = deduplicate_and_prioritize_regulatory_items(regulatory_actions, max_items=4)
+
+        # Assemble curated news list (up to 5 primary ticker, up to 4 regulatory, up to 2 context)
         selected_news: List[NewsItem] = []
         selected_news.extend(primary_catalysts[:5])
-        selected_news.extend(regulatory_actions[:3])
-        remaining_slots = 10 - len(selected_news)
+        selected_news.extend(curated_regulatory)
+        remaining_slots = 12 - len(selected_news)
         if remaining_slots > 0:
             selected_news.extend(sector_context[:min(2, remaining_slots)])
-        remaining_slots = 10 - len(selected_news)
-        if remaining_slots > 0 and len(selected_news) < 4:
+        remaining_slots = 12 - len(selected_news)
+        if remaining_slots > 0 and len(selected_news) < 5:
             selected_news.extend(other_news[:remaining_slots])
 
         # Prompt injection defense & provenance labeling
@@ -411,7 +459,7 @@ class PortfolioAnalysisAgent(BaseAgent):
         CRITICAL CATALYST & PROVENANCE SIFTING DIRECTIVE:
         • Distinguish between PRIMARY COMPANY CATALYSTS vs. INCIDENTAL MENTIONS. Only treat an external event as a material catalyst if the company is a direct beneficiary, primary subject, or structural driver.
         • Do NOT inflate generic syndicated listicles ('3 stocks to buy', 'Why X moved today'), incidental name-dropping, or speculative retail clickbait into corporate catalysts.
-        • Pay rigorous attention to [REGULATORY / SEC ACTION] and [CORPORATE CATALYST] events (exemptive orders, rule approvals, statutory filings, product launches) that expand the company's addressable market, operational rights, or core product moat.
+        • Pay rigorous attention to [REGULATORY / SEC ACTION] and [CORPORATE CATALYST] events (exemptive orders, rule approvals, statutory filings, product launches) that expand the company's addressable market, operational rights, or core product moat. If a landmark regulatory order or exemption (such as SEC tokenization exemptions, broker-dealer market microstructure rulings, or banking/lending approvals) directly empowers the firm's business model or core platform, you MUST explicitly evaluate and detail it under Fundamental Catalysts.
         • If recent headlines lack material substance, explicitly rely on structural fundamental business drivers (revenue expansion, unit economics, net interest income, operating leverage) rather than hallucinating significance from trivial news.
 
         TASK & REQUIRED "telegram_html" STRUCTURE:

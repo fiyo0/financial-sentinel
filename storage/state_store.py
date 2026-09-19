@@ -503,6 +503,64 @@ class StateStore:
                 matched.append(item)
         return matched[:limit]
 
+    def get_recent_regulatory_news(self, hours: int = 72, limit: int = 25) -> List[NewsItem]:
+        """
+        Retrieves authoritative regulatory bulletins, SEC filings/orders, and central bank actions
+        within the specified lookback window, sorted chronologically.
+        """
+        cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+        items: List[NewsItem] = []
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, raw_hash, title, source, url, published_at, category, reliability_score, related_tickers
+                FROM ingested_news
+                WHERE published_at >= ?
+                  AND (
+                    source LIKE '%sec.gov%' OR
+                    source LIKE '%federalreserve%' OR
+                    source LIKE '%cftc%' OR
+                    source LIKE '%SEC Press%' OR
+                    source LIKE '%SEC Regulatory%' OR
+                    source LIKE '%Federal Reserve%' OR
+                    category = 'SEC_FILING' OR
+                    title LIKE '%SEC %' OR
+                    title LIKE '%Securities and Exchange Commission%' OR
+                    title LIKE '%Innovation Exemption%' OR
+                    title LIKE '%Exemptive Order%'
+                  )
+                ORDER BY published_at DESC
+                LIMIT ?
+            """, (cutoff, limit))
+            for row in cursor.fetchall():
+                try:
+                    pub_dt = datetime.fromisoformat(row[5])
+                except Exception:
+                    pub_dt = datetime.utcnow()
+                try:
+                    cat = NewsCategory(row[6])
+                except Exception:
+                    cat = NewsCategory.SEC_FILING
+                try:
+                    tickers = json.loads(row[8]) if row[8] else []
+                except Exception:
+                    tickers = []
+
+                items.append(NewsItem(
+                    id=row[0],
+                    raw_hash=row[1],
+                    title=row[2],
+                    source=row[3],
+                    url=row[4] or "",
+                    published_at=pub_dt,
+                    summary=row[2],
+                    category=cat,
+                    source_reliability_score=row[7] or 0.95,
+                    related_tickers=tickers,
+                    related_sectors=["Financials"]
+                ))
+        return items
+
     def save_ticker_aliases(self, ticker: str, company_name: str, aliases: List[str]) -> bool:
         """
         Persists dynamically resolved brand aliases for a ticker.

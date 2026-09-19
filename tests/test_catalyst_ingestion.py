@@ -233,3 +233,128 @@ def test_single_ticker_news_prioritization_and_clickbait_sifting(tmp_path):
     # Verify anti-inflation directive is present in prompt
     assert "CRITICAL CATALYST & PROVENANCE SIFTING DIRECTIVE" in prompt_text
     assert "PRIMARY COMPANY CATALYSTS vs. INCIDENTAL MENTIONS" in prompt_text
+
+
+def test_equity_context_validation_and_disambiguation():
+    """Test universal equity context validation to prevent homonym pollution on dictionary-word tickers."""
+    from agents.news_ingestion import matches_ticker_equity_context
+
+    # HOOD (Robinhood)
+    hood_aliases = ["Robinhood", "Robinhood Markets", "HOOD"]
+    assert matches_ticker_equity_context("Soldier injured in Fort Hood training exercise", "HOOD", hood_aliases) is False
+    assert matches_ticker_equity_context("Winter jacket with detachable hood on sale", "HOOD", hood_aliases) is False
+    assert matches_ticker_equity_context("Robinhood Markets climbs 9% amid tokenized stock trading framework", "HOOD", hood_aliases) is True
+    assert matches_ticker_equity_context("Traders accumulate $HOOD call options into earnings", "HOOD", hood_aliases) is True
+    assert matches_ticker_equity_context("HOOD stock gains 4% as brokerage reports net deposit growth", "HOOD", hood_aliases) is True
+
+    # CAT (Caterpillar)
+    cat_aliases = ["Caterpillar", "CAT"]
+    assert matches_ticker_equity_context("Firefighters rescue local cat stuck in neighborhood tree", "CAT", cat_aliases) is False
+    assert matches_ticker_equity_context("Caterpillar boosts quarterly dividend by 8%", "CAT", cat_aliases) is True
+    assert matches_ticker_equity_context("Institutional funds buy $CAT shares ahead of infrastructure bill", "CAT", cat_aliases) is True
+
+    # ON (ON Semiconductor)
+    on_aliases = ["ON Semiconductor", "ON"]
+    assert matches_ticker_equity_context("Power grid turned back on after brief outage", "ON", on_aliases) is False
+    assert matches_ticker_equity_context("ON Semiconductor beats EPS estimates on automotive silicon demand", "ON", on_aliases) is True
+    assert matches_ticker_equity_context("$ON rallies 5% on semiconductor expansion", "ON", on_aliases) is True
+
+
+def test_word_boundary_regulatory_categorization():
+    """Test that words like 'sector', 'second', 'security' do not falsely trigger SEC categorization."""
+    store = StateStore(":memory:")
+    agent = NewsIngestionAgent(store)
+
+    # False positive traps with substring 'sec'
+    assert agent.infer_category("Tech Sector Faces Pressure", "Overview of the technology sector", "BREAKING") != NewsCategory.SEC_FILING
+    assert agent.infer_category("Second Quarter GDP Growth Accelerates", "Economic data shows strength", "BREAKING") != NewsCategory.SEC_FILING
+    assert agent.infer_category("Cyber Security Spending Rises", "Enterprises increase security software budget", "BREAKING") != NewsCategory.SEC_FILING
+
+    item_sector = NewsItem(id="s1", title="Technology Sector Outlook", source="MarketWatch", url="", published_at=datetime.utcnow(), summary="")
+    assert categorize_catalyst_provenance(item_sector) != "REGULATORY / SEC ACTION"
+
+    # Genuine SEC items
+    assert agent.infer_category("SEC Issues Innovation Exemption Order", "Commission provides exemptive relief", "BREAKING") == NewsCategory.SEC_FILING
+    assert agent.infer_category("Securities and Exchange Commission Proposes New Rules", "Agency modernizes framework", "BREAKING") == NewsCategory.SEC_FILING
+
+    item_sec = NewsItem(id="s2", title="SEC Announces 24-Hour Trading Roundtable", source="SEC Press Releases", url="", published_at=datetime.utcnow(), summary="")
+    assert categorize_catalyst_provenance(item_sec) == "REGULATORY / SEC ACTION"
+
+
+def test_clickbait_override_for_structural_catalysts():
+    """Test that legitimate news with rhetorical questions is exempted from clickbait filtering when structural catalysts are present."""
+    # Wire report ending with rhetorical buy question but reporting landmark SEC order
+    wire_headline = "SEC Opens U.S. Door to Tokenized Stocks: Is Robinhood a Buy Now?"
+    assert is_low_signal_clickbait(wire_headline) is False
+
+    # Structural regulatory / corporate catalyst headlines
+    assert is_low_signal_clickbait("SEC Issues Innovation Exemption to Facilitate Tokenized Equities") is False
+    assert is_low_signal_clickbait("DOJ Antitrust Division Launches Probe into Big Tech") is False
+    assert is_low_signal_clickbait("Biotech Secures FDA Approval for Groundbreaking Therapy") is False
+
+    # Low-signal speculative clickbait without structural catalysts MUST be filtered
+    assert is_low_signal_clickbait("Is Robinhood a Buy Right Now?") is True
+    assert is_low_signal_clickbait("3 Stocks to Buy Today for Huge Returns") is True
+    assert is_low_signal_clickbait("Why Tesla Shares Jumped Today") is True
+
+
+def test_regulatory_deduplication_and_policy_prioritization():
+    """Test that multiple speech transcripts from the same event are clustered and formal orders are prioritized."""
+    from agents.analysis_agent import deduplicate_and_prioritize_regulatory_items
+
+    items = [
+        NewsItem(id="r1", title="Remarks at the 24-Hour Trading Roundtable", source="SEC Statements",
+                 url="", published_at=datetime(2026, 9, 17, 10, 16), summary="", category=NewsCategory.SEC_FILING),
+        NewsItem(id="r2", title="Stock Around the Clock: Remarks at the Roundtable on Preparations for 24-Hour Trading", source="SEC Statements",
+                 url="", published_at=datetime(2026, 9, 17, 10, 15), summary="", category=NewsCategory.SEC_FILING),
+        NewsItem(id="r3", title="Remarks at the Roundtable on Preparations for 24-Hour Trading", source="SEC Statements",
+                 url="", published_at=datetime(2026, 9, 17, 10, 14), summary="", category=NewsCategory.SEC_FILING),
+        NewsItem(id="r4", title="Remarks at the SEC Roundtable on 24-Hour Trading", source="SEC Statements",
+                 url="", published_at=datetime(2026, 9, 17, 10, 3), summary="", category=NewsCategory.SEC_FILING),
+        NewsItem(id="r5", title="SEC Issues Innovation Exemption to Facilitate the Trading of Tokenized NMS Stock", source="SEC Press Releases",
+                 url="", published_at=datetime(2026, 9, 17, 9, 20), summary="", category=NewsCategory.SEC_FILING),
+    ]
+
+    curated = deduplicate_and_prioritize_regulatory_items(items, max_items=4)
+
+    # 1. Innovation Exemption MUST be first or included due to high priority score (formal exemption/order)
+    titles = [c.title for c in curated]
+    assert any("Innovation Exemption" in t for t in titles)
+
+    # 2. Speeches from the 24-hour trading roundtable MUST be clustered so they do not exhaust all slots
+    roundtable_speeches = [t for t in titles if "24-Hour Trading" in t or "24‑Hour Trading" in t]
+    assert len(roundtable_speeches) == 1, f"Expected exactly 1 clustered roundtable speech, got: {roundtable_speeches}"
+
+
+def test_state_store_get_recent_regulatory_news(tmp_path):
+    """Test that StateStore correctly retrieves regulatory bulletins."""
+    store = StateStore(str(tmp_path / "test_reg_store.db"))
+
+    item_sec = NewsItem(
+        id="reg_1", title="SEC Grants Innovation Exemption for Tokenized Securities",
+        source="SEC Press Releases", url="https://sec.gov", published_at=datetime.utcnow(),
+        summary="Exemption granted", category=NewsCategory.SEC_FILING, source_reliability_score=0.99
+    )
+    item_macro = NewsItem(
+        id="reg_2", title="Federal Reserve FOMC Policy Decision",
+        source="federalreserve.gov", url="https://federalreserve.gov", published_at=datetime.utcnow(),
+        summary="Rate announcement", category=NewsCategory.MACRO, source_reliability_score=0.99
+    )
+    item_retail = NewsItem(
+        id="reg_3", title="Local retail store expands footprint in Ohio",
+        source="LocalGazette", url="https://local.com", published_at=datetime.utcnow(),
+        summary="Store opening", category=NewsCategory.BREAKING, source_reliability_score=0.70
+    )
+
+    store.save_news_item(item_sec)
+    store.save_news_item(item_macro)
+    store.save_news_item(item_retail)
+
+    reg_news = store.get_recent_regulatory_news(hours=24, limit=10)
+    reg_titles = [r.title for r in reg_news]
+
+    assert len(reg_news) == 2
+    assert "SEC Grants Innovation Exemption for Tokenized Securities" in reg_titles
+    assert "Federal Reserve FOMC Policy Decision" in reg_titles
+    assert "Local retail store expands footprint in Ohio" not in reg_titles
+

@@ -86,17 +86,21 @@ class AnalysisService:
             live=True, portfolio_tickers=[clean_sym], force_fresh=True, api_key=resolved_key
         )
 
-        # Merge recent 48-hour news matching ticker or aliases from state_store
+        # Merge recent 48-hour news matching ticker or aliases AND authoritative regulatory actions from state_store
         stored_news = []
+        regulatory_news = []
         if self.orchestrator.state_store:
             stored_news = self.orchestrator.state_store.get_recent_news_for_ticker(
                 ticker=clean_sym, aliases=aliases, hours=48, limit=20
+            )
+            regulatory_news = self.orchestrator.state_store.get_recent_regulatory_news(
+                hours=48, limit=15
             )
 
         # Combine and deduplicate by raw_hash
         seen_hashes = set()
         news_items = []
-        for n in live_news + stored_news:
+        for n in live_news + stored_news + regulatory_news:
             if n.raw_hash not in seen_hashes:
                 seen_hashes.add(n.raw_hash)
                 news_items.append(n)
