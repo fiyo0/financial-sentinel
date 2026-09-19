@@ -358,3 +358,28 @@ def test_state_store_get_recent_regulatory_news(tmp_path):
     assert "Federal Reserve FOMC Policy Decision" in reg_titles
     assert "Local retail store expands footprint in Ohio" not in reg_titles
 
+
+def test_algorithmic_nlp_topic_clustering_across_industries():
+    """Test that are_headlines_same_event_cluster dynamically clusters arbitrary events across industries without hardcoded terms."""
+    from agents.analysis_agent import are_headlines_same_event_cluster
+
+    # Biopharma / FDA event clustering
+    fda_1 = "FDA Advisory Committee Votes in Favor of Alzheimer's Treatment"
+    fda_2 = "Briefing Document: FDA Advisory Committee Meeting on Alzheimer's Drug Candidate"
+    fda_unrelated = "FDA Approves Pediatric Vaccine for Respiratory Illness"
+    assert are_headlines_same_event_cluster(fda_1, fda_2) is True
+    assert are_headlines_same_event_cluster(fda_1, fda_unrelated) is False
+
+    # Antitrust / FTC / DOJ clustering
+    antitrust_1 = "FTC Sues Tech Conglomerate Over Anti-Competitive Cloud Software Practices"
+    antitrust_2 = "Statement by FTC Chair on Antitrust Lawsuit Targeting Cloud Computing Practices"
+    sec_unrelated = "SEC Charges Private Fund Manager in Ponzi Scheme"
+    assert are_headlines_same_event_cluster(antitrust_1, antitrust_2) is True
+    assert are_headlines_same_event_cluster(antitrust_1, sec_unrelated) is False
+
+    # Central Bank / FOMC clustering
+    fed_1 = "Federal Reserve Issues FOMC Monetary Policy Statement"
+    fed_2 = "Implementation Note Issued Regarding FOMC Policy Decision"
+    assert are_headlines_same_event_cluster(fed_1, fed_2) is True
+
+

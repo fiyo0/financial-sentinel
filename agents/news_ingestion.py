@@ -80,7 +80,7 @@ CLICKBAIT_HEADLINE_PATTERNS = [
 ]
 
 CATALYST_OVERRIDE_REGEX = re.compile(
-    r'\b(sec\b|tokeniz\w+|innovation exemption|exemption|antitrust|fda\b|patent|lawsuit|earnings beat|acquisition|merger|buyout|restructuring)\b',
+    r'\b(sec\b|fda\b|ftc\b|doj\b|cftc\b|epa\b|fomc|federal reserve|exemption|antitrust|patent|lawsuit|subpoena|indictment|investigation|earnings beat|guidance|acquisition|merger|buyout|restructuring|spin-?off|partnership|dividend)\b',
     re.IGNORECASE
 )
 
@@ -244,7 +244,7 @@ def categorize_catalyst_provenance(item: NewsItem) -> str:
         any(k in title for k in ["earnings", "revenue", "eps", "quarterly result", "guidance", "q1", "q2", "q3", "q4"])
     ):
         return "EARNINGS / GUIDANCE"
-    if any(k in title for k in ["launches", "acquires", "acquisition", "merger", "partnership", "unveils", "fda approval", "tokenized", "tokenization", "innovation exemption"]):
+    if any(k in title for k in ["launches", "acquires", "acquisition", "merger", "partnership", "unveils", "fda approval", "patent", "contract award"]):
         return "CORPORATE CATALYST"
     return "MARKET MOVERS & CONTEXT"
 
@@ -299,7 +299,7 @@ class NewsIngestionAgent(BaseAgent):
             found_sectors.add("Technology")
         if any(w in text_lower for w in ["oil", "gas", "energy", "nuclear", "power grid", "utility"]):
             found_sectors.add("Energy")
-        if any(w in text_lower for w in ["bank", "fed", "interest rate", "yield", "treasury", "credit", "broker", "brokerage", "tokenized", "tokenization"]):
+        if any(w in text_lower for w in ["bank", "banking", "fed", "interest rate", "yield", "treasury", "credit", "broker", "brokerage", "lending", "fintech", "clearing", "exchange"]):
             found_sectors.add("Financials")
         if any(w in text_lower for w in ["fda", "drug", "clinical", "biotech", "pharma", "trial"]):
             found_sectors.add("Healthcare")
@@ -312,12 +312,11 @@ class NewsIngestionAgent(BaseAgent):
     def infer_category(self, title: str, summary: str, feed_category: str) -> NewsCategory:
         text = f"{title} {summary}".lower()
         if (
-            bool(re.search(r'\bsec\b', text)) or
+            bool(re.search(r'\b(?:sec|edgar|cftc)\b', text)) or
             "securities and exchange commission" in text or
             "form 8-k" in text or
             "10-q" in text or
             "item 1.01" in text or
-            "innovation exemption" in text or
             "exemptive order" in text
         ):
             return NewsCategory.SEC_FILING

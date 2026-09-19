@@ -20,42 +20,81 @@ from agents.news_ingestion import (
 logger = logging.getLogger(__name__)
 
 
+REGULATORY_NLP_STOPWORDS = {
+    "the", "and", "for", "with", "from", "that", "this", "remarks",
+    "speech", "statement", "roundtable", "meeting", "about", "preparations",
+    "clock", "around", "towards", "annual", "official", "sec", "federal",
+    "reserve", "board", "commission", "press", "release", "trading", "market",
+    "markets", "stock", "stocks", "financial", "securities", "investor",
+    "investors", "public", "general", "united", "states", "agency", "action"
+}
+
+
+def compute_salient_title_tokens(title: str) -> set:
+    """Extracts distinctive semantic tokens from a headline for topic clustering."""
+    words = re.findall(r'[a-zA-Z0-9-]{3,}', title.lower())
+    return {w for w in words if w not in REGULATORY_NLP_STOPWORDS}
+
+
+def are_headlines_same_event_cluster(t1: str, t2: str) -> bool:
+    """
+    Algorithmic NLP topic clustering using token set overlap.
+    Detects whether two headlines describe the same event, conference, hearing, or ruling
+    without requiring hardcoded keyword or topic lists.
+    """
+    s1 = compute_salient_title_tokens(t1)
+    s2 = compute_salient_title_tokens(t2)
+    if not s1 or not s2:
+        return False
+    inter = s1.intersection(s2)
+    if len(inter) >= 2:
+        return True
+    smaller = min(len(s1), len(s2))
+    return (len(inter) / smaller) >= 0.40
+
+
 def deduplicate_and_prioritize_regulatory_items(items: List[NewsItem], max_items: int = 4) -> List[NewsItem]:
     """
     Universally prioritizes formal regulatory rulings, exemptive orders, and rule proposals over speeches,
-    and clusters multiple speeches/remarks from the same event to prevent slot exhaustion.
+    and dynamically clusters multiple speeches/remarks from the same event to prevent slot exhaustion.
     """
     if not items:
         return []
 
     def _priority_score(item: NewsItem) -> int:
         title = (item.title or "").lower()
-        if any(k in title for k in ["sec issues", "exemptive order", "innovation exemption to facilitate", "order", "proposes"]):
+        src = (item.source or "").lower()
+
+        # Tier 4: Official Commission/Board decisions, orders, and statutory rulemakings
+        is_official_action = (
+            "sec press" in src or "federal reserve press" in src or "cftc press" in src or
+            any(title.startswith(p) for p in ["sec issues", "federal reserve board", "sec proposes", "sec charges", "sec adopts"]) or
+            "exemptive order" in title or "commission order" in title
+        )
+        has_enacted_action = any(k in title for k in [
+            "issues", "grants", "orders", "order", "exemptive", "exemption",
+            "adopts", "rule", "framework", "proposes", "charges", "settles"
+        ])
+        if is_official_action and has_enacted_action and not title.startswith(("remarks", "statement on")):
             return 4
-        if any(k in title for k in ["innovation exemption", "exemption", "rule", "framework", "announces"]):
+
+        # Tier 3: Substantive policy frameworks, rules, or enforcement from secondary feeds
+        if has_enacted_action:
             return 3
-        if any(k in title for k in ["charges", "statement", "joint", "press release"]):
+
+        # Tier 2: Official announcements, joint bulletins, agency statements
+        if any(k in title for k in ["announces", "releases", "joint", "statement", "report", "bulletin", "press release"]):
             return 2
+
+        # Tier 1: Speeches, discursive remarks, and panel commentary
         return 1
 
     sorted_items = sorted(items, key=lambda x: (_priority_score(x), x.published_at), reverse=True)
 
     curated: List[NewsItem] = []
-    seen_event_clusters: Dict[str, int] = {}
-
     for item in sorted_items:
-        title_lower = (item.title or "").lower()
-        cluster_key = None
-        for pattern in [r'24[- ]hour trading', r'proxy solicitation', r'shareholder proposal', r'investor advisory committee', r'tokeniz\w+', r'innovation exemption', r'crypto rules']:
-            if re.search(pattern, title_lower):
-                cluster_key = 'tokenization_exemption' if ('tokeniz' in pattern or 'innovation' in pattern) else pattern
-                break
-
-        if cluster_key:
-            if seen_event_clusters.get(cluster_key, 0) >= 1:
-                continue
-            seen_event_clusters[cluster_key] = seen_event_clusters.get(cluster_key, 0) + 1
-
+        if any(are_headlines_same_event_cluster(item.title, selected.title) for selected in curated):
+            continue
         curated.append(item)
         if len(curated) >= max_items:
             break
@@ -459,7 +498,7 @@ class PortfolioAnalysisAgent(BaseAgent):
         CRITICAL CATALYST & PROVENANCE SIFTING DIRECTIVE:
         • Distinguish between PRIMARY COMPANY CATALYSTS vs. INCIDENTAL MENTIONS. Only treat an external event as a material catalyst if the company is a direct beneficiary, primary subject, or structural driver.
         • Do NOT inflate generic syndicated listicles ('3 stocks to buy', 'Why X moved today'), incidental name-dropping, or speculative retail clickbait into corporate catalysts.
-        • Pay rigorous attention to [REGULATORY / SEC ACTION] and [CORPORATE CATALYST] events (exemptive orders, rule approvals, statutory filings, product launches) that expand the company's addressable market, operational rights, or core product moat. If a landmark regulatory order or exemption (such as SEC tokenization exemptions, broker-dealer market microstructure rulings, or banking/lending approvals) directly empowers the firm's business model or core platform, you MUST explicitly evaluate and detail it under Fundamental Catalysts.
+        • Pay rigorous attention to [REGULATORY / SEC ACTION] and [CORPORATE CATALYST] events (exemptive orders, rule proposals, statutory filings, product launches, or agency enforcement) that alter the target asset's addressable market, operational rights, or core commercial moat. If an authoritative agency ruling directly impacts the firm's business model, platform capabilities, or regulatory overhead, you MUST evaluate and detail it under Fundamental Catalysts.
         • If recent headlines lack material substance, explicitly rely on structural fundamental business drivers (revenue expansion, unit economics, net interest income, operating leverage) rather than hallucinating significance from trivial news.
 
         TASK & REQUIRED "telegram_html" STRUCTURE:

@@ -526,7 +526,10 @@ class StateStore:
                     category = 'SEC_FILING' OR
                     title LIKE '%SEC %' OR
                     title LIKE '%Securities and Exchange Commission%' OR
-                    title LIKE '%Innovation Exemption%' OR
+                    title LIKE '%Federal Reserve%' OR
+                    title LIKE '%CFTC%' OR
+                    title LIKE '%FTC %' OR
+                    title LIKE '%DOJ %' OR
                     title LIKE '%Exemptive Order%'
                   )
                 ORDER BY published_at DESC
