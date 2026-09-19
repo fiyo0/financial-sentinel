@@ -183,7 +183,7 @@ class HoldingItemPayload(BaseModel):
     shares: float
     avg_price: Optional[float] = 0.0
     current_price: Optional[float] = 0.0
-    sector: Optional[str] = "Technology"
+    sector: Optional[str] = "Unclassified"
     thematic_tags: Optional[List[str]] = Field(default_factory=list)
 
 
@@ -615,7 +615,7 @@ async def api_upload_portfolio(file: UploadFile = File(...), user: Dict[str, Any
                     current_price = 100.0
                     avg_price = 100.0
 
-                sector = clean_row.get("sector") or clean_row.get("industry") or clean_row.get("assetclass") or "Technology"
+                sector = clean_row.get("sector") or clean_row.get("industry") or clean_row.get("assetclass") or "Unclassified"
                 tags_str = clean_row.get("thematictags") or clean_row.get("tags") or clean_row.get("theme") or ""
                 tags = [t.strip() for t in str(tags_str).split(",") if t.strip()]
 
@@ -662,7 +662,7 @@ async def api_save_portfolio(payload: PortfolioSavePayload, user: Dict[str, Any]
             shares=float(item.shares),
             avg_price=float(item.avg_price or 0.0),
             current_price=float(cur_p),
-            sector=item.sector or "Technology",
+            sector=item.sector or "Unclassified",
             thematic_tags=item.thematic_tags or []
         ))
 

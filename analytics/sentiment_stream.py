@@ -208,10 +208,15 @@ def _fetch_stocktwits_stream(ticker: str) -> Dict[str, Any]:
     }
 
 
-def _fetch_reddit_discussion(ticker: str) -> Dict[str, Any]:
+def _fetch_reddit_discussion(
+    ticker: str,
+    aliases: Optional[List[str]] = None,
+    company_name: Optional[str] = None
+) -> Dict[str, Any]:
     """
     Fetches public Reddit search results across r/wallstreetbets and r/stocks.
-    Uses Google News RSS index to bypass Reddit HTTP 429 rate limit blocks reliably.
+    Uses equity-anchored search syntax (cashtags and brand names) to eliminate
+    dictionary-word false positives on tickers like HOOD, CAT, and ON.
     """
     clean_ticker = ticker.strip().upper()
     all_titles = []
@@ -221,10 +226,28 @@ def _fetch_reddit_discussion(ticker: str) -> Dict[str, Any]:
         "Accept-Language": "en-US,en;q=0.9"
     }
 
+    # Resolve primary brand anchor
+    primary_brand = None
+    if aliases:
+        for a in aliases:
+            if a.upper() != clean_ticker and len(a) > 2:
+                primary_brand = a
+                break
+    if not primary_brand and company_name and company_name.upper() != clean_ticker:
+        primary_brand = company_name.split()[0]
+
+    if primary_brand:
+        search_kw = f'("{primary_brand}" OR "${clean_ticker}" OR "{clean_ticker} stock")'
+    else:
+        search_kw = f'("${clean_ticker}" OR "{clean_ticker} stock")'
+
+    import urllib.parse
+    encoded_kw = urllib.parse.quote(search_kw)
+
     # 1. Query Google News RSS Index for r/wallstreetbets discussions
     try:
-        url = f"https://news.google.com/rss/search?q=site:reddit.com/r/wallstreetbets+{clean_ticker}&hl=en-US&gl=US&ceid=US:en"
-        with httpx.Client(timeout=2.0, headers=browser_headers, follow_redirects=True) as client:
+        url = f"https://news.google.com/rss/search?q=site:reddit.com/r/wallstreetbets+{encoded_kw}&hl=en-US&gl=US&ceid=US:en"
+        with httpx.Client(timeout=2.5, headers=browser_headers, follow_redirects=True) as client:
             resp = client.get(url)
             if resp.status_code == 200:
                 feed = feedparser.parse(resp.text)
@@ -241,8 +264,8 @@ def _fetch_reddit_discussion(ticker: str) -> Dict[str, Any]:
     # 2. Fallback to r/stocks if r/wallstreetbets yielded few items
     if len(all_titles) < 2:
         try:
-            url_stocks = f"https://news.google.com/rss/search?q=site:reddit.com/r/stocks+{clean_ticker}&hl=en-US&gl=US&ceid=US:en"
-            with httpx.Client(timeout=2.0, headers=browser_headers, follow_redirects=True) as client:
+            url_stocks = f"https://news.google.com/rss/search?q=site:reddit.com/r/stocks+{encoded_kw}&hl=en-US&gl=US&ceid=US:en"
+            with httpx.Client(timeout=2.5, headers=browser_headers, follow_redirects=True) as client:
                 resp = client.get(url_stocks)
                 if resp.status_code == 200:
                     feed = feedparser.parse(resp.text)
@@ -266,7 +289,9 @@ def fetch_social_sentiment_snapshot(
     ticker: str,
     live_volume: Optional[int] = None,
     avg_volume_20: Optional[int] = None,
-    rvol: Optional[float] = None
+    rvol: Optional[float] = None,
+    aliases: Optional[List[str]] = None,
+    company_name: Optional[str] = None
 ) -> SentimentSnapshot:
     """
     Computes a grounded retail social sentiment snapshot combining StockTwits and Reddit.
@@ -277,8 +302,8 @@ def fetch_social_sentiment_snapshot(
     # 1. Query StockTwits
     st_data = _fetch_stocktwits_stream(clean_ticker)
 
-    # 2. Query Reddit
-    rd_data = _fetch_reddit_discussion(clean_ticker)
+    # 2. Query Reddit with equity-anchored search terms
+    rd_data = _fetch_reddit_discussion(clean_ticker, aliases=aliases, company_name=company_name)
 
     # 3. Compute or Resolve RVOL (Relative Volume)
     computed_rvol = 1.0

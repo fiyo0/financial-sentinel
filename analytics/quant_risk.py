@@ -10,15 +10,21 @@ from models import Portfolio, PortfolioStressMetric
 # Sector sensitivity mappings to macro factors (approximate beta & interest rate sensitivity)
 SECTOR_MACRO_SENSITIVITIES = {
     "Technology": {"rate_sensitivity": -1.2, "oil_sensitivity": -0.2, "growth_beta": 1.3},
+    "Information Technology": {"rate_sensitivity": -1.2, "oil_sensitivity": -0.2, "growth_beta": 1.3},
     "Semiconductors": {"rate_sensitivity": -1.1, "oil_sensitivity": -0.3, "growth_beta": 1.5},
     "Financials": {"rate_sensitivity": 0.8, "oil_sensitivity": 0.1, "growth_beta": 1.0},
     "Energy": {"rate_sensitivity": 0.1, "oil_sensitivity": 1.6, "growth_beta": 0.8},
     "Healthcare": {"rate_sensitivity": -0.3, "oil_sensitivity": -0.1, "growth_beta": 0.7},
+    "Health Care": {"rate_sensitivity": -0.3, "oil_sensitivity": -0.1, "growth_beta": 0.7},
     "Consumer Discretionary": {"rate_sensitivity": -0.9, "oil_sensitivity": -0.8, "growth_beta": 1.1},
     "Consumer Staples": {"rate_sensitivity": -0.2, "oil_sensitivity": -0.3, "growth_beta": 0.5},
     "Utilities": {"rate_sensitivity": -0.7, "oil_sensitivity": -0.2, "growth_beta": 0.4},
     "Industrials": {"rate_sensitivity": -0.4, "oil_sensitivity": -0.4, "growth_beta": 1.1},
     "Real Estate": {"rate_sensitivity": -1.5, "oil_sensitivity": -0.2, "growth_beta": 0.9},
+    "Materials": {"rate_sensitivity": -0.5, "oil_sensitivity": 0.8, "growth_beta": 1.1},
+    "Communication Services": {"rate_sensitivity": -0.8, "oil_sensitivity": -0.1, "growth_beta": 1.1},
+    "Index ETF / Fund": {"rate_sensitivity": -0.5, "oil_sensitivity": 0.0, "growth_beta": 1.0},
+    "Unclassified": {"rate_sensitivity": -0.5, "oil_sensitivity": 0.0, "growth_beta": 1.0},
 }
 
 

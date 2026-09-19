@@ -38,31 +38,59 @@ SOURCE_RELIABILITY_MAP = {
 # In-memory runtime dynamic ticker alias cache (seeded with common corporate/brand divergences)
 _DYNAMIC_TICKER_CACHE: Dict[str, List[str]] = {}
 
-COMMON_TICKER_ALIASES: Dict[str, List[str]] = {
-    "HOOD": ["Robinhood", "Robinhood Markets"],
-    "COIN": ["Coinbase", "Coinbase Global"],
-    "GOOGL": ["Google", "Alphabet"],
-    "GOOG": ["Google", "Alphabet"],
-    "META": ["Meta", "Facebook", "Meta Platforms", "Instagram"],
-    "NVDA": ["Nvidia", "NVIDIA"],
-    "TSLA": ["Tesla"],
-    "AAPL": ["Apple"],
-    "MSFT": ["Microsoft"],
-    "AMZN": ["Amazon"],
-    "PLTR": ["Palantir", "Palantir Technologies"],
-    "MSTR": ["MicroStrategy"],
-    "AMD": ["Advanced Micro Devices"],
-    "NFLX": ["Netflix"],
-    "INTC": ["Intel"],
-    "AVGO": ["Broadcom"],
-    "QCOM": ["Qualcomm"],
-    "CRM": ["Salesforce"],
-    "ORCL": ["Oracle"],
-    "UBER": ["Uber"],
-    "DIS": ["Disney", "Walt Disney"],
-    "SQ": ["Block", "Square", "Cash App"],
-    "BKNG": ["Booking Holdings", "Booking.com", "Priceline", "Kayak"],
-}
+# Deprecated: Retained as empty dictionary for backward compatibility with external scripts
+COMMON_TICKER_ALIASES: Dict[str, List[str]] = {}
+
+
+
+
+def evaluate_source_reliability(source_url_or_name: str) -> float:
+    """
+    Universally assesses evidentiary source reliability using TLD governance,
+    central bank/regulatory status, and tiered wire authority heuristics.
+    """
+    if not source_url_or_name:
+        return 0.75
+
+    s = source_url_or_name.lower().strip()
+
+    # 1. Statutory Government & Central Bank Authorities (.gov, .mil, official regulators)
+    if (
+        ".gov" in s or
+        ".mil" in s or
+        ".fed.us" in s or
+        ("sec" in s and "commission" in s) or
+        "federal reserve" in s or
+        "european central bank" in s or
+        "bank of england" in s
+    ):
+        return 0.99
+
+    # 2. Premier Financial Investigative Wires & Primary Exchanges
+    if any(k in s for k in [
+        "reuters", "bloomberg", "wsj.com", "wall street journal",
+        "ft.com", "financial times", "apnews", "associated press",
+        "barrons.com", "barron's", "nasdaq.com", "nyse.com", "dow jones"
+    ]):
+        return 0.92
+
+    # 3. Mainstream Financial Media & Regulated Aggregators
+    if any(k in s for k in [
+        "cnbc", "marketwatch", "finance.yahoo", "yahoo finance",
+        "news.google", "google news", "forbes", "fortune", "economist",
+        "investors.com", "investor's business daily", "ibd"
+    ]):
+        return 0.85
+
+    # 4. Crowdsourced Retail Opinion & Content Platforms
+    if any(k in s for k in [
+        "seekingalpha", "seeking alpha", "benzinga", "motley fool",
+        "fool.com", "thestreet", "tipranks", "zacks"
+    ]):
+        return 0.65
+
+    # 5. General Web / Unverified Feed Baseline
+    return 0.75
 
 CORPORATE_SUFFIX_REGEX = re.compile(
     r'\b(?:Inc\.?|Corp\.?|Corporation|Holdings|Holding|Technologies|Technology|Platforms|Platform|Co\.?|Company|Ltd\.?|Limited|Plc|Class [A-Z]|Common Stock|S\.?A\.?|N\.?V\.?|A\.?G\.?)\b',
@@ -162,11 +190,6 @@ def resolve_ticker_aliases(
             return cached
 
     aliases = {clean_ticker}
-
-    # Include bootstrap seed aliases if available
-    if clean_ticker in COMMON_TICKER_ALIASES:
-        for alias in COMMON_TICKER_ALIASES[clean_ticker]:
-            aliases.add(alias)
 
     # Dynamic algorithmic stemming from company_name
     resolved_name = company_name
@@ -276,7 +299,7 @@ class NewsIngestionAgent(BaseAgent):
 
         # 3. Match common company brand names to tickers dynamically
         text_lower = text.lower()
-        active_aliases = dict(COMMON_TICKER_ALIASES)
+        active_aliases: Dict[str, List[str]] = {}
         if self.state_store:
             try:
                 db_aliases = self.state_store.get_all_ticker_aliases()
@@ -306,7 +329,7 @@ class NewsIngestionAgent(BaseAgent):
 
         return {
             "tickers": sorted(list(found_tickers)),
-            "sectors": sorted(list(found_sectors)) if found_sectors else ["Technology"]
+            "sectors": sorted(list(found_sectors)) if found_sectors else ["Unclassified"]
         }
 
     def infer_category(self, title: str, summary: str, feed_category: str) -> NewsCategory:
@@ -339,14 +362,7 @@ class NewsIngestionAgent(BaseAgent):
             return NewsCategory.BREAKING
 
     def get_source_reliability(self, source_url_or_name: str) -> float:
-        s = source_url_or_name.lower()
-        for domain, score in SOURCE_RELIABILITY_MAP.items():
-            if domain in s:
-                return score
-            base = domain.split('.')[0]
-            if len(base) >= 4 and base in s:
-                return score
-        return 0.80
+        return evaluate_source_reliability(source_url_or_name)
 
     def fetch_live_feed(self, feed_cfg: Dict[str, str]) -> List[NewsItem]:
         items: List[NewsItem] = []

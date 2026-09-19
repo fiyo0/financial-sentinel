@@ -101,6 +101,13 @@ class PortfolioService:
         resolved_price = price if (price is not None and price > 0) else (quote_price if quote_price > 0 else 100.0)
         resolved_current_price = current_price if (current_price is not None and current_price > 0) else (quote_price if quote_price > 0 else resolved_price)
 
+        # Dynamically register ticker brand aliases in SQLite
+        try:
+            from agents.news_ingestion import resolve_ticker_aliases
+            resolve_ticker_aliases(clean_ticker, resolved_name, state_store=self.orchestrator.state_store)
+        except Exception:
+            pass
+
         portfolio = self.orchestrator.get_active_portfolio(user_id=user_id)
         existing = next((h for h in portfolio.holdings if h.ticker.upper() == clean_ticker), None)
 

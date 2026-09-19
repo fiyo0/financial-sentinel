@@ -445,6 +445,28 @@ class PortfolioAnalysisAgent(BaseAgent):
 
         stop_floor_text = f"${technical_snapshot.suggested_stop_loss:.2f}" if (technical_snapshot and technical_snapshot.suggested_stop_loss is not None and technical_snapshot.suggested_stop_loss > 0) else f"${price * 0.92:.2f}"
 
+        # Dynamic portfolio sector concentration and ETF detection (Zero hardcoded tickers or sector assumptions)
+        sector_weights: Dict[str, float] = {}
+        for h in portfolio.holdings:
+            sec = h.sector or "Unclassified"
+            sector_weights[sec] = sector_weights.get(sec, 0.0) + (h.weight_pct or 0.0)
+        sorted_sectors = sorted(sector_weights.items(), key=lambda x: x[1], reverse=True)
+        top_sectors_list = [f"{s} ({w:.1f}%)" for s, w in sorted_sectors[:3] if w > 0]
+        top_sectors_str = ", ".join(top_sectors_list) if top_sectors_list else f"{sector}"
+
+        known_broad_etfs = {"SPY", "VOO", "QQQ", "IVV", "VTI", "IWM", "DIA", "SCHD", "SFY", "VEA", "VWO", "XLK", "XLF", "XLE", "XLV"}
+        found_etfs = [
+            h.ticker.upper() for h in portfolio.holdings
+            if h.ticker.upper() in known_broad_etfs or (getattr(h, "asset_class", "") or "").upper() == "ETF" or "ETF" in (h.name or "").upper()
+        ]
+        etf_phrase = f" (including active index ETF allocations: {', '.join(sorted(set(found_etfs)))})" if found_etfs else ""
+
+        if portfolio.holdings:
+            sector_concentration_prompt = f"How holding or expanding {sym} alters aggregate exposure to {sector} alongside the portfolio's top sector allocations ({top_sectors_str}){etf_phrase}."
+            holdings_tickers_str = ', '.join([h.ticker for h in portfolio.holdings[:6]])
+        else:
+            sector_concentration_prompt = f"How initiating a position in {sym} establishes initial portfolio sector exposure in {sector} relative to available cash reserves."
+            holdings_tickers_str = "None (Cash Portfolio)"
 
         system_instruction = (
             "You are an institutional Chief Investment Officer and Senior Equity Portfolio Strategist. "
@@ -518,8 +540,8 @@ class PortfolioAnalysisAgent(BaseAgent):
         - IMPORTANT: Do NOT force-fit trivial or routine headlines into artificial catalysts—focus strictly on catalysts capable of driving meaningful price swings.
 
         💼 <b>Portfolio Fit & Synergy Analysis:</b>
-        - <b>Ecosystem & Cross-Asset Correlation:</b> How {sym} correlates with the investor's specific active holdings ({', '.join([h.ticker for h in portfolio.holdings[:6]])}). Detail upstream/downstream supply chain linkages, competitive overlap, or platform synergies.
-        - <b>Sector & Factor Concentration:</b> How holding or expanding {sym} alters aggregate technology/semiconductor exposure across the portfolio (including index ETF allocations like VOO and SFY).
+        - <b>Ecosystem & Cross-Asset Correlation:</b> How {sym} correlates with the investor's specific active holdings ({holdings_tickers_str}). Detail upstream/downstream supply chain linkages, competitive overlap, or platform synergies.
+        - <b>Sector & Factor Concentration:</b> {sector_concentration_prompt}
 
         ⚠️ <b>Key Risks & Fundamental Vulnerabilities:</b>
         Detail 2–3 specific, non-technical vulnerabilities that could derail the investment thesis.

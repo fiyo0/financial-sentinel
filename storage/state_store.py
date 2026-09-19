@@ -394,8 +394,48 @@ class StateStore:
 
             conn.commit()
 
+        # Self-seed canonical equity directory if ticker_aliases is empty
+        self._seed_canonical_equities_if_needed()
+
         # Run one-time forced credential rotation migration on boot (R-1)
         self.rotate_legacy_admin_credentials()
+
+    def _seed_canonical_equities_if_needed(self):
+        """
+        Hermetically self-seeds canonical equity aliases from reference dataset
+        into ticker_aliases if the registry is uninitialized.
+        """
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM ticker_aliases")
+                count = cursor.fetchone()[0]
+                if count > 0:
+                    return
+
+                ref_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reference_equities.json")
+                if not os.path.exists(ref_path):
+                    return
+
+                with open(ref_path, "r", encoding="utf-8") as f:
+                    entries = json.load(f)
+
+                rows = []
+                for entry in entries:
+                    sym = entry["ticker"].strip().upper()
+                    name = entry.get("name", sym)
+                    aliases = entry.get("aliases", [sym])
+                    rows.append((sym, name, json.dumps(aliases)))
+
+                cursor.executemany("""
+                    INSERT OR IGNORE INTO ticker_aliases (ticker, company_name, aliases_json, updated_at)
+                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                """, rows)
+                conn.commit()
+                logger.info(f"Self-seeded {len(rows)} canonical equities into ticker_aliases registry.")
+        except Exception as e:
+            logger.debug(f"Canonical equity auto-seeding skipped or failed: {e}")
+
 
 
 

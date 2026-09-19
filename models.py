@@ -44,7 +44,7 @@ class PortfolioHolding(BaseModel):
     current_price: float
     daily_change_pct: float = Field(default=0.0, description="Intraday percentage change")
     weight_pct: float = Field(default=0.0, description="Percentage of total portfolio value")
-    sector: str = "Technology"
+    sector: str = "Unclassified"
     asset_class: str = "Equity"
     thematic_tags: List[str] = Field(default_factory=list)
     stop_loss: Optional[float] = None

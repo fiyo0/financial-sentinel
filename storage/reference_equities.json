@@ -1,0 +1,1382 @@
+[
+  {
+    "ticker": "AAPL",
+    "name": "Apple Inc.",
+    "sector": "Technology",
+    "aliases": [
+      "Apple",
+      "AAPL"
+    ]
+  },
+  {
+    "ticker": "ABBV",
+    "name": "AbbVie Inc.",
+    "sector": "Healthcare",
+    "aliases": [
+      "AbbVie",
+      "ABBV"
+    ]
+  },
+  {
+    "ticker": "ABNB",
+    "name": "Airbnb, Inc.",
+    "sector": "Consumer Discretionary",
+    "aliases": [
+      "Airbnb",
+      "ABNB"
+    ]
+  },
+  {
+    "ticker": "ABT",
+    "name": "Abbott Laboratories",
+    "sector": "Healthcare",
+    "aliases": [
+      "Abbott Laboratories",
+      "Abbott",
+      "ABT"
+    ]
+  },
+  {
+    "ticker": "AEP",
+    "name": "American Electric Power Company, Inc.",
+    "sector": "Utilities",
+    "aliases": [
+      "American Electric Power",
+      "AEP"
+    ]
+  },
+  {
+    "ticker": "AMD",
+    "name": "Advanced Micro Devices, Inc.",
+    "sector": "Semiconductors",
+    "aliases": [
+      "Advanced Micro Devices",
+      "Advanced",
+      "AMD"
+    ]
+  },
+  {
+    "ticker": "AMGN",
+    "name": "Amgen Inc.",
+    "sector": "Healthcare",
+    "aliases": [
+      "Amgen",
+      "AMGN"
+    ]
+  },
+  {
+    "ticker": "AMT",
+    "name": "American Tower Corporation",
+    "sector": "Real Estate",
+    "aliases": [
+      "American Tower",
+      "AMT"
+    ]
+  },
+  {
+    "ticker": "AMZN",
+    "name": "Amazon.com, Inc.",
+    "sector": "Consumer Discretionary",
+    "aliases": [
+      "Amazon com",
+      "Amazon",
+      "AMZN"
+    ]
+  },
+  {
+    "ticker": "APD",
+    "name": "Air Products and Chemicals, Inc.",
+    "sector": "Materials",
+    "aliases": [
+      "Air Products and Chemicals",
+      "APD"
+    ]
+  },
+  {
+    "ticker": "AVGO",
+    "name": "Broadcom Inc.",
+    "sector": "Semiconductors",
+    "aliases": [
+      "Broadcom",
+      "AVGO"
+    ]
+  },
+  {
+    "ticker": "AXP",
+    "name": "American Express Company",
+    "sector": "Financials",
+    "aliases": [
+      "American Express",
+      "AXP"
+    ]
+  },
+  {
+    "ticker": "BA",
+    "name": "The Boeing Company",
+    "sector": "Industrials",
+    "aliases": [
+      "The Boeing",
+      "BA"
+    ]
+  },
+  {
+    "ticker": "BAC",
+    "name": "Bank of America Corporation",
+    "sector": "Financials",
+    "aliases": [
+      "Bank of America",
+      "Bank",
+      "BAC"
+    ]
+  },
+  {
+    "ticker": "BKNG",
+    "name": "Booking Holdings Inc.",
+    "sector": "Consumer Discretionary",
+    "aliases": [
+      "Booking",
+      "BKNG"
+    ]
+  },
+  {
+    "ticker": "BLK",
+    "name": "BlackRock, Inc.",
+    "sector": "Financials",
+    "aliases": [
+      "BlackRock",
+      "BLK"
+    ]
+  },
+  {
+    "ticker": "BMY",
+    "name": "Bristol-Myers Squibb Company",
+    "sector": "Healthcare",
+    "aliases": [
+      "Bristol-Myers Squibb",
+      "Bristol-Myers",
+      "BMY"
+    ]
+  },
+  {
+    "ticker": "C",
+    "name": "Citigroup Inc.",
+    "sector": "Financials",
+    "aliases": [
+      "Citigroup",
+      "C"
+    ]
+  },
+  {
+    "ticker": "CAT",
+    "name": "Caterpillar Inc.",
+    "sector": "Industrials",
+    "aliases": [
+      "Caterpillar",
+      "CAT"
+    ]
+  },
+  {
+    "ticker": "CCI",
+    "name": "Crown Castle Inc.",
+    "sector": "Real Estate",
+    "aliases": [
+      "Crown Castle",
+      "Crown",
+      "CCI"
+    ]
+  },
+  {
+    "ticker": "CEG",
+    "name": "Constellation Energy Corporation",
+    "sector": "Utilities",
+    "aliases": [
+      "Constellation Energy",
+      "Constellation",
+      "CEG"
+    ]
+  },
+  {
+    "ticker": "CHTR",
+    "name": "Charter Communications, Inc.",
+    "sector": "Communication Services",
+    "aliases": [
+      "Charter Communications",
+      "Charter",
+      "CHTR"
+    ]
+  },
+  {
+    "ticker": "CL",
+    "name": "Colgate-Palmolive Company",
+    "sector": "Consumer Staples",
+    "aliases": [
+      "Colgate-Palmolive",
+      "CL"
+    ]
+  },
+  {
+    "ticker": "CMCSA",
+    "name": "Comcast Corporation",
+    "sector": "Communication Services",
+    "aliases": [
+      "Comcast",
+      "CMCSA"
+    ]
+  },
+  {
+    "ticker": "COIN",
+    "name": "Coinbase Global, Inc.",
+    "sector": "Financials",
+    "aliases": [
+      "Coinbase Global",
+      "Coinbase",
+      "COIN"
+    ]
+  },
+  {
+    "ticker": "COP",
+    "name": "ConocoPhillips",
+    "sector": "Energy",
+    "aliases": [
+      "ConocoPhillips",
+      "COP"
+    ]
+  },
+  {
+    "ticker": "COST",
+    "name": "Costco Wholesale Corporation",
+    "sector": "Consumer Staples",
+    "aliases": [
+      "Costco Wholesale",
+      "Costco",
+      "COST"
+    ]
+  },
+  {
+    "ticker": "CRM",
+    "name": "Salesforce, Inc.",
+    "sector": "Technology",
+    "aliases": [
+      "Salesforce",
+      "CRM"
+    ]
+  },
+  {
+    "ticker": "CRWD",
+    "name": "CrowdStrike Holdings, Inc.",
+    "sector": "Technology",
+    "aliases": [
+      "CrowdStrike",
+      "CRWD"
+    ]
+  },
+  {
+    "ticker": "CSX",
+    "name": "CSX Corporation",
+    "sector": "Industrials",
+    "aliases": [
+      "CSX"
+    ]
+  },
+  {
+    "ticker": "CTVA",
+    "name": "Corteva, Inc.",
+    "sector": "Materials",
+    "aliases": [
+      "Corteva",
+      "CTVA"
+    ]
+  },
+  {
+    "ticker": "CVX",
+    "name": "Chevron Corporation",
+    "sector": "Energy",
+    "aliases": [
+      "Chevron",
+      "CVX"
+    ]
+  },
+  {
+    "ticker": "D",
+    "name": "Dominion Energy, Inc.",
+    "sector": "Utilities",
+    "aliases": [
+      "Dominion Energy",
+      "Dominion",
+      "D"
+    ]
+  },
+  {
+    "ticker": "DE",
+    "name": "Deere & Company",
+    "sector": "Industrials",
+    "aliases": [
+      "Deere &",
+      "Deere",
+      "DE"
+    ]
+  },
+  {
+    "ticker": "DHR",
+    "name": "Danaher Corporation",
+    "sector": "Healthcare",
+    "aliases": [
+      "Danaher",
+      "DHR"
+    ]
+  },
+  {
+    "ticker": "DIA",
+    "name": "SPDR Dow Jones Industrial Average ETF Trust",
+    "sector": "Index ETF / Fund",
+    "aliases": [
+      "SPDR Dow Jones Industrial Average ETF Trust",
+      "SPDR",
+      "DIA"
+    ]
+  },
+  {
+    "ticker": "DIS",
+    "name": "The Walt Disney Company",
+    "sector": "Communication Services",
+    "aliases": [
+      "The Walt Disney",
+      "DIS"
+    ]
+  },
+  {
+    "ticker": "DLR",
+    "name": "Digital Realty Trust, Inc.",
+    "sector": "Real Estate",
+    "aliases": [
+      "Digital Realty Trust",
+      "Digital",
+      "DLR"
+    ]
+  },
+  {
+    "ticker": "DOW",
+    "name": "Dow Inc.",
+    "sector": "Materials",
+    "aliases": [
+      "DOW"
+    ]
+  },
+  {
+    "ticker": "DUK",
+    "name": "Duke Energy Corporation",
+    "sector": "Utilities",
+    "aliases": [
+      "Duke Energy",
+      "Duke",
+      "DUK"
+    ]
+  },
+  {
+    "ticker": "DUOL",
+    "name": "Duolingo, Inc.",
+    "sector": "Technology",
+    "aliases": [
+      "Duolingo",
+      "DUOL"
+    ]
+  },
+  {
+    "ticker": "ECL",
+    "name": "Ecolab Inc.",
+    "sector": "Materials",
+    "aliases": [
+      "Ecolab",
+      "ECL"
+    ]
+  },
+  {
+    "ticker": "EOG",
+    "name": "EOG Resources, Inc.",
+    "sector": "Energy",
+    "aliases": [
+      "EOG Resources",
+      "EOG"
+    ]
+  },
+  {
+    "ticker": "EQIX",
+    "name": "Equinix, Inc.",
+    "sector": "Real Estate",
+    "aliases": [
+      "Equinix",
+      "EQIX"
+    ]
+  },
+  {
+    "ticker": "EXC",
+    "name": "Exelon Corporation",
+    "sector": "Utilities",
+    "aliases": [
+      "Exelon",
+      "EXC"
+    ]
+  },
+  {
+    "ticker": "F",
+    "name": "Ford Motor Company",
+    "sector": "Consumer Discretionary",
+    "aliases": [
+      "Ford Motor",
+      "Ford",
+      "F"
+    ]
+  },
+  {
+    "ticker": "FCX",
+    "name": "Freeport-McMoRan Inc.",
+    "sector": "Materials",
+    "aliases": [
+      "Freeport-McMoRan",
+      "FCX"
+    ]
+  },
+  {
+    "ticker": "FDX",
+    "name": "FedEx Corporation",
+    "sector": "Industrials",
+    "aliases": [
+      "FedEx",
+      "FDX"
+    ]
+  },
+  {
+    "ticker": "GE",
+    "name": "GE Aerospace",
+    "sector": "Industrials",
+    "aliases": [
+      "GE Aerospace",
+      "GE"
+    ]
+  },
+  {
+    "ticker": "GILD",
+    "name": "Gilead Sciences, Inc.",
+    "sector": "Healthcare",
+    "aliases": [
+      "Gilead Sciences",
+      "Gilead",
+      "GILD"
+    ]
+  },
+  {
+    "ticker": "GM",
+    "name": "General Motors Company",
+    "sector": "Consumer Discretionary",
+    "aliases": [
+      "General Motors",
+      "General",
+      "GM"
+    ]
+  },
+  {
+    "ticker": "GOOG",
+    "name": "Alphabet Inc.",
+    "sector": "Technology",
+    "aliases": [
+      "Alphabet",
+      "GOOG"
+    ]
+  },
+  {
+    "ticker": "GOOGL",
+    "name": "Alphabet Inc.",
+    "sector": "Technology",
+    "aliases": [
+      "Alphabet",
+      "GOOGL"
+    ]
+  },
+  {
+    "ticker": "GS",
+    "name": "The Goldman Sachs Group, Inc.",
+    "sector": "Financials",
+    "aliases": [
+      "The Goldman Sachs Group",
+      "GS"
+    ]
+  },
+  {
+    "ticker": "HD",
+    "name": "The Home Depot, Inc.",
+    "sector": "Consumer Discretionary",
+    "aliases": [
+      "The Home Depot",
+      "HD"
+    ]
+  },
+  {
+    "ticker": "HON",
+    "name": "Honeywell International Inc.",
+    "sector": "Industrials",
+    "aliases": [
+      "Honeywell International",
+      "Honeywell",
+      "HON"
+    ]
+  },
+  {
+    "ticker": "HOOD",
+    "name": "Robinhood Markets, Inc.",
+    "sector": "Financials",
+    "aliases": [
+      "Robinhood Markets",
+      "Robinhood",
+      "HOOD"
+    ]
+  },
+  {
+    "ticker": "IBM",
+    "name": "International Business Machines Corporation",
+    "sector": "Technology",
+    "aliases": [
+      "International Business Machines",
+      "International",
+      "IBM"
+    ]
+  },
+  {
+    "ticker": "INTC",
+    "name": "Intel Corporation",
+    "sector": "Semiconductors",
+    "aliases": [
+      "Intel",
+      "INTC"
+    ]
+  },
+  {
+    "ticker": "ISRG",
+    "name": "Intuitive Surgical, Inc.",
+    "sector": "Healthcare",
+    "aliases": [
+      "Intuitive Surgical",
+      "Intuitive",
+      "ISRG"
+    ]
+  },
+  {
+    "ticker": "IVV",
+    "name": "iShares Core S&P 500 ETF",
+    "sector": "Index ETF / Fund",
+    "aliases": [
+      "iShares Core S&P 500 ETF",
+      "iShares",
+      "IVV"
+    ]
+  },
+  {
+    "ticker": "IWM",
+    "name": "iShares Russell 2000 ETF",
+    "sector": "Index ETF / Fund",
+    "aliases": [
+      "iShares Russell 2000 ETF",
+      "iShares",
+      "IWM"
+    ]
+  },
+  {
+    "ticker": "JNJ",
+    "name": "Johnson & Johnson",
+    "sector": "Healthcare",
+    "aliases": [
+      "Johnson & Johnson",
+      "Johnson",
+      "JNJ"
+    ]
+  },
+  {
+    "ticker": "JPM",
+    "name": "JPMorgan Chase & Co.",
+    "sector": "Financials",
+    "aliases": [
+      "JPMorgan Chase &",
+      "JPMorgan",
+      "JPM"
+    ]
+  },
+  {
+    "ticker": "KMB",
+    "name": "Kimberly-Clark Corporation",
+    "sector": "Consumer Staples",
+    "aliases": [
+      "Kimberly-Clark",
+      "KMB"
+    ]
+  },
+  {
+    "ticker": "KO",
+    "name": "The Coca-Cola Company",
+    "sector": "Consumer Staples",
+    "aliases": [
+      "The Coca-Cola",
+      "KO"
+    ]
+  },
+  {
+    "ticker": "LIN",
+    "name": "Linde plc",
+    "sector": "Materials",
+    "aliases": [
+      "Linde",
+      "LIN"
+    ]
+  },
+  {
+    "ticker": "LLY",
+    "name": "Eli Lilly and Company",
+    "sector": "Healthcare",
+    "aliases": [
+      "Eli Lilly and",
+      "LLY"
+    ]
+  },
+  {
+    "ticker": "LMT",
+    "name": "Lockheed Martin Corporation",
+    "sector": "Industrials",
+    "aliases": [
+      "Lockheed Martin",
+      "Lockheed",
+      "LMT"
+    ]
+  },
+  {
+    "ticker": "LOW",
+    "name": "Lowe's Companies, Inc.",
+    "sector": "Consumer Discretionary",
+    "aliases": [
+      "Lowe's Companies",
+      "Lowe's",
+      "LOW"
+    ]
+  },
+  {
+    "ticker": "MA",
+    "name": "Mastercard Incorporated",
+    "sector": "Financials",
+    "aliases": [
+      "Mastercard Incorporated",
+      "Mastercard",
+      "MA"
+    ]
+  },
+  {
+    "ticker": "MCD",
+    "name": "McDonald's Corporation",
+    "sector": "Consumer Discretionary",
+    "aliases": [
+      "McDonald's",
+      "MCD"
+    ]
+  },
+  {
+    "ticker": "MDLZ",
+    "name": "Mondelez International, Inc.",
+    "sector": "Consumer Staples",
+    "aliases": [
+      "Mondelez International",
+      "Mondelez",
+      "MDLZ"
+    ]
+  },
+  {
+    "ticker": "META",
+    "name": "Meta Platforms, Inc.",
+    "sector": "Technology",
+    "aliases": [
+      "META"
+    ]
+  },
+  {
+    "ticker": "MO",
+    "name": "Altria Group, Inc.",
+    "sector": "Consumer Staples",
+    "aliases": [
+      "Altria Group",
+      "Altria",
+      "MO"
+    ]
+  },
+  {
+    "ticker": "MPC",
+    "name": "Marathon Petroleum Corporation",
+    "sector": "Energy",
+    "aliases": [
+      "Marathon Petroleum",
+      "Marathon",
+      "MPC"
+    ]
+  },
+  {
+    "ticker": "MRK",
+    "name": "Merck & Co., Inc.",
+    "sector": "Healthcare",
+    "aliases": [
+      "Merck &",
+      "Merck",
+      "MRK"
+    ]
+  },
+  {
+    "ticker": "MS",
+    "name": "Morgan Stanley",
+    "sector": "Financials",
+    "aliases": [
+      "Morgan Stanley",
+      "Morgan",
+      "MS"
+    ]
+  },
+  {
+    "ticker": "MSFT",
+    "name": "Microsoft Corporation",
+    "sector": "Technology",
+    "aliases": [
+      "Microsoft",
+      "MSFT"
+    ]
+  },
+  {
+    "ticker": "MSTR",
+    "name": "MicroStrategy Incorporated",
+    "sector": "Technology",
+    "aliases": [
+      "MicroStrategy Incorporated",
+      "MicroStrategy",
+      "MSTR"
+    ]
+  },
+  {
+    "ticker": "NEE",
+    "name": "NextEra Energy, Inc.",
+    "sector": "Utilities",
+    "aliases": [
+      "NextEra Energy",
+      "NextEra",
+      "NEE"
+    ]
+  },
+  {
+    "ticker": "NEM",
+    "name": "Newmont Corporation",
+    "sector": "Materials",
+    "aliases": [
+      "Newmont",
+      "NEM"
+    ]
+  },
+  {
+    "ticker": "NFLX",
+    "name": "Netflix, Inc.",
+    "sector": "Communication Services",
+    "aliases": [
+      "Netflix",
+      "NFLX"
+    ]
+  },
+  {
+    "ticker": "NKE",
+    "name": "NIKE, Inc.",
+    "sector": "Consumer Discretionary",
+    "aliases": [
+      "NIKE",
+      "NKE"
+    ]
+  },
+  {
+    "ticker": "NSC",
+    "name": "Norfolk Southern Corporation",
+    "sector": "Industrials",
+    "aliases": [
+      "Norfolk Southern",
+      "Norfolk",
+      "NSC"
+    ]
+  },
+  {
+    "ticker": "NUE",
+    "name": "Nucor Corporation",
+    "sector": "Materials",
+    "aliases": [
+      "Nucor",
+      "NUE"
+    ]
+  },
+  {
+    "ticker": "NVDA",
+    "name": "NVIDIA Corporation",
+    "sector": "Semiconductors",
+    "aliases": [
+      "NVIDIA",
+      "NVDA"
+    ]
+  },
+  {
+    "ticker": "O",
+    "name": "Realty Income Corporation",
+    "sector": "Real Estate",
+    "aliases": [
+      "Realty Income",
+      "Realty",
+      "O"
+    ]
+  },
+  {
+    "ticker": "ORCL",
+    "name": "Oracle Corporation",
+    "sector": "Technology",
+    "aliases": [
+      "Oracle",
+      "ORCL"
+    ]
+  },
+  {
+    "ticker": "OXY",
+    "name": "Occidental Petroleum Corporation",
+    "sector": "Energy",
+    "aliases": [
+      "Occidental Petroleum",
+      "Occidental",
+      "OXY"
+    ]
+  },
+  {
+    "ticker": "PEP",
+    "name": "PepsiCo, Inc.",
+    "sector": "Consumer Staples",
+    "aliases": [
+      "PepsiCo",
+      "PEP"
+    ]
+  },
+  {
+    "ticker": "PFE",
+    "name": "Pfizer Inc.",
+    "sector": "Healthcare",
+    "aliases": [
+      "Pfizer",
+      "PFE"
+    ]
+  },
+  {
+    "ticker": "PG",
+    "name": "The Procter & Gamble Company",
+    "sector": "Consumer Staples",
+    "aliases": [
+      "The Procter & Gamble",
+      "PG"
+    ]
+  },
+  {
+    "ticker": "PLD",
+    "name": "Prologis, Inc.",
+    "sector": "Real Estate",
+    "aliases": [
+      "Prologis",
+      "PLD"
+    ]
+  },
+  {
+    "ticker": "PLTR",
+    "name": "Palantir Technologies Inc.",
+    "sector": "Technology",
+    "aliases": [
+      "Palantir",
+      "PLTR"
+    ]
+  },
+  {
+    "ticker": "PM",
+    "name": "Philip Morris International Inc.",
+    "sector": "Consumer Staples",
+    "aliases": [
+      "Philip Morris International",
+      "Philip",
+      "PM"
+    ]
+  },
+  {
+    "ticker": "PSX",
+    "name": "Phillips 66",
+    "sector": "Energy",
+    "aliases": [
+      "Phillips 66",
+      "Phillips",
+      "PSX"
+    ]
+  },
+  {
+    "ticker": "PYPL",
+    "name": "PayPal Holdings, Inc.",
+    "sector": "Financials",
+    "aliases": [
+      "PayPal",
+      "PYPL"
+    ]
+  },
+  {
+    "ticker": "QCOM",
+    "name": "QUALCOMM Incorporated",
+    "sector": "Semiconductors",
+    "aliases": [
+      "QUALCOMM Incorporated",
+      "QUALCOMM",
+      "QCOM"
+    ]
+  },
+  {
+    "ticker": "QQQ",
+    "name": "Invesco QQQ Trust",
+    "sector": "Index ETF / Fund",
+    "aliases": [
+      "Invesco QQQ Trust",
+      "Invesco",
+      "QQQ"
+    ]
+  },
+  {
+    "ticker": "RTX",
+    "name": "RTX Corporation",
+    "sector": "Industrials",
+    "aliases": [
+      "RTX"
+    ]
+  },
+  {
+    "ticker": "SBUX",
+    "name": "Starbucks Corporation",
+    "sector": "Consumer Discretionary",
+    "aliases": [
+      "Starbucks",
+      "SBUX"
+    ]
+  },
+  {
+    "ticker": "SCHD",
+    "name": "Schwab U.S. Dividend Equity ETF",
+    "sector": "Index ETF / Fund",
+    "aliases": [
+      "Schwab U S Dividend Equity ETF",
+      "Schwab",
+      "SCHD"
+    ]
+  },
+  {
+    "ticker": "SCHW",
+    "name": "The Charles Schwab Corporation",
+    "sector": "Financials",
+    "aliases": [
+      "The Charles Schwab",
+      "SCHW"
+    ]
+  },
+  {
+    "ticker": "SFY",
+    "name": "SoFi Select 500 ETF",
+    "sector": "Index ETF / Fund",
+    "aliases": [
+      "SoFi Select 500 ETF",
+      "SoFi",
+      "SFY"
+    ]
+  },
+  {
+    "ticker": "SHW",
+    "name": "The Sherwin-Williams Company",
+    "sector": "Materials",
+    "aliases": [
+      "The Sherwin-Williams",
+      "SHW"
+    ]
+  },
+  {
+    "ticker": "SLB",
+    "name": "SLB",
+    "sector": "Energy",
+    "aliases": [
+      "SLB"
+    ]
+  },
+  {
+    "ticker": "SNOW",
+    "name": "Snowflake Inc.",
+    "sector": "Technology",
+    "aliases": [
+      "Snowflake",
+      "SNOW"
+    ]
+  },
+  {
+    "ticker": "SO",
+    "name": "The Southern Company",
+    "sector": "Utilities",
+    "aliases": [
+      "The Southern",
+      "SO"
+    ]
+  },
+  {
+    "ticker": "SPG",
+    "name": "Simon Property Group, Inc.",
+    "sector": "Real Estate",
+    "aliases": [
+      "Simon Property Group",
+      "Simon",
+      "SPG"
+    ]
+  },
+  {
+    "ticker": "SPY",
+    "name": "SPDR S&P 500 ETF Trust",
+    "sector": "Index ETF / Fund",
+    "aliases": [
+      "SPDR S&P 500 ETF Trust",
+      "SPDR",
+      "SPY"
+    ]
+  },
+  {
+    "ticker": "SQ",
+    "name": "Block, Inc.",
+    "sector": "Financials",
+    "aliases": [
+      "Block",
+      "SQ"
+    ]
+  },
+  {
+    "ticker": "SRE",
+    "name": "Sempra",
+    "sector": "Utilities",
+    "aliases": [
+      "Sempra",
+      "SRE"
+    ]
+  },
+  {
+    "ticker": "T",
+    "name": "AT&T Inc.",
+    "sector": "Communication Services",
+    "aliases": [
+      "AT&T",
+      "T"
+    ]
+  },
+  {
+    "ticker": "TGT",
+    "name": "Target Corporation",
+    "sector": "Consumer Discretionary",
+    "aliases": [
+      "Target",
+      "TGT"
+    ]
+  },
+  {
+    "ticker": "TJX",
+    "name": "The TJX Companies, Inc.",
+    "sector": "Consumer Discretionary",
+    "aliases": [
+      "The TJX Companies",
+      "TJX"
+    ]
+  },
+  {
+    "ticker": "TMO",
+    "name": "Thermo Fisher Scientific Inc.",
+    "sector": "Healthcare",
+    "aliases": [
+      "Thermo Fisher Scientific",
+      "Thermo",
+      "TMO"
+    ]
+  },
+  {
+    "ticker": "TMUS",
+    "name": "T-Mobile US, Inc.",
+    "sector": "Communication Services",
+    "aliases": [
+      "T-Mobile US",
+      "T-Mobile",
+      "TMUS"
+    ]
+  },
+  {
+    "ticker": "TSLA",
+    "name": "Tesla, Inc.",
+    "sector": "Consumer Discretionary",
+    "aliases": [
+      "Tesla",
+      "TSLA"
+    ]
+  },
+  {
+    "ticker": "UBER",
+    "name": "Uber Technologies, Inc.",
+    "sector": "Technology",
+    "aliases": [
+      "UBER"
+    ]
+  },
+  {
+    "ticker": "UNH",
+    "name": "UnitedHealth Group Incorporated",
+    "sector": "Healthcare",
+    "aliases": [
+      "UnitedHealth Group Incorporated",
+      "UnitedHealth",
+      "UNH"
+    ]
+  },
+  {
+    "ticker": "UNP",
+    "name": "Union Pacific Corporation",
+    "sector": "Industrials",
+    "aliases": [
+      "Union Pacific",
+      "Union",
+      "UNP"
+    ]
+  },
+  {
+    "ticker": "UPS",
+    "name": "United Parcel Service, Inc.",
+    "sector": "Industrials",
+    "aliases": [
+      "United Parcel Service",
+      "UPS"
+    ]
+  },
+  {
+    "ticker": "V",
+    "name": "Visa Inc.",
+    "sector": "Financials",
+    "aliases": [
+      "Visa",
+      "V"
+    ]
+  },
+  {
+    "ticker": "VEA",
+    "name": "Vanguard FTSE Developed Markets ETF",
+    "sector": "Index ETF / Fund",
+    "aliases": [
+      "Vanguard FTSE Developed Markets ETF",
+      "Vanguard",
+      "VEA"
+    ]
+  },
+  {
+    "ticker": "VLO",
+    "name": "Valero Energy Corporation",
+    "sector": "Energy",
+    "aliases": [
+      "Valero Energy",
+      "Valero",
+      "VLO"
+    ]
+  },
+  {
+    "ticker": "VOO",
+    "name": "Vanguard S&P 500 ETF",
+    "sector": "Index ETF / Fund",
+    "aliases": [
+      "Vanguard S&P 500 ETF",
+      "Vanguard",
+      "VOO"
+    ]
+  },
+  {
+    "ticker": "VRTX",
+    "name": "Vertex Pharmaceuticals Incorporated",
+    "sector": "Healthcare",
+    "aliases": [
+      "Vertex Pharmaceuticals Incorporated",
+      "Vertex",
+      "VRTX"
+    ]
+  },
+  {
+    "ticker": "VTI",
+    "name": "Vanguard Total Stock Market ETF",
+    "sector": "Index ETF / Fund",
+    "aliases": [
+      "Vanguard Total Stock Market ETF",
+      "Vanguard",
+      "VTI"
+    ]
+  },
+  {
+    "ticker": "VWO",
+    "name": "Vanguard FTSE Emerging Markets ETF",
+    "sector": "Index ETF / Fund",
+    "aliases": [
+      "Vanguard FTSE Emerging Markets ETF",
+      "Vanguard",
+      "VWO"
+    ]
+  },
+  {
+    "ticker": "VZ",
+    "name": "Verizon Communications Inc.",
+    "sector": "Communication Services",
+    "aliases": [
+      "Verizon Communications",
+      "Verizon",
+      "VZ"
+    ]
+  },
+  {
+    "ticker": "WFC",
+    "name": "Wells Fargo & Company",
+    "sector": "Financials",
+    "aliases": [
+      "Wells Fargo &",
+      "Wells",
+      "WFC"
+    ]
+  },
+  {
+    "ticker": "WMT",
+    "name": "Walmart Inc.",
+    "sector": "Consumer Staples",
+    "aliases": [
+      "Walmart",
+      "WMT"
+    ]
+  },
+  {
+    "ticker": "XEL",
+    "name": "Xcel Energy Inc.",
+    "sector": "Utilities",
+    "aliases": [
+      "Xcel Energy",
+      "Xcel",
+      "XEL"
+    ]
+  },
+  {
+    "ticker": "XLB",
+    "name": "Materials Select Sector SPDR Fund",
+    "sector": "Index ETF / Fund",
+    "aliases": [
+      "Materials Select Sector SPDR Fund",
+      "Materials",
+      "XLB"
+    ]
+  },
+  {
+    "ticker": "XLC",
+    "name": "Communication Services Select Sector SPDR Fund",
+    "sector": "Index ETF / Fund",
+    "aliases": [
+      "Communication Services Select Sector SPDR Fund",
+      "Communication",
+      "XLC"
+    ]
+  },
+  {
+    "ticker": "XLE",
+    "name": "Energy Select Sector SPDR Fund",
+    "sector": "Index ETF / Fund",
+    "aliases": [
+      "Energy Select Sector SPDR Fund",
+      "Energy",
+      "XLE"
+    ]
+  },
+  {
+    "ticker": "XLF",
+    "name": "Financial Select Sector SPDR Fund",
+    "sector": "Index ETF / Fund",
+    "aliases": [
+      "Financial Select Sector SPDR Fund",
+      "Financial",
+      "XLF"
+    ]
+  },
+  {
+    "ticker": "XLI",
+    "name": "Industrial Select Sector SPDR Fund",
+    "sector": "Index ETF / Fund",
+    "aliases": [
+      "Industrial Select Sector SPDR Fund",
+      "Industrial",
+      "XLI"
+    ]
+  },
+  {
+    "ticker": "XLK",
+    "name": "Technology Select Sector SPDR Fund",
+    "sector": "Index ETF / Fund",
+    "aliases": [
+      "Select Sector SPDR Fund",
+      "Select",
+      "XLK"
+    ]
+  },
+  {
+    "ticker": "XLP",
+    "name": "Consumer Staples Select Sector SPDR Fund",
+    "sector": "Index ETF / Fund",
+    "aliases": [
+      "Consumer Staples Select Sector SPDR Fund",
+      "Consumer",
+      "XLP"
+    ]
+  },
+  {
+    "ticker": "XLRE",
+    "name": "Real Estate Select Sector SPDR Fund",
+    "sector": "Index ETF / Fund",
+    "aliases": [
+      "Real Estate Select Sector SPDR Fund",
+      "Real",
+      "XLRE"
+    ]
+  },
+  {
+    "ticker": "XLU",
+    "name": "Utilities Select Sector SPDR Fund",
+    "sector": "Index ETF / Fund",
+    "aliases": [
+      "Utilities Select Sector SPDR Fund",
+      "Utilities",
+      "XLU"
+    ]
+  },
+  {
+    "ticker": "XLV",
+    "name": "Health Care Select Sector SPDR Fund",
+    "sector": "Index ETF / Fund",
+    "aliases": [
+      "Health Care Select Sector SPDR Fund",
+      "Health",
+      "XLV"
+    ]
+  },
+  {
+    "ticker": "XLY",
+    "name": "Consumer Discretionary Select Sector SPDR Fund",
+    "sector": "Index ETF / Fund",
+    "aliases": [
+      "Consumer Discretionary Select Sector SPDR Fund",
+      "Consumer",
+      "XLY"
+    ]
+  },
+  {
+    "ticker": "XOM",
+    "name": "Exxon Mobil Corporation",
+    "sector": "Energy",
+    "aliases": [
+      "Exxon Mobil",
+      "Exxon",
+      "XOM"
+    ]
+  }
+]

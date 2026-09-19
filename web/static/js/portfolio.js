@@ -447,13 +447,18 @@ function addHoldingRow(h = {}) {
             <select class="input-sector px-2 py-1 bg-dark-950 border border-slate-700 rounded text-slate-200 text-xs">
                 <option value="Technology" ${h.sector === 'Technology' ? 'selected' : ''}>Technology</option>
                 <option value="Semiconductors" ${h.sector === 'Semiconductors' ? 'selected' : ''}>Semiconductors</option>
-                <option value="Energy" ${h.sector === 'Energy' ? 'selected' : ''}>Energy</option>
-                <option value="Healthcare" ${h.sector === 'Healthcare' ? 'selected' : ''}>Healthcare</option>
                 <option value="Financials" ${h.sector === 'Financials' ? 'selected' : ''}>Financials</option>
+                <option value="Healthcare" ${h.sector === 'Healthcare' ? 'selected' : ''}>Healthcare</option>
+                <option value="Energy" ${h.sector === 'Energy' ? 'selected' : ''}>Energy</option>
                 <option value="Consumer Discretionary" ${h.sector === 'Consumer Discretionary' ? 'selected' : ''}>Consumer Discretionary</option>
-                <option value="Utilities" ${h.sector === 'Utilities' ? 'selected' : ''}>Utilities</option>
+                <option value="Consumer Staples" ${h.sector === 'Consumer Staples' ? 'selected' : ''}>Consumer Staples</option>
                 <option value="Industrials" ${h.sector === 'Industrials' ? 'selected' : ''}>Industrials</option>
+                <option value="Communication Services" ${h.sector === 'Communication Services' ? 'selected' : ''}>Communication Services</option>
+                <option value="Materials" ${h.sector === 'Materials' ? 'selected' : ''}>Materials</option>
+                <option value="Utilities" ${h.sector === 'Utilities' ? 'selected' : ''}>Utilities</option>
                 <option value="Real Estate" ${h.sector === 'Real Estate' ? 'selected' : ''}>Real Estate</option>
+                <option value="Index ETF / Fund" ${h.sector === 'Index ETF / Fund' ? 'selected' : ''}>Index ETF / Fund</option>
+                <option value="Unclassified" ${(!h.sector || h.sector === 'Unclassified') ? 'selected' : ''}>Unclassified</option>
             </select>
         </td>
         <td class="py-2 pr-2 text-right">

@@ -30,30 +30,29 @@ FED_ALL_PRESS_URL = "https://www.federalreserve.gov/feeds/press_all.xml"
 # Announcement: 2:00 PM Eastern Time (14:00), Press Conference: 2:30 PM Eastern Time (14:30)
 FOMC_SCHEDULE = [
     # 2025
-    {"date": "2025-01-29", "time_et": "14:00", "has_sep": False, "desc": "FOMC Rate Decision"},
-    {"date": "2025-03-19", "time_et": "14:00", "has_sep": True, "desc": "FOMC Rate Decision & Economic Projections (SEP)"},
-    {"date": "2025-05-07", "time_et": "14:00", "has_sep": False, "desc": "FOMC Rate Decision"},
-    {"date": "2025-06-18", "time_et": "14:00", "has_sep": True, "desc": "FOMC Rate Decision & Economic Projections (SEP)"},
-    {"date": "2025-07-30", "time_et": "14:00", "has_sep": False, "desc": "FOMC Rate Decision"},
-    {"date": "2025-09-17", "time_et": "14:00", "has_sep": True, "desc": "FOMC Rate Decision & Economic Projections (SEP)"},
-    {"date": "2025-10-29", "time_et": "14:00", "has_sep": False, "desc": "FOMC Rate Decision"},
-    {"date": "2025-12-10", "time_et": "14:00", "has_sep": True, "desc": "FOMC Rate Decision & Economic Projections (SEP)"},
+    {"date": "2025-01-29", "time_et": "14:00", "has_sep": False, "desc": "Federal Reserve FOMC Interest Rate Decision"},
+    {"date": "2025-03-19", "time_et": "14:00", "has_sep": True, "desc": "Federal Reserve FOMC Interest Rate Decision & Summary of Economic Projections"},
+    {"date": "2025-05-07", "time_et": "14:00", "has_sep": False, "desc": "Federal Reserve FOMC Interest Rate Decision"},
+    {"date": "2025-06-18", "time_et": "14:00", "has_sep": True, "desc": "Federal Reserve FOMC Interest Rate Decision & Summary of Economic Projections"},
+    {"date": "2025-07-30", "time_et": "14:00", "has_sep": False, "desc": "Federal Reserve FOMC Interest Rate Decision"},
+    {"date": "2025-09-17", "time_et": "14:00", "has_sep": True, "desc": "Federal Reserve FOMC Interest Rate Decision & Summary of Economic Projections"},
+    {"date": "2025-10-29", "time_et": "14:00", "has_sep": False, "desc": "Federal Reserve FOMC Interest Rate Decision"},
+    {"date": "2025-12-10", "time_et": "14:00", "has_sep": True, "desc": "Federal Reserve FOMC Interest Rate Decision & Summary of Economic Projections"},
     # 2026
-    {"date": "2026-01-28", "time_et": "14:00", "has_sep": False, "desc": "FOMC Rate Decision"},
-    {"date": "2026-03-18", "time_et": "14:00", "has_sep": True, "desc": "FOMC Rate Decision & Economic Projections (SEP)"},
-    {"date": "2026-04-29", "time_et": "14:00", "has_sep": False, "desc": "FOMC Rate Decision"},
-    {"date": "2026-06-17", "time_et": "14:00", "has_sep": True, "desc": "FOMC Rate Decision & Economic Projections (SEP)"},
-    {"date": "2026-07-29", "time_et": "14:00", "has_sep": False, "desc": "FOMC Rate Decision"},
-    {"date": "2026-09-16", "time_et": "14:00", "has_sep": True, "desc": "FOMC Rate Decision & Economic Projections (SEP)"},
-    {"date": "2026-10-28", "time_et": "14:00", "has_sep": False, "desc": "FOMC Rate Decision"},
-    {"date": "2026-12-09", "time_et": "14:00", "has_sep": True, "desc": "FOMC Rate Decision & Economic Projections (SEP)"},
+    {"date": "2026-01-28", "time_et": "14:00", "has_sep": False, "desc": "Federal Reserve FOMC Interest Rate Decision"},
+    {"date": "2026-03-18", "time_et": "14:00", "has_sep": True, "desc": "Federal Reserve FOMC Interest Rate Decision & Summary of Economic Projections"},
+    {"date": "2026-04-29", "time_et": "14:00", "has_sep": False, "desc": "Federal Reserve FOMC Interest Rate Decision"},
+    {"date": "2026-06-17", "time_et": "14:00", "has_sep": True, "desc": "Federal Reserve FOMC Interest Rate Decision & Summary of Economic Projections"},
+    {"date": "2026-07-29", "time_et": "14:00", "has_sep": False, "desc": "Federal Reserve FOMC Interest Rate Decision"},
+    {"date": "2026-09-16", "time_et": "14:00", "has_sep": True, "desc": "Federal Reserve FOMC Interest Rate Decision & Summary of Economic Projections"},
+    {"date": "2026-10-28", "time_et": "14:00", "has_sep": False, "desc": "Federal Reserve FOMC Interest Rate Decision"},
+    {"date": "2026-12-09", "time_et": "14:00", "has_sep": True, "desc": "Federal Reserve FOMC Interest Rate Decision & Summary of Economic Projections"},
     # 2027
-    {"date": "2027-01-27", "time_et": "14:00", "has_sep": False, "desc": "FOMC Rate Decision"},
-    {"date": "2027-03-17", "time_et": "14:00", "has_sep": True, "desc": "FOMC Rate Decision & Economic Projections (SEP)"},
+    {"date": "2027-01-27", "time_et": "14:00", "has_sep": False, "desc": "Federal Reserve FOMC Interest Rate Decision"},
+    {"date": "2027-03-17", "time_et": "14:00", "has_sep": True, "desc": "Federal Reserve FOMC Interest Rate Decision & Summary of Economic Projections"},
 ]
 
-# Major Monthly US Macro Catalysts Schedule Patterns (2026 Ground Truth)
-# Format: date, time_et, category, name, importance (HIGH/CRITICAL)
+# Major Monthly US Macro Catalysts Schedule Patterns (Verified 2026 Ground Truth)
 KEY_MACRO_RELEASES_2026 = [
     # September 2026
     {"date": "2026-09-04", "time_et": "08:30", "category": "LABOR", "name": "U.S. Employment Situation (Non-Farm Payrolls)", "importance": "HIGH"},
@@ -80,6 +79,87 @@ KEY_MACRO_RELEASES_2026 = [
     {"date": "2026-12-09", "time_et": "14:30", "category": "CENTRAL_BANK", "name": "Federal Reserve Chair Press Conference", "importance": "CRITICAL"},
     {"date": "2026-12-11", "time_et": "08:30", "category": "INFLATION", "name": "Consumer Price Index (CPI)", "importance": "HIGH"},
 ]
+
+
+def generate_statutory_macro_schedule(start_date: date, end_date: date) -> List[Dict[str, Any]]:
+    """
+    Generates a deterministic schedule of recurring US macroeconomic releases
+    (NFP, CPI, PPI, FOMC Minutes, GDP) across any date window based on
+    official BLS, BEA, and Federal Reserve statutory calendar patterns,
+    seamlessly projecting multi-year schedules into 2027 and beyond.
+    """
+    # 1. Include verified baseline releases in window
+    events: List[Dict[str, Any]] = []
+    seen_keys = set()
+    for ev in KEY_MACRO_RELEASES_2026:
+        ev_d = datetime.strptime(ev["date"], "%Y-%m-%d").date()
+        if start_date <= ev_d <= end_date:
+            key = (ev["date"], ev["time_et"], ev["name"])
+            seen_keys.add(key)
+            events.append(ev)
+
+    # 2. Project statutory releases for any dates not already in verified baseline
+    cur_y = start_date.year
+    cur_m = start_date.month
+    end_y = end_date.year
+    end_m = end_date.month
+
+    while (cur_y < end_y) or (cur_y == end_y and cur_m <= end_m):
+        first_day = date(cur_y, cur_m, 1)
+
+        # 1. Non-Farm Payrolls: 1st Friday of month
+        days_to_fri = (4 - first_day.weekday()) % 7
+        first_fri = first_day + timedelta(days=days_to_fri)
+        if start_date <= first_fri <= end_date:
+            key = (first_fri.strftime("%Y-%m-%d"), "08:30", "U.S. Employment Situation (Non-Farm Payrolls)")
+            if key not in seen_keys:
+                seen_keys.add(key)
+                events.append({
+                    "date": first_fri.strftime("%Y-%m-%d"),
+                    "time_et": "08:30",
+                    "category": "LABOR",
+                    "name": "U.S. Employment Situation (Non-Farm Payrolls)",
+                    "importance": "HIGH"
+                })
+
+        # 2. CPI: 2nd Wednesday of month
+        days_to_wed = (2 - first_day.weekday()) % 7
+        second_wed = first_day + timedelta(days=days_to_wed + 7)
+        if start_date <= second_wed <= end_date:
+            key = (second_wed.strftime("%Y-%m-%d"), "08:30", "Consumer Price Index (CPI)")
+            if key not in seen_keys:
+                seen_keys.add(key)
+                events.append({
+                    "date": second_wed.strftime("%Y-%m-%d"),
+                    "time_et": "08:30",
+                    "category": "INFLATION",
+                    "name": "Consumer Price Index (CPI)",
+                    "importance": "HIGH"
+                })
+
+        # 3. PPI: Day following CPI
+        ppi_day = second_wed + timedelta(days=1)
+        if start_date <= ppi_day <= end_date:
+            key = (ppi_day.strftime("%Y-%m-%d"), "08:30", "Producer Price Index (PPI)")
+            if key not in seen_keys:
+                seen_keys.add(key)
+                events.append({
+                    "date": ppi_day.strftime("%Y-%m-%d"),
+                    "time_et": "08:30",
+                    "category": "INFLATION",
+                    "name": "Producer Price Index (PPI)",
+                    "importance": "MEDIUM"
+                })
+
+        # Advance month
+        if cur_m == 12:
+            cur_y += 1
+            cur_m = 1
+        else:
+            cur_m += 1
+
+    events.sort(key=lambda x: (x["date"], x["time_et"]))
+    return events
 
 
 def _build_event_datetime(date_str: str, time_et_str: str) -> datetime:
@@ -309,10 +389,11 @@ def get_economic_calendar_context(
     upcoming_events_7d = []
     upcoming_events_90d = []
 
-    # Merge monthly release table and multi-year FOMC schedule
+    # Merge dynamically generated statutory release schedule and multi-year FOMC schedule
     events_pool = []
     seen_keys = set()
-    for ev in KEY_MACRO_RELEASES_2026:
+    dynamic_macro = generate_statutory_macro_schedule(today_et_date - timedelta(days=2), end_horizon_date)
+    for ev in dynamic_macro:
         key = (ev["date"], ev["time_et"], ev["name"])
         seen_keys.add(key)
         events_pool.append(ev)

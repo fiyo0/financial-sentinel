@@ -181,6 +181,14 @@ class FinancialSentinelOrchestrator:
         if target_uid:
             self.state_store.save_user_portfolio(target_uid, dumped, cash=portfolio.cash)
 
+        # Register ticker brand aliases for all portfolio holdings in SQLite
+        try:
+            from agents.news_ingestion import resolve_ticker_aliases
+            for h in portfolio.holdings:
+                resolve_ticker_aliases(h.ticker, h.name, state_store=self.state_store)
+        except Exception:
+            pass
+
         # Global sync ONLY for admin / default user for cold start backups
         if target_uid == admin_id or not user_id:
             self.state_store.set_kv("active_portfolio", dumped)

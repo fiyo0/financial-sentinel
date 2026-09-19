@@ -5,6 +5,7 @@ If a live price cannot be fetched, it explicitly reports failure instead of fall
 """
 import time
 import logging
+import re
 from typing import Dict, Any, Optional, List, Tuple
 import httpx
 from models import Portfolio
@@ -42,6 +43,73 @@ def get_market_http_client() -> httpx.Client:
 
 
 
+def classify_equity_sector(ticker: str, name: str, explicit_type: Optional[str] = None) -> str:
+    """
+    Universally classifies equities into standard GICS sectors or index funds
+    using semantic industry keywords without hardcoded company lists.
+    """
+    clean_ticker = ticker.strip().upper()
+    name_lower = name.lower()
+
+    # 1. Broad Index ETFs / Mutual Funds
+    if (
+        explicit_type == "etf" or
+        clean_ticker in {"SPY", "VOO", "QQQ", "IVV", "VTI", "IWM", "DIA", "SCHD", "SFY", "VEA", "VWO", "XLK", "XLF", "XLE", "XLV", "XLI", "XLY", "XLP", "XLU", "XLB", "XLC", "XLRE"} or
+        any(k in name_lower for k in ["etf", "index", "s&p 500", "nasdaq 100", "russell 2000", "total stock", "yield fund", "treasury fund"])
+    ):
+        return "Index ETF / Fund"
+
+    # 2. Healthcare & Biotechnology
+    if any(k in name_lower for k in ["health", "healthcare", "pharma", "pharmaceutical", "biotech", "therapeutics", "medical", "biosciences", "life sciences", "diagnostics", "clinical", "hospital", "genomics"]):
+        return "Healthcare"
+
+    # 3. Semiconductors (Sub-industry of Tech with distinct cyclicality)
+    if any(k in name_lower for k in ["semiconductor", "semi", "chip", "chips", "wafer", "foundry", "integrated circuit", "lithography"]):
+        return "Semiconductors"
+
+    # 4. Communication Services
+    if any(k in name_lower for k in ["telecom", "telecommunications", "media", "broadcasting", "cable", "wireless", "interactive media", "social media", "publishing", "advertising"]):
+        return "Communication Services"
+
+    # 5. Information Technology
+    if any(re.search(r'\b' + re.escape(k) + r'\b', name_lower) for k in ["software", "technology", "tech", "cloud", "saas", "cybersecurity", "hardware", "systems", "micro", "data", "digital", "computing", "artificial intelligence", "platform"]):
+        return "Technology"
+
+    # 5. Financials
+    if any(k in name_lower for k in ["bank", "banking", "financial", "finance", "capital", "insurance", "credit", "asset management", "brokerage", "trust", "fund", "holdings", "bancorp", "fintech", "clearing", "exchange", "mortgage", "lending"]):
+        return "Financials"
+
+    # 6. Energy
+    if any(k in name_lower for k in ["energy", "oil", "gas", "petroleum", "pipeline", "drilling", "refining", "exploration", "renewable", "solar", "nuclear", "fuel", "clean power"]):
+        return "Energy"
+
+    # 7. Consumer Discretionary
+    if any(k in name_lower for k in ["automotive", "motor", "motors", "retail", "apparel", "luxury", "entertainment", "restaurant", "dining", "leisure", "cruise", "hotel", "resort", "footwear", "homebuilder", "e-commerce"]):
+        return "Consumer Discretionary"
+
+    # 8. Consumer Staples
+    if any(k in name_lower for k in ["beverage", "beverages", "food", "tobacco", "household", "personal care", "grocery", "supermarket"]):
+        return "Consumer Staples"
+
+    # 9. Industrials
+    if any(k in name_lower for k in ["industrial", "machinery", "aerospace", "defense", "aviation", "logistics", "freight", "railroad", "shipping", "transportation", "construction", "manufacturing", "engineering", "electrical equipment"]):
+        return "Industrials"
+
+    # 10. Utilities
+    if any(k in name_lower for k in ["utility", "utilities", "electric", "power", "water utility", "gas utility"]):
+        return "Utilities"
+
+    # 11. Real Estate
+    if any(k in name_lower for k in ["reit", "real estate", "property", "properties", "realty", "residential", "commercial real estate"]):
+        return "Real Estate"
+
+    # 12. Materials
+    if any(k in name_lower for k in ["materials", "chemical", "chemicals", "mining", "metals", "steel", "gold", "copper", "aluminum", "paper", "packaging", "fertilizer"]):
+        return "Materials"
+
+    return "Unclassified"
+
+
 def fetch_live_quote(ticker: str) -> Dict[str, Any]:
     """
     Dynamically queries live financial APIs for real-time market trade price, previous close,
@@ -58,7 +126,7 @@ def fetch_live_quote(ticker: str) -> Dict[str, Any]:
 
     current_price = 0.0
     short_name = clean_ticker
-    sector = "Technology"
+    sector = "Unclassified"
     prev_close = 0.0
     fetch_success = False
     provider_used = "none"
@@ -128,18 +196,8 @@ def fetch_live_quote(ticker: str) -> Dict[str, Any]:
             PROVIDER_METRICS["yahoo"]["failures"] += 1
             logger.debug(f"Yahoo quote fetch error for {clean_ticker}: {e}")
 
-    # Dynamic Sector Classification from resolved name
-    name_lower = short_name.lower()
-    if any(k in name_lower for k in ["semiconductor", "semi", "chip", "nvidia", "amd", "micron", "tsmc", "broadcom", "intel", "asml", "qualcomm"]):
-        sector = "Semiconductors"
-    elif any(k in name_lower for k in ["health", "pharma", "biotech", "therapeutics", "medical", "lilly", "pfizer", "unitedhealth"]):
-        sector = "Healthcare"
-    elif any(k in name_lower for k in ["bank", "financial", "credit", "capital", "coinbase", "robinhood", "jpmorgan", "goldman", "visa"]):
-        sector = "Financials"
-    elif any(k in name_lower for k in ["energy", "oil", "gas", "power", "nuclear", "solar", "exxon", "cameco", "constellation"]):
-        sector = "Energy"
-    elif any(k in name_lower for k in ["etf", "s&p 500", "index", "500", "nasdaq", "russell", "total stock", "select 500", "sofi"]):
-        sector = "Technology" if "nasdaq" in name_lower else "Diversified Index"
+    # Dynamic Sector Classification from resolved name & ticker
+    sector = classify_equity_sector(clean_ticker, short_name)
 
     quote = {
         "ticker": clean_ticker,

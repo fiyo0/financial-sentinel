@@ -66,13 +66,7 @@ class AnalysisService:
         if current_price <= 0.0 and tech_snap and tech_snap.current_price:
             current_price = float(tech_snap.current_price or 0.0)
 
-        # Step 3: Retail Sentiment & RVOL
-        if progress_callback:
-            progress_callback(60, f"Ingesting StockTwits & Reddit retail sentiment velocity for {clean_sym}...")
-        rvol_val = tech_snap.rvol if (tech_snap and tech_snap.is_live) else None
-        sent_snap = sentiment_stream.fetch_social_sentiment_snapshot(clean_sym, rvol=rvol_val)
-
-        # Step 4: News Feeds & Dynamic Ticker Alias Resolution
+        # Step 3: Dynamic Ticker Alias Resolution & Retail Sentiment
         resolved_company_name = quote.get("name") or clean_sym
         aliases = resolve_ticker_aliases(
             clean_sym,
@@ -81,7 +75,17 @@ class AnalysisService:
             use_market_lookup=True
         )
 
-        # Ingest live feeds with force_fresh=True to ensure target ticker and Google News RSS are fetched
+        if progress_callback:
+            progress_callback(60, f"Ingesting StockTwits & Reddit retail sentiment velocity for {clean_sym}...")
+        rvol_val = tech_snap.rvol if (tech_snap and tech_snap.is_live) else None
+        sent_snap = sentiment_stream.fetch_social_sentiment_snapshot(
+            clean_sym,
+            rvol=rvol_val,
+            aliases=aliases,
+            company_name=resolved_company_name
+        )
+
+        # Step 4: Ingest Live News Feeds & Merge Historical Database News
         live_news = self.orchestrator.news_agent.ingest_all_feeds(
             live=True, portfolio_tickers=[clean_sym], force_fresh=True, api_key=resolved_key
         )
