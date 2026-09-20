@@ -4,6 +4,7 @@ and supply-chain ripple effects dynamically using Gemini 3.8 Flash.
 Zero hardcoded ecosystem dictionaries.
 """
 
+import json
 import logging
 import re
 from typing import List, Optional, Dict, Any
@@ -149,14 +150,43 @@ class PortfolioAnalysisAgent(BaseAgent):
                 "weight_pct": f"{h.weight_pct:.1f}%"
             })
 
+        # Holding-affinity news allocation: keep up to 2 items per held ticker plus macro context
+        portfolio_tickers = {h.ticker.upper() for h in portfolio.holdings}
+        ticker_news: Dict[str, List[NewsItem]] = {}
+        macro_news: List[NewsItem] = []
+
+        for n in news_items:
+            matched = [t for t in n.related_tickers if t in portfolio_tickers]
+            if matched:
+                for t in matched:
+                    ticker_news.setdefault(t, []).append(n)
+            else:
+                macro_news.append(n)
+
+        selected_news: List[NewsItem] = []
+        for items in ticker_news.values():
+            selected_news.extend(items[:2])
+        selected_news.extend(macro_news[:4])
+
         news_summary = []
-        for n in news_items[:12]:
+        for n in selected_news[:20]:
             news_summary.append({
                 "title": n.title,
                 "source": n.source,
                 "summary": n.summary[:200],
                 "tickers": n.related_tickers
             })
+
+        if not news_summary:
+            news_directive = (
+                "RECENT MARKET NEWS & FILINGS: [None available for the trailing 48-hour period]\n"
+                "CRITICAL ANTI-HALLUCINATION DIRECTIVE: No external breaking news catalysts were captured in the current ingestion cycle. "
+                "You MUST NOT invent, assume, or hallucinate news events or corporate headlines. "
+                "Explicitly set 'transmission_channel' to 'Macro Multiple' or 'Technical Posture' and formulate directional bias, "
+                "volatility estimates, and portfolio advice strictly from technical structure, asset class, and fundamental valuation posture without fabricating events."
+            )
+        else:
+            news_directive = f"RECENT MARKET NEWS & FILINGS:\n{json.dumps(news_summary, indent=2)}"
 
         prompt = f"""
         You are an elite quantitative & fundamental equity portfolio risk analyst.
@@ -165,8 +195,7 @@ class PortfolioAnalysisAgent(BaseAgent):
         PORTFOLIO HOLDINGS:
         {holdings_summary}
 
-        RECENT MARKET NEWS & FILINGS:
-        {news_summary}
+        {news_directive}
 
         TASK:
         For EACH holding in the portfolio:
@@ -400,8 +429,13 @@ class PortfolioAnalysisAgent(BaseAgent):
         curated_regulatory = deduplicate_and_prioritize_regulatory_items(regulatory_actions, max_items=4)
 
         # Assemble curated news list (up to 5 primary ticker, up to 4 regulatory, up to 2 context)
+        deduped_primary: List[NewsItem] = []
+        for cat in primary_catalysts:
+            if not any(are_headlines_same_event_cluster(cat.title, existing.title) for existing in deduped_primary):
+                deduped_primary.append(cat)
+
         selected_news: List[NewsItem] = []
-        selected_news.extend(primary_catalysts[:5])
+        selected_news.extend(deduped_primary[:5])
         selected_news.extend(curated_regulatory)
         remaining_slots = 12 - len(selected_news)
         if remaining_slots > 0:

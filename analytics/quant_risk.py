@@ -17,7 +17,7 @@ def compute_daily_log_returns(prices: List[float]) -> List[float]:
         if p_prev > 0 and p_curr > 0:
             returns.append(math.log(p_curr / p_prev))
         else:
-            returns.append(0.0)
+            returns.append(float('nan'))
     return returns
 
 
@@ -26,9 +26,13 @@ def compute_sample_covariance(series_a: List[float], series_b: List[float]) -> f
     n = min(len(series_a), len(series_b))
     if n < 2:
         return 0.0
-    mean_a = sum(series_a[:n]) / float(n)
-    mean_b = sum(series_b[:n]) / float(n)
-    cov = sum((series_a[i] - mean_a) * (series_b[i] - mean_b) for i in range(n)) / float(n - 1)
+    valid_pairs = [(series_a[i], series_b[i]) for i in range(n) if not (math.isnan(series_a[i]) or math.isnan(series_b[i]))]
+    m = len(valid_pairs)
+    if m < 2:
+        return 0.0
+    mean_a = sum(p[0] for p in valid_pairs) / float(m)
+    mean_b = sum(p[1] for p in valid_pairs) / float(m)
+    cov = sum((p[0] - mean_a) * (p[1] - mean_b) for p in valid_pairs) / float(m - 1)
     return cov
 
 
@@ -37,12 +41,14 @@ def compute_sample_variance(series: List[float]) -> float:
     return compute_sample_covariance(series, series)
 
 
-def compute_empirical_beta(asset_returns: List[float], benchmark_returns: List[float]) -> float:
+def compute_empirical_beta(asset_returns: List[float], benchmark_returns: List[float]) -> Optional[float]:
     """Computes empirical Beta against a benchmark: Beta = Cov(r_asset, r_bm) / Var(r_bm)."""
     var_bm = compute_sample_variance(benchmark_returns)
-    if var_bm <= 1e-12:
-        return 1.0
+    if var_bm <= 1e-12 or math.isnan(var_bm):
+        return None
     cov = compute_sample_covariance(asset_returns, benchmark_returns)
+    if math.isnan(cov):
+        return None
     return round(cov / var_bm, 3)
 
 
@@ -81,7 +87,9 @@ class QuantRiskEngine:
                 r_asset = compute_daily_log_returns(t_closes)
                 r_bm = compute_daily_log_returns(bm_closes)
                 if len(r_asset) >= 10 and len(r_bm) >= 10:
-                    return compute_empirical_beta(r_asset, r_bm)
+                    emp_beta = compute_empirical_beta(r_asset, r_bm)
+                    if emp_beta is not None:
+                        return emp_beta
         except Exception as e:
             logger.debug("Empirical beta computation error for %s: %s", clean_ticker, e)
 
@@ -203,7 +211,8 @@ class QuantRiskEngine:
                 if sym == bm_sym:
                     b_val = 1.0
                 elif bm_returns and len(bm_returns) == n_returns:
-                    b_val = compute_empirical_beta(returns_by_ticker[sym], bm_returns)
+                    raw_b = compute_empirical_beta(returns_by_ticker[sym], bm_returns)
+                    b_val = raw_b if raw_b is not None else 1.0
                 else:
                     b_val = 1.0
                 empirical_betas[sym] = round(b_val, 2)
@@ -521,7 +530,13 @@ def compute_deterministic_position_size(
     conviction_factor = max(0.1, min(1.0, float(conviction_pct) / 100.0))
     dollar_risk_budget = portfolio_equity * (risk_budget_pct / 100.0)
 
-    stop_distance = (2.0 * atr_14) if (atr_14 and atr_14 > 0) else (current_price * 0.08)
+    if atr_14 and atr_14 > 0:
+        stop_distance = 2.0 * atr_14
+        stop_note = f"stop distance ${round(stop_distance, 2)} (2x ATR-14)"
+    else:
+        stop_distance = current_price * 0.08
+        stop_note = f"stop distance ${round(stop_distance, 2)} (default 8% stop fallback; ATR-14 unavailable)"
+
     vol_shares = dollar_risk_budget / stop_distance
     raw_target_usd = vol_shares * current_price * conviction_factor
 
@@ -555,7 +570,7 @@ def compute_deterministic_position_size(
         "adv_constraints": adv_constraints,
         "sizing_notes": (
             f"Risk budget {risk_budget_pct}% (${round(dollar_risk_budget, 2)}), "
-            f"stop distance ${round(stop_distance, 2)} (2x ATR-14), "
+            f"{stop_note}, "
             f"conviction {round(conviction_pct, 1)}%."
         ),
     }

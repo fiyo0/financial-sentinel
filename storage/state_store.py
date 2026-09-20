@@ -6,7 +6,7 @@ import json
 import hashlib
 import os
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any
 from models import NewsItem, BriefingReport, NewsCategory
 
@@ -619,7 +619,7 @@ class StateStore:
         Retrieves recently ingested news items within the specified lookback window,
         sorted chronologically by published_at DESC.
         """
-        cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
         items: List[NewsItem] = []
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -634,7 +634,7 @@ class StateStore:
                 try:
                     pub_dt = datetime.fromisoformat(row[5])
                 except (ValueError, TypeError):
-                    pub_dt = datetime.utcnow()
+                    pub_dt = datetime.now(timezone.utc)
                 try:
                     cat = NewsCategory(row[6])
                 except (ValueError, KeyError):
@@ -685,7 +685,7 @@ class StateStore:
         Retrieves authoritative regulatory bulletins, SEC filings/orders, and central bank actions
         within the specified lookback window, sorted chronologically.
         """
-        cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
         items: List[NewsItem] = []
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -716,7 +716,7 @@ class StateStore:
                 try:
                     pub_dt = datetime.fromisoformat(row[5])
                 except (ValueError, TypeError):
-                    pub_dt = datetime.utcnow()
+                    pub_dt = datetime.now(timezone.utc)
                 try:
                     cat = NewsCategory(row[6])
                 except (ValueError, KeyError):
@@ -898,7 +898,7 @@ class StateStore:
                 briefing_id,
                 user_id,
                 slot,
-                payload.get("generated_at", datetime.utcnow().isoformat() + "Z"),
+                payload.get("generated_at", datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + "Z"),
                 payload.get("message", "")[:300],
                 payload.get("total_holdings", 0),
                 json.dumps(payload),
@@ -915,7 +915,7 @@ class StateStore:
         dispatched_channels: Optional[List[str]] = None,
         extra_payload: Optional[Dict[str, Any]] = None
     ):
-        now_iso = datetime.utcnow().isoformat() + "Z"
+        now_iso = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + "Z"
         payload = {
             "slot": slot,
             "message": message,
@@ -1028,7 +1028,7 @@ class StateStore:
 
             # 2. Purge expired records if retention_days specified
             if retention_days and retention_days > 0:
-                cutoff_date = (datetime.utcnow() - timedelta(days=retention_days)).isoformat()
+                cutoff_date = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
                 cursor.execute("DELETE FROM briefing_history WHERE generated_at < ?", (cutoff_date,))
                 total_deleted += cursor.rowcount
 

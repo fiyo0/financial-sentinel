@@ -12,6 +12,7 @@ import re
 import feedparser
 import httpx
 from storage.cache_manager import CacheManager
+from analytics.market_calendar import shift_if_holiday
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +145,11 @@ def generate_statutory_macro_schedule(start_date: date, end_date: date) -> List[
 
         # 1. Non-Farm Payrolls: 1st Friday of month
         days_to_fri = (4 - first_day.weekday()) % 7
-        first_fri = first_day + timedelta(days=days_to_fri)
+        raw_first_fri = first_day + timedelta(days=days_to_fri)
+        if raw_first_fri.month == 1 and raw_first_fri.day == 1:
+            first_fri = raw_first_fri
+        else:
+            first_fri = shift_if_holiday(raw_first_fri)
         if start_date <= first_fri <= end_date:
             key = (first_fri.strftime("%Y-%m-%d"), "08:30", "U.S. Employment Situation (Non-Farm Payrolls)")
             if key not in seen_keys:
@@ -159,7 +164,7 @@ def generate_statutory_macro_schedule(start_date: date, end_date: date) -> List[
 
         # 2. CPI: 2nd Wednesday of month
         days_to_wed = (2 - first_day.weekday()) % 7
-        second_wed = first_day + timedelta(days=days_to_wed + 7)
+        second_wed = shift_if_holiday(first_day + timedelta(days=days_to_wed + 7))
         if start_date <= second_wed <= end_date:
             key = (second_wed.strftime("%Y-%m-%d"), "08:30", "Consumer Price Index (CPI)")
             if key not in seen_keys:
@@ -173,7 +178,7 @@ def generate_statutory_macro_schedule(start_date: date, end_date: date) -> List[
                 })
 
         # 3. PPI: Day following CPI
-        ppi_day = second_wed + timedelta(days=1)
+        ppi_day = shift_if_holiday(second_wed + timedelta(days=1))
         if start_date <= ppi_day <= end_date:
             key = (ppi_day.strftime("%Y-%m-%d"), "08:30", "Producer Price Index (PPI)")
             if key not in seen_keys:
@@ -431,8 +436,9 @@ def generate_economic_calendar_ics(
             seen_keys.add(key)
             events_to_include.append(ev)
 
-    # 2. Collect statutory FOMC schedule across 2025-2027
-    fomc_events = generate_statutory_fomc_schedule(date(2025, 1, 1), date(2027, 12, 31))
+    # 2. Collect statutory FOMC schedule dynamically
+    fomc_end_year = max(2027, date.today().year + 3)
+    fomc_events = generate_statutory_fomc_schedule(date(2025, 1, 1), date(fomc_end_year, 12, 31))
     for fomc_ev in fomc_events:
         key = (fomc_ev["date"], fomc_ev["time_et"], fomc_ev["name"])
         if key not in seen_keys:

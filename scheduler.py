@@ -7,7 +7,7 @@ import signal
 import sys
 import threading
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from typing import Optional, Callable, Set
 
@@ -127,7 +127,7 @@ class DailyMarketScheduler:
             else:
                 message = self.briefing_agent.generate_premarket_briefing(portfolio, market_overview, news_items, api_key=api_key, as_of=now_pst)
 
-            briefing_id = f"briefing_{slot}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+            briefing_id = f"briefing_{slot}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
             dispatched = []
             if auto_dispatch and target_chat_id:
                 try:
@@ -205,7 +205,7 @@ class DailyMarketScheduler:
                 # Persist personalized market briefing in state store for this user
                 try:
                     self.orchestrator.state_store.record_market_briefing(
-                        briefing_id=f"daily_{slot}_{u_id}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}",
+                        briefing_id=f"daily_{slot}_{u_id}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}",
                         slot=slot,
                         message=u_msg,
                         user_id=u_id,
@@ -222,7 +222,7 @@ class DailyMarketScheduler:
         if last_generated_msg and not active_users:
             try:
                 self.orchestrator.state_store.record_market_briefing(
-                    briefing_id=f"daily_{slot}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}",
+                    briefing_id=f"daily_{slot}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}",
                     slot=slot,
                     message=last_generated_msg,
                     user_id=None,
@@ -328,7 +328,7 @@ class MonitoringScheduler:
         cycle_count = 0
         while self.running:
             cycle_count += 1
-            now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+            now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
             print(f"\n[{now_str}] 🔄 Executing Monitoring Cycle #{cycle_count}...")
 
             try:

@@ -11,7 +11,7 @@ import time
 import secrets
 import re
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 
 
@@ -708,7 +708,7 @@ async def api_save_portfolio(payload: PortfolioSavePayload, user: Dict[str, Any]
         name=payload.name or "Custom Managed Portfolio",
         cash=float(payload.cash or 0.0),
         holdings=new_holdings,
-        last_updated=datetime.utcnow()
+        last_updated=datetime.now(timezone.utc)
     )
 
     def _sync_persist_and_stress(port, uid):

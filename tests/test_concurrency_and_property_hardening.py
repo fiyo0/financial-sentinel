@@ -258,8 +258,9 @@ def test_hypothesis_empirical_beta_and_var_bounds(asset_closes, bm_closes):
     r_bm = compute_daily_log_returns(bm_closes[:n])
 
     beta = compute_empirical_beta(r_asset, r_bm)
-    assert not math.isnan(beta)
-    assert not math.isinf(beta)
+    if beta is not None:
+        assert not math.isnan(beta)
+        assert not math.isinf(beta)
 
 
 def test_quant_flat_prices_division_by_zero_resilience():

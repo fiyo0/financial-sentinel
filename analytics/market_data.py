@@ -207,17 +207,23 @@ def fetch_live_quote(ticker: str) -> Dict[str, Any]:
                 resp = client.get(y_url, headers=headers, timeout=4.0)
                 if resp.status_code == 200:
                     data = resp.json()
-                    meta = data.get("chart", {}).get("result", [{}])[0].get("meta", {})
-                    p = float(meta.get("regularMarketPrice", 0.0) or 0.0)
-                    if p > 0:
-                        current_price = p
-                        fetch_success = True
-                        provider_used = "yahoo"
-                        PROVIDER_METRICS["yahoo"]["successes"] += 1
-                        prev_close = float(meta.get("chartPreviousClose", current_price) or current_price)
-                        y_name = meta.get("shortName")
-                        if y_name:
-                            short_name = y_name
+                    chart = data.get("chart") if isinstance(data, dict) else None
+                    result_list = chart.get("result") if isinstance(chart, dict) else None
+                    if not result_list or not isinstance(result_list, list) or len(result_list) == 0 or not isinstance(result_list[0], dict):
+                        err = chart.get("error") if isinstance(chart, dict) else "Missing chart.result"
+                        logger.warning("YAHOO_CONTRACT_VIOLATION: 'result' is invalid for %s. Error: %s", clean_ticker, err)
+                    else:
+                        meta = result_list[0].get("meta", {})
+                        p = float(meta.get("regularMarketPrice", 0.0) or 0.0)
+                        if p > 0:
+                            current_price = p
+                            fetch_success = True
+                            provider_used = "yahoo"
+                            PROVIDER_METRICS["yahoo"]["successes"] += 1
+                            prev_close = float(meta.get("chartPreviousClose", current_price) or current_price)
+                            y_name = meta.get("shortName")
+                            if y_name:
+                                short_name = y_name
             except Exception as e:
                 PROVIDER_METRICS["yahoo"]["failures"] += 1
                 logger.debug(f"Yahoo quote fetch error for {clean_ticker}: {e}")

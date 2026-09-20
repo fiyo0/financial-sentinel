@@ -106,7 +106,9 @@ class PortfolioService:
 
 
         quote_price = float(quote.get("current_price", 0.0) or 0.0)
-        resolved_price = price if (price is not None and price > 0) else (quote_price if quote_price > 0 else 100.0)
+        resolved_price = price if (price is not None and price > 0) else (quote_price if quote_price > 0 else None)
+        if resolved_price is None or resolved_price <= 0:
+            raise ValueError(f"Cannot resolve current price for {clean_ticker}. Please provide an explicit price.")
         resolved_current_price = current_price if (current_price is not None and current_price > 0) else (quote_price if quote_price > 0 else resolved_price)
 
         # Dynamically register ticker brand aliases in SQLite

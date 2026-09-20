@@ -7,7 +7,7 @@ import logging
 import re
 import sqlite3
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Optional
 import feedparser
 import httpx
@@ -79,10 +79,31 @@ CATALYST_OVERRIDE_REGEX = re.compile(
 )
 
 
+DICTIONARY_WORD_TICKERS = {
+    "ALL", "ARE", "ON", "NOW", "CAT", "IT", "A", "GO", "AI",
+    "MAN", "BOX", "COIN", "SAVE", "KEY", "REAL", "OPEN", "RUN",
+    "FAST", "CASH", "BILL", "HOPE", "FORM", "UNIT", "FIVE", "TWO"
+}
+
+GENERIC_STEMS = {
+    "the", "global", "american", "national", "united", "first",
+    "general", "best", "advanced", "applied", "digital", "new",
+    "real", "true", "modern", "classic", "select", "prime", "standard", "universal"
+}
+
+FINANCIAL_CONTEXT_KEYWORDS = [
+    "stock", "stocks", "shares", "nasdaq", "nyse", "market", "trading", "investor", "investors",
+    "valuation", "earnings", "broker", "brokerage", "revenue", "quarterly", "analyst", "price target",
+    "bullish", "bearish", "sec", "finra", "etf", "holdings", "options", "dividend", "yield"
+]
+
+
 def matches_ticker_equity_context(text: str, ticker: str, aliases: Optional[List[str]] = None) -> bool:
     """
     Validates whether an article legitimately references an equity asset rather than an unrelated homonym.
-    Checks for cashtag ($TICKER), recognized brand aliases, or the ticker symbol accompanied by financial/market terms.
+    1. Checks for cashtag ($TICKER).
+    2. Checks recognized multi-word brand aliases.
+    3. Standalone ticker matching with strict case and proximity validation for dictionary/short tickers.
     """
     clean_ticker = ticker.strip().upper().replace("$", "")
     text_lower = text.lower()
@@ -91,21 +112,37 @@ def matches_ticker_equity_context(text: str, ticker: str, aliases: Optional[List
     if f"${clean_ticker.lower()}" in text_lower:
         return True
 
-    # 2. Recognized company/brand aliases (e.g. "Robinhood", "Caterpillar", "Palantir")
+    # 2. Recognized company/brand aliases (e.g. "Robinhood", "Caterpillar", "ServiceNow")
     if aliases:
         for a in aliases:
-            if a.upper() != clean_ticker:
-                if re.search(r'\b' + re.escape(a.lower()) + r'\b', text_lower):
-                    return True
+            a_clean = a.strip()
+            if a_clean.upper() != clean_ticker and a_clean.lower() not in GENERIC_STEMS and a_clean.upper() not in DICTIONARY_WORD_TICKERS:
+                if len(a_clean) >= 4:
+                    if re.search(r'\b' + re.escape(a_clean.lower()) + r'\b', text_lower):
+                        return True
+                elif len(a_clean) >= 2:
+                    match = re.search(r'\b' + re.escape(a_clean.lower()) + r'\b', text_lower)
+                    if match:
+                        start = max(0, match.start() - 100)
+                        end = min(len(text_lower), match.end() + 100)
+                        window = text_lower[start:end]
+                        if any(re.search(r'\b' + kw + r'\b', window) for kw in FINANCIAL_CONTEXT_KEYWORDS):
+                            return True
 
-    # 3. Ticker symbol as standalone word — verify financial context to eliminate homonym false positives
-    if re.search(r'\b' + re.escape(clean_ticker.lower()) + r'\b', text_lower):
-        financial_context_words = [
-            "stock", "stocks", "shares", "nasdaq", "nyse", "market", "trading", "investor", "investors",
-            "valuation", "earnings", "broker", "brokerage", "revenue", "quarterly", "analyst", "price target",
-            "bullish", "bearish", "sec", "finra", "etf", "holdings", "options", "dividend", "yield"
-        ]
-        if any(re.search(r'\b' + kw + r'\b', text_lower) for kw in financial_context_words):
+    # 3. Standalone ticker matching
+    # Single-letter tickers (A, C, F) must have $TICKER cashtag or brand alias (e.g. Agilent, Citigroup, Ford)
+    if len(clean_ticker) <= 1:
+        return False
+
+    is_dict_or_short = clean_ticker in DICTIONARY_WORD_TICKERS or len(clean_ticker) <= 3
+    pattern = r'\b' + re.escape(clean_ticker) + r'\b' if is_dict_or_short else r'\b' + re.escape(clean_ticker.lower()) + r'\b'
+    search_space = text if is_dict_or_short else text_lower
+
+    for match in re.finditer(pattern, search_space):
+        start = max(0, match.start() - 100)
+        end = min(len(text_lower), match.end() + 100)
+        window = text_lower[start:end]
+        if any(re.search(r'\b' + kw + r'\b', window) for kw in FINANCIAL_CONTEXT_KEYWORDS):
             return True
 
     return False
@@ -120,10 +157,10 @@ def extract_stem_aliases(clean_ticker: str, company_name: str) -> List[str]:
     clean_name = re.sub(r'[,.]', ' ', company_name.strip()).strip()
     stripped = CORPORATE_SUFFIX_REGEX.sub('', clean_name).strip()
     stripped = re.sub(r'\s+', ' ', stripped).strip()
-    if stripped and len(stripped) >= 3 and stripped.upper() != clean_ticker:
+    if stripped and len(stripped) >= 3 and stripped.upper() != clean_ticker and stripped.lower() not in GENERIC_STEMS:
         aliases.add(stripped)
         parts = stripped.split()
-        if len(parts) > 1 and len(parts[0]) >= 4 and parts[0].lower() not in ("the", "global", "american", "national", "united", "first"):
+        if len(parts) > 1 and len(parts[0]) >= 4 and parts[0].lower() not in GENERIC_STEMS:
             aliases.add(parts[0])
     return list(aliases)
 
@@ -254,6 +291,7 @@ class NewsIngestionAgent(BaseAgent):
         Tier 3: Semantic Zero-Shot Fallback (LLM classification for non-ticker macro news).
         """
         found_tickers = set()
+        text_lower = text.lower()
 
         # 1. Match $TICKER pattern (e.g. $NVDA, $AAPL, $CEG)
         dollar_tickers = re.findall(r'\$([A-Z]{1,5})\b', text)
@@ -261,13 +299,17 @@ class NewsIngestionAgent(BaseAgent):
             found_tickers.add(t.upper())
 
         # 2. Match standard ticker patterns inside parentheses (e.g. "NVIDIA (NVDA)", "Tesla (TSLA)")
+        business_acronyms = {
+            "US", "USA", "SEC", "CEO", "CFO", "AI", "ETF", "FED", "GDP", "CPI", "PPI",
+            "IPO", "LLC", "INC", "EST", "PST", "UTC", "EPS", "YOY", "ROIC", "EBIT", "ARR",
+            "TAM", "CAGR", "B2B", "SAAS", "M&A", "P&L", "ROI", "KPI", "FDA", "FTC", "DOJ", "GAAP"
+        }
         paren_tickers = re.findall(r'\(([A-Z]{1,5})\)', text)
         for t in paren_tickers:
-            if t not in ("US", "USA", "SEC", "CEO", "CFO", "AI", "ETF", "Fed", "FED", "GDP", "CPI", "IPO", "LLC", "INC", "EST", "PST", "UTC"):
+            if t.upper() not in business_acronyms:
                 found_tickers.add(t.upper())
 
         # 3. Match common company brand names to tickers dynamically
-        text_lower = text.lower()
         active_aliases: Dict[str, List[str]] = {}
         if self.state_store:
             try:
@@ -278,10 +320,8 @@ class NewsIngestionAgent(BaseAgent):
         active_aliases.update(_DYNAMIC_TICKER_CACHE)
 
         for sym, aliases in active_aliases.items():
-            for alias in aliases:
-                if re.search(r'\b' + re.escape(alias.lower()) + r'\b', text_lower):
-                    found_tickers.add(sym)
-                    break
+            if matches_ticker_equity_context(text, sym, aliases):
+                found_tickers.add(sym)
 
         # 4. Propagate canonical sectors from recognized tickers
         found_sectors = set()
@@ -401,11 +441,25 @@ class NewsIngestionAgent(BaseAgent):
                 headers["User-Agent"] = "FinancialSentinel/2.4 (admin@financialsentinel.io; Automated Research System)"
 
             resp = httpx.get(url, headers=headers, timeout=8.0, follow_redirects=True)
+            if resp.status_code == 429:
+                retry_after = resp.headers.get("Retry-After")
+                logger.warning("RATE_LIMITED: %s (%s) returned HTTP 429. Retry-After: %s", name, url, retry_after)
+                return []
+            if resp.status_code in (403, 503):
+                logger.warning("BLOCKED: %s (%s) returned HTTP %d. Upstream block or challenge.", name, url, resp.status_code)
+                return []
             if resp.status_code != 200:
+                logger.warning("INGESTION_NON_200: %s (%s) returned HTTP %d", name, url, resp.status_code)
+                return []
+
+            content_type = resp.headers.get("content-type", "").lower()
+            if "text/html" in content_type and "xml" not in content_type:
+                logger.warning("CONTENT_TYPE_MISMATCH: %s (%s) returned text/html instead of RSS/XML.", name, url)
                 return []
 
             parsed = feedparser.parse(resp.text)
-            for entry in parsed.entries[:15]:
+            feed_candidates = []
+            for entry in parsed.entries[:100]:
                 title = entry.get("title", "").strip()
                 link = entry.get("link", "").strip()
                 summary = entry.get("summary", "") or entry.get("description", "")
@@ -426,10 +480,10 @@ class NewsIngestionAgent(BaseAgent):
                 category = self.infer_category(title, clean_summary, default_cat)
                 reliability = self.get_source_reliability(source_name) if source_name != name else self.get_source_reliability(url)
 
-                pub_time = datetime.utcnow()
+                pub_time = datetime.now(timezone.utc)
                 if hasattr(entry, "published_parsed") and entry.published_parsed:
                     try:
-                        pub_time = datetime(*entry.published_parsed[:6])
+                        pub_time = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
                     except (TypeError, ValueError) as e:
                         logger.debug("Could not parse published_parsed timestamp for %s: %s", title, e)
 
@@ -446,7 +500,23 @@ class NewsIngestionAgent(BaseAgent):
                     related_sectors=entities["sectors"],
                     raw_hash=raw_hash
                 )
-                items.append(item)
+                feed_candidates.append(item)
+
+            # Prioritize candidates: SEC/regulatory first, earnings second, macro third, then reliability
+            def _item_weight(it: NewsItem) -> float:
+                base = 1.0
+                if it.category == NewsCategory.SEC_FILING:
+                    base = 10.0
+                elif it.category == NewsCategory.EARNINGS:
+                    base = 8.0
+                elif it.category == NewsCategory.MACRO:
+                    base = 6.0
+                elif it.category == NewsCategory.BREAKING:
+                    base = 4.0
+                return base + (it.source_reliability_score or 0.75)
+
+            feed_candidates.sort(key=_item_weight, reverse=True)
+            items = feed_candidates[:20]
         except Exception as e:
             logger.warning("Failed parsing feed content for '%s': %s", name, e)
         return items
@@ -454,56 +524,68 @@ class NewsIngestionAgent(BaseAgent):
     def enrich_items_with_gemini(self, items: List[NewsItem], api_key: Optional[str] = None) -> List[NewsItem]:
         """
         Uses Gemini to semantically extract accurate corporate tickers, granular sectors, and event classifications.
+        Batches items in chunks of 15 to avoid slot exhaustion.
         """
         effective_key = api_key or self.api_key
         if not self.use_llm or not effective_key or not items:
             return items
 
-        # Process up to 15 items in a single fast structured batch
-        batch_input = [
-            {"id": item.id, "title": item.title, "summary": item.summary[:250]}
-            for item in items[:15]
-        ]
-
-        prompt = f"""
-        You are an expert financial news ingestion and entity classification system.
-        Analyze each article headline and summary. Extract all relevant stock tickers (US exchange symbols),
-        accurate market sectors, and event categories.
-
-        ARTICLES:
-        {json.dumps(batch_input, indent=2)}
-
-        Return JSON matching this schema:
-        {{
-            "items": [
-                {{
-                    "id": string (must match article id),
-                    "tickers": ["AAPL", "MSFT"],
-                    "sectors": ["Technology", "Semiconductors"],
-                    "category": "BREAKING" | "MACRO" | "EARNINGS" | "SEC_FILING" | "GEOPOLITICAL"
-                }}
+        BATCH_SIZE = 15
+        for batch_start in range(0, min(len(items), 45), BATCH_SIZE):
+            batch = items[batch_start:batch_start + BATCH_SIZE]
+            batch_input = [
+                {"id": item.id, "title": item.title, "summary": item.summary[:250]}
+                for item in batch
             ]
-        }}
-        """
 
-        try:
-            res = self.query_llm_json(prompt, api_key=effective_key)
-            if res and "items" in res:
-                enriched_map = {r["id"]: r for r in res["items"] if "id" in r}
-                for item in items:
-                    if item.id in enriched_map:
-                        enr = enriched_map[item.id]
-                        if enr.get("tickers"):
-                            item.related_tickers = sorted(list(set(item.related_tickers + [t.upper() for t in enr["tickers"]])))
-                        if enr.get("sectors"):
-                            item.related_sectors = enr["sectors"]
-                        if enr.get("category"):
-                            try:
-                                item.category = NewsCategory[enr["category"].upper()]
-                            except (KeyError, ValueError, AttributeError) as e:
-                                logger.debug("Unknown or invalid category '%s' from LLM enrichment: %s", enr.get("category"), e)
-        except Exception as e:
-            logger.warning("Gemini news enrichment failed: %s", e)
+            prompt = f"""
+            You are an expert financial news ingestion and entity classification system.
+            Analyze each article headline and summary. Extract all relevant stock tickers (US exchange symbols),
+            accurate market sectors, and event categories.
+
+            ARTICLES:
+            {json.dumps(batch_input, indent=2)}
+
+            Return JSON matching this schema:
+            {{
+                "items": [
+                    {{
+                        "id": string (must match article id),
+                        "tickers": ["AAPL", "MSFT"],
+                        "sectors": ["Technology", "Semiconductors"],
+                        "category": "BREAKING" | "MACRO" | "EARNINGS" | "SEC_FILING" | "GEOPOLITICAL"
+                    }}
+                ]
+            }}
+            """
+
+            try:
+                res = self.query_llm_json(prompt, api_key=effective_key)
+                if res and "items" in res:
+                    enriched_map = {r["id"]: r for r in res["items"] if "id" in r}
+                    for item in batch:
+                        if item.id in enriched_map:
+                            enr = enriched_map[item.id]
+                            if enr.get("tickers"):
+                                item.related_tickers = sorted(list(set(item.related_tickers + [t.upper() for t in enr["tickers"]])))
+                            if enr.get("sectors"):
+                                item.related_sectors = enr["sectors"]
+                            if enr.get("category"):
+                                try:
+                                    item.category = NewsCategory[enr["category"].upper()]
+                                except (KeyError, ValueError, AttributeError) as e:
+                                    logger.debug("Unknown or invalid category '%s' from LLM enrichment: %s", enr.get("category"), e)
+            except Exception as e:
+                err_str = str(e).lower()
+                if any(k in err_str for k in ("401", "403", "api key", "unauthorized", "permission_denied", "invalid_argument")):
+                    logger.critical("GEMINI_AUTH_FAILURE: API key may be revoked or expired: %s", e)
+                    if self.state_store:
+                        try:
+                            self.state_store.set_kv("gemini_api_key_status", "REVOKED_OR_EXPIRED")
+                        except (sqlite3.Error, OSError) as store_err:
+                            logger.debug("Failed to record key status in store: %s", store_err)
+                else:
+                    logger.warning("Gemini news enrichment failed: %s", e)
 
         return items
 

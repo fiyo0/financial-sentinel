@@ -16,10 +16,14 @@ class EmailChannel:
     def __init__(
         self,
         smtp_host: Optional[str] = None,
-        recipient: Optional[str] = None
+        recipient: Optional[str] = None,
+        smtp_user: Optional[str] = None,
+        smtp_password: Optional[str] = None
     ):
         self.smtp_host = smtp_host or config.email_smtp_host
         self.recipient = recipient or config.email_recipient
+        self.smtp_user = smtp_user or getattr(config, "email_smtp_user", None)
+        self.smtp_password = smtp_password or getattr(config, "email_smtp_password", None)
 
     def is_configured(self) -> bool:
         return bool(self.smtp_host and self.recipient)
@@ -30,7 +34,7 @@ class EmailChannel:
 
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
-        msg["From"] = "sentinel@financial-agent.ai"
+        msg["From"] = self.smtp_user or "sentinel@financial-agent.ai"
         msg["To"] = self.recipient
 
         if plain_body:
@@ -40,6 +44,8 @@ class EmailChannel:
         try:
             with smtplib.SMTP(self.smtp_host, 587, timeout=10.0) as server:
                 server.starttls()
+                if self.smtp_user and self.smtp_password:
+                    server.login(self.smtp_user, self.smtp_password)
                 server.sendmail(msg["From"], [self.recipient], msg.as_string())
             return True
         except (smtplib.SMTPException, OSError) as e:

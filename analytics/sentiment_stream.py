@@ -36,8 +36,8 @@ def get_stocktwits_client() -> httpx.Client:
         )
     return _STOCKTWITS_CLIENT
 
-BULL_KW = re.compile(r"\b(buy|bought|calls|long|moon|breakout|green|rocket|undervalued|rally|accumulate|support|dip)\b", re.I)
-BEAR_KW = re.compile(r"\b(sell|sold|puts|short|dump|drop|red|crash|scam|overvalued|tank|fall|bear|downgrade|bubble|loss)\b", re.I)
+BULL_KW = re.compile(r"\b(buy|bought|calls|call\s+option|moon|breakout|rocket|undervalued|rally|accumulate|buy\s+the\s+dip|bullish|bouncing\s+off\s+support)\b", re.I)
+BEAR_KW = re.compile(r"\b(sell|sold|puts|put\s+option|shorting|overvalued|crash|scam|downgrade|bubble|bearish|tanking|dumping|selloff|sell-off|bagholding)\b", re.I)
 
 
 def classify_comments_sentiment(

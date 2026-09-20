@@ -4,6 +4,7 @@ Sends formatted HTML alerts and digests to Telegram chats with automatic error r
 """
 import re
 import logging
+import time
 import httpx
 from typing import Optional, List
 from config import config
@@ -84,13 +85,68 @@ class TelegramChannel:
         cid = self.get_effective_chat_id()
         return bool(self.bot_token and cid)
 
-    def _split_message(self, text: str, max_length: int = 3900) -> List[str]:
+    @staticmethod
+    def _split_long_line(line: str, max_length: int = 4000) -> List[str]:
+        if len(line) <= max_length:
+            return [line]
+        parts: List[str] = []
+        sentence_endings = re.split(r'([.!?]\s+)', line)
+        tokens: List[str] = []
+        i = 0
+        while i < len(sentence_endings):
+            tok = sentence_endings[i]
+            if i + 1 < len(sentence_endings):
+                tok += sentence_endings[i + 1]
+                i += 2
+            else:
+                i += 1
+            tokens.append(tok)
+
+        current = ""
+        for tok in tokens:
+            if len(tok) > max_length:
+                words = tok.split(" ")
+                w_current = ""
+                for w in words:
+                    if len(w) > max_length:
+                        if w_current:
+                            parts.append(w_current)
+                            w_current = ""
+                        for j in range(0, len(w), max_length):
+                            parts.append(w[j:j + max_length])
+                    elif len(w_current) + len(w) + 1 > max_length:
+                        if w_current:
+                            parts.append(w_current)
+                        w_current = w
+                    else:
+                        w_current = f"{w_current} {w}" if w_current else w
+                if w_current:
+                    parts.append(w_current)
+            elif len(current) + len(tok) > max_length:
+                if current:
+                    parts.append(current)
+                current = tok
+            else:
+                current += tok
+
+        if current:
+            parts.append(current)
+        return parts if parts else [line[:max_length], line[max_length:]]
+
+    def _split_message(self, text: str, max_length: int = 4000) -> List[str]:
         if len(text) <= max_length:
             return [text]
-        chunks = []
-        lines = text.split("\n")
+        raw_lines = text.split("\n")
+        expanded_lines: List[str] = []
+        for rl in raw_lines:
+            if len(rl) > max_length:
+                expanded_lines.extend(self._split_long_line(rl, max_length))
+            else:
+                expanded_lines.append(rl)
+
+        chunks: List[str] = []
         current_chunk = ""
-        for line in lines:
+        for line in expanded_lines:
             if len(current_chunk) + len(line) + 1 > max_length:
                 if current_chunk:
                     chunks.append(current_chunk)
@@ -108,7 +164,7 @@ class TelegramChannel:
             logger.warning("Telegram send failed: bot token or chat ID missing.")
             return False
 
-        chunks = self._split_message(text)
+        chunks = self._split_message(text, max_length=4000)
         success = True
 
         for chunk in chunks:
@@ -121,9 +177,18 @@ class TelegramChannel:
             }
             try:
                 resp = httpx.post(url, json=payload, timeout=12.0)
-                if resp.status_code != 200:
-                    logger.warning(f"Telegram HTML send returned status {resp.status_code} ({resp.text}). Retrying with plain text...")
-                    # Fallback: strip HTML tags and send as clean plain text
+                if resp.status_code == 429:
+                    retry_after = 1.0
+                    try:
+                        retry_after = float(resp.headers.get("Retry-After", 1.0))
+                    except (ValueError, TypeError):
+                        pass
+                    logger.warning("Telegram rate limited (429). Backing off for %.1f seconds...", retry_after)
+                    time.sleep(min(retry_after, 10.0))
+                    resp = httpx.post(url, json=payload, timeout=12.0)
+
+                if resp.status_code == 400:
+                    logger.warning(f"Telegram HTML send returned status 400 ({resp.text}). Retrying with plain text...")
                     plain_text = re.sub(r'<[^>]+>', '', chunk)
                     payload_plain = {
                         "chat_id": cid,
@@ -134,13 +199,18 @@ class TelegramChannel:
                     if resp_retry.status_code != 200:
                         logger.error(f"Telegram plain-text fallback also failed: {resp_retry.text}")
                         success = False
+                elif resp.status_code != 200:
+                    logger.error(f"Telegram send failed with status {resp.status_code}: {resp.text}")
+                    success = False
             except Exception as e:
                 logger.error(f"Telegram post exception: {e}")
                 # Emergency plain-text retry
                 try:
                     plain_text = re.sub(r'<[^>]+>', '', chunk)
-                    httpx.post(url, json={"chat_id": cid, "text": plain_text}, timeout=10.0)
-                except httpx.HTTPError as err:
+                    resp_emerg = httpx.post(url, json={"chat_id": cid, "text": plain_text}, timeout=10.0)
+                    if resp_emerg.status_code != 200:
+                        success = False
+                except (httpx.HTTPError, OSError) as err:
                     logger.error("Telegram emergency plain-text retry failed: %s", err)
                     success = False
 

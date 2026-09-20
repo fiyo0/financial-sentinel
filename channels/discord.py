@@ -28,18 +28,35 @@ class DiscordChannel:
         if not self.is_configured():
             return False
 
-        embed = {
-            "title": title[:250],
-            "description": description[:2000],
-            "color": color,
-            "fields": fields or [],
-            "footer": {"text": footer}
-        }
-        payload = {"embeds": [embed]}
+        # Split description > 2000 chars across multiple embeds (up to Discord limit of 10)
+        desc_chunks = []
+        if len(description) <= 2000:
+            desc_chunks = [description]
+        else:
+            for i in range(0, min(len(description), 20000), 2000):
+                desc_chunks.append(description[i:i + 2000])
+
+        embeds = []
+        for idx, chunk in enumerate(desc_chunks[:10]):
+            part_title = title[:250] if idx == 0 else f"{title[:230]} (Part {idx + 1})"
+            embed_obj: Dict[str, Any] = {
+                "title": part_title,
+                "description": chunk,
+                "color": color,
+                "footer": {"text": footer}
+            }
+            if idx == 0 and fields:
+                embed_obj["fields"] = fields[:25]
+            embeds.append(embed_obj)
+
+        payload = {"embeds": embeds}
 
         try:
             resp = httpx.post(self.webhook_url, json=payload, timeout=8.0)
-            return resp.status_code in (200, 204)
+            if resp.status_code not in (200, 204):
+                logger.error("Discord webhook returned %d: %s", resp.status_code, resp.text)
+                return False
+            return True
         except httpx.HTTPError as e:
             logger.error("Failed sending Discord embed: %s", e)
             return False

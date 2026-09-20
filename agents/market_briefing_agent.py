@@ -3,7 +3,7 @@ Specialized Market & Portfolio Briefing Agent.
 Synthesizes broad market macro, pre/post-market earnings, sector rotations,
 and portfolio correlation into executive Telegram briefings.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from typing import Dict, Any, List, Optional
 import logging
@@ -114,13 +114,30 @@ class MarketBriefingAgent(BaseAgent):
         if not news_items:
             return "No major breaking macro alerts."
 
-        ref_dt = as_of or datetime.now(ZoneInfo("America/Los_Angeles"))
+        ref_dt = as_of or datetime.now(timezone.utc)
         if ref_dt.tzinfo is None:
-            ref_dt = ref_dt.replace(tzinfo=ZoneInfo("America/Los_Angeles"))
+            ref_dt = ref_dt.replace(tzinfo=timezone.utc)
         ref_et = ref_dt.astimezone(ZoneInfo("America/New_York"))
 
-        # Sort chronologically so newest breaking news is prioritized
-        sorted_items = sorted(news_items, key=lambda x: x.published_at if x.published_at else datetime.min, reverse=True)
+        # Composite priority + recency sorting so high-importance regulatory/earnings news is not starved
+        def _news_composite_score(it: NewsItem) -> float:
+            cat_weights = {
+                NewsCategory.SEC_FILING: 10.0,
+                NewsCategory.EARNINGS: 8.0,
+                NewsCategory.MACRO: 7.0,
+                NewsCategory.BREAKING: 5.0,
+                NewsCategory.GEOPOLITICAL: 5.0,
+            }
+            cat_score = cat_weights.get(it.category, 3.0)
+            recency_score = 0.0
+            if it.published_at:
+                pub = it.published_at if it.published_at.tzinfo else it.published_at.replace(tzinfo=timezone.utc)
+                age_h = max(0.0, (ref_dt - pub).total_seconds() / 3600.0)
+                recency_score = max(0.0, 10.0 - (age_h * 0.5))
+            rel = it.source_reliability_score or 0.75
+            return cat_score + recency_score + (rel * 2.0)
+
+        sorted_items = sorted(news_items, key=_news_composite_score, reverse=True)
 
         lines = []
         for n in sorted_items[:15]:
@@ -174,9 +191,9 @@ class MarketBriefingAgent(BaseAgent):
         6:30 AM PST Pre-Market Intelligence:
         Overnight global macro, futures, pre-market earnings, portfolio open impact & market-wide alpha ideas.
         """
-        ref_dt = as_of or datetime.now(ZoneInfo("America/Los_Angeles"))
+        ref_dt = as_of or datetime.now(timezone.utc)
         if ref_dt.tzinfo is None:
-            ref_dt = ref_dt.replace(tzinfo=ZoneInfo("America/Los_Angeles"))
+            ref_dt = ref_dt.replace(tzinfo=timezone.utc)
         as_of_pst = ref_dt.astimezone(ZoneInfo("America/Los_Angeles"))
         as_of_et = ref_dt.astimezone(ZoneInfo("America/New_York"))
 
@@ -258,9 +275,9 @@ class MarketBriefingAgent(BaseAgent):
         10:00 AM PST Mid-Market Pulse:
         Midday momentum, Fed statements, economic releases, sector rotations, and emerging breakout opportunities.
         """
-        ref_dt = as_of or datetime.now(ZoneInfo("America/Los_Angeles"))
+        ref_dt = as_of or datetime.now(timezone.utc)
         if ref_dt.tzinfo is None:
-            ref_dt = ref_dt.replace(tzinfo=ZoneInfo("America/Los_Angeles"))
+            ref_dt = ref_dt.replace(tzinfo=timezone.utc)
         as_of_pst = ref_dt.astimezone(ZoneInfo("America/Los_Angeles"))
         as_of_et = ref_dt.astimezone(ZoneInfo("America/New_York"))
 
@@ -343,11 +360,23 @@ class MarketBriefingAgent(BaseAgent):
         3:00 PM PST Post-Market Wrap:
         Closing bell recap, after-hours earnings call takeaways, today's top winners/losers & hot asymmetric plays.
         """
-        ref_dt = as_of or datetime.now(ZoneInfo("America/Los_Angeles"))
+        ref_dt = as_of or datetime.now(timezone.utc)
         if ref_dt.tzinfo is None:
-            ref_dt = ref_dt.replace(tzinfo=ZoneInfo("America/Los_Angeles"))
+            ref_dt = ref_dt.replace(tzinfo=timezone.utc)
         as_of_pst = ref_dt.astimezone(ZoneInfo("America/Los_Angeles"))
         as_of_et = ref_dt.astimezone(ZoneInfo("America/New_York"))
+
+        from analytics.market_calendar import get_market_close_time_et, get_next_trading_day
+        close_h, close_m = get_market_close_time_et(as_of_et.date())
+        close_time_et_str = f"{close_h % 12 or 12}:{close_m:02d} {'PM' if close_h >= 12 else 'AM'} {as_of_et.strftime('%Z')}"
+        close_pst_h = (close_h - 3) % 24
+        close_time_pst_str = f"{close_pst_h % 12 or 12}:{close_m:02d} {'PM' if close_pst_h >= 12 else 'AM'} {as_of_pst.strftime('%Z')}"
+        session_close_desc = f"Regular trading ended at {close_time_pst_str} / {close_time_et_str}"
+        next_trading_day = get_next_trading_day(as_of_et.date())
+        if next_trading_day == as_of_et.date() + timedelta(days=1):
+            next_session_phrase = f"tomorrow's session ({next_trading_day.strftime('%Y-%m-%d')})"
+        else:
+            next_session_phrase = f"next active session ({next_trading_day.strftime('%Y-%m-%d')})"
 
         economic_ctx = get_economic_calendar_context(as_of_pst)
         economic_str = format_economic_calendar_for_prompt(economic_ctx, include_horizon=False)
@@ -375,7 +404,7 @@ class MarketBriefingAgent(BaseAgent):
         CURRENT TIME & SESSION GROUND TRUTH:
         • Calendar Date: {as_of_pst.strftime('%A, %B %d, %Y')}
         • Current Time: {as_of_pst.strftime('%I:%M %p %Z')} / {as_of_et.strftime('%I:%M %p %Z')}
-        • Session Phase: Post-Market Closing Wrap (Regular trading ended at 1:00 PM {as_of_pst.strftime('%Z')} / 4:00 PM {as_of_et.strftime('%Z')})
+        • Session Phase: Post-Market Closing Wrap ({session_close_desc})
 
 
         {economic_str}
@@ -408,7 +437,7 @@ class MarketBriefingAgent(BaseAgent):
         - If specific holdings experienced significant movement (>=1.5%) or earnings releases, detail ONLY those movers. If all holdings were steady, provide a concise 1-line reassurance.
 
         🔮 <b>After-Hours Earnings & Tomorrow's Focus:</b>
-        - Key after-hours earnings calls to note and 1 to 2 high-quality opportunity ideas to research for tomorrow's session ({economic_ctx.get('tomorrow_date')}). Exercise critical judgment—focus on companies with proven business moats, secular growth potential, or credible positive analyst revisions.
+        - Key after-hours earnings calls to note and 1 to 2 high-quality opportunity ideas to research for {next_session_phrase}. Exercise critical judgment—focus on companies with proven business moats, secular growth potential, or credible positive analyst revisions.
         - CRITICAL RULE: DO NOT describe events that occurred earlier today (such as completed Federal Reserve rate announcements or today's earnings) as happening tomorrow.
 
         Keep it comprehensive, institutional, objective, and beautifully styled with HTML tags. Avoid unwarranted puffery, hyperbole, or false profundity.
@@ -441,9 +470,9 @@ class MarketBriefingAgent(BaseAgent):
         9:00 PM PST Weekend EOD Wrap (Sat & Sun):
         Weekend macro/geopolitics, Sunday futures open sentiment, and the week ahead earnings/economic calendar.
         """
-        ref_dt = as_of or datetime.now(ZoneInfo("America/Los_Angeles"))
+        ref_dt = as_of or datetime.now(timezone.utc)
         if ref_dt.tzinfo is None:
-            ref_dt = ref_dt.replace(tzinfo=ZoneInfo("America/Los_Angeles"))
+            ref_dt = ref_dt.replace(tzinfo=timezone.utc)
         as_of_pst = ref_dt.astimezone(ZoneInfo("America/Los_Angeles"))
         as_of_et = ref_dt.astimezone(ZoneInfo("America/New_York"))
 
@@ -526,9 +555,9 @@ class MarketBriefingAgent(BaseAgent):
         from zoneinfo import ZoneInfo
         from analytics.earnings_calendar import fetch_7day_earnings_schedule
 
-        ref_dt = as_of or datetime.now(ZoneInfo("America/Los_Angeles"))
+        ref_dt = as_of or datetime.now(timezone.utc)
         if ref_dt.tzinfo is None:
-            ref_dt = ref_dt.replace(tzinfo=ZoneInfo("America/Los_Angeles"))
+            ref_dt = ref_dt.replace(tzinfo=timezone.utc)
         now_pst = ref_dt.astimezone(ZoneInfo("America/Los_Angeles"))
         end_date = now_pst + timedelta(days=7)
         portfolio_tickers = [h.ticker for h in portfolio.holdings]

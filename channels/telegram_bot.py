@@ -7,6 +7,7 @@ Supports multi-user routing and Bring-Your-Own-Key (BYOK) per-user encryption.
 import time
 import threading
 import logging
+import html
 import re
 import asyncio
 from typing import Optional, Dict, Any, List
@@ -15,6 +16,13 @@ from config import config
 from analytics.market_data import update_portfolio_live_prices
 
 logger = logging.getLogger("TelegramBot")
+
+
+def tg_safe(val: Any) -> str:
+    """Escapes dynamic text for safe interpolation into Telegram HTML formatting."""
+    if val is None:
+        return ""
+    return html.escape(str(val))
 
 RESERVED_COMMANDS = {
     # System & Navigation
@@ -143,13 +151,68 @@ class FinancialSentinelTelegramBot:
     def stop(self):
         self.is_running = False
 
-    def _split_message(self, text: str, max_length: int = 3900) -> List[str]:
+    @staticmethod
+    def _split_long_line(line: str, max_length: int = 4000) -> List[str]:
+        if len(line) <= max_length:
+            return [line]
+        parts: List[str] = []
+        sentence_endings = re.split(r'([.!?]\s+)', line)
+        tokens: List[str] = []
+        i = 0
+        while i < len(sentence_endings):
+            tok = sentence_endings[i]
+            if i + 1 < len(sentence_endings):
+                tok += sentence_endings[i + 1]
+                i += 2
+            else:
+                i += 1
+            tokens.append(tok)
+
+        current = ""
+        for tok in tokens:
+            if len(tok) > max_length:
+                words = tok.split(" ")
+                w_current = ""
+                for w in words:
+                    if len(w) > max_length:
+                        if w_current:
+                            parts.append(w_current)
+                            w_current = ""
+                        for j in range(0, len(w), max_length):
+                            parts.append(w[j:j + max_length])
+                    elif len(w_current) + len(w) + 1 > max_length:
+                        if w_current:
+                            parts.append(w_current)
+                        w_current = w
+                    else:
+                        w_current = f"{w_current} {w}" if w_current else w
+                if w_current:
+                    parts.append(w_current)
+            elif len(current) + len(tok) > max_length:
+                if current:
+                    parts.append(current)
+                current = tok
+            else:
+                current += tok
+
+        if current:
+            parts.append(current)
+        return parts if parts else [line[:max_length], line[max_length:]]
+
+    def _split_message(self, text: str, max_length: int = 4000) -> List[str]:
         if len(text) <= max_length:
             return [text]
-        chunks = []
-        lines = text.split("\n")
+        raw_lines = text.split("\n")
+        expanded_lines: List[str] = []
+        for rl in raw_lines:
+            if len(rl) > max_length:
+                expanded_lines.extend(self._split_long_line(rl, max_length))
+            else:
+                expanded_lines.append(rl)
+
+        chunks: List[str] = []
         current_chunk = ""
-        for line in lines:
+        for line in expanded_lines:
             if len(current_chunk) + len(line) + 1 > max_length:
                 if current_chunk:
                     chunks.append(current_chunk)
@@ -161,12 +224,11 @@ class FinancialSentinelTelegramBot:
         return chunks
 
     def send_message(self, text: str, chat_id: Optional[str] = None) -> bool:
-        import re
         target_chat = chat_id or self.chat_id
         if not target_chat or not self.bot_token:
             return False
 
-        chunks = self._split_message(text)
+        chunks = self._split_message(text, max_length=4000)
         success = True
 
         for chunk in chunks:
@@ -179,19 +241,38 @@ class FinancialSentinelTelegramBot:
             }
             try:
                 resp = httpx.post(url, json=payload, timeout=12.0)
-                if resp.status_code != 200:
-                    logger.warning(f"Telegram HTML send returned {resp.status_code} ({resp.text}). Retrying with plain text...")
+                if resp.status_code == 429:
+                    retry_after = 1.0
+                    try:
+                        retry_after = float(resp.headers.get("Retry-After", 1.0))
+                    except (ValueError, TypeError):
+                        pass
+                    logger.warning("Telegram rate limited (429). Backing off for %.1f seconds...", retry_after)
+                    time.sleep(min(retry_after, 10.0))
+                    resp = httpx.post(url, json=payload, timeout=12.0)
+
+                if resp.status_code == 400:
+                    logger.warning(f"Telegram HTML send returned 400 ({resp.text}). Retrying with plain text...")
                     plain = re.sub(r"<[^>]+>", "", chunk)
-                    resp_retry = httpx.post(url, json={"chat_id": target_chat, "text": plain, "disable_web_page_preview": True}, timeout=12.0)
+                    resp_retry = httpx.post(
+                        url,
+                        json={"chat_id": target_chat, "text": plain, "disable_web_page_preview": True},
+                        timeout=12.0
+                    )
                     if resp_retry.status_code != 200:
                         logger.error(f"Telegram plain text fallback failed: {resp_retry.text}")
                         success = False
+                elif resp.status_code != 200:
+                    logger.error(f"Telegram send failed with status {resp.status_code}: {resp.text}")
+                    success = False
             except Exception as e:
                 logger.error(f"Failed to send Telegram message: {e}")
                 try:
                     plain = re.sub(r"<[^>]+>", "", chunk)
-                    httpx.post(url, json={"chat_id": target_chat, "text": plain}, timeout=10.0)
-                except (httpx.HTTPError, asyncio.CancelledError) as err:
+                    resp_emerg = httpx.post(url, json={"chat_id": target_chat, "text": plain}, timeout=10.0)
+                    if resp_emerg.status_code != 200:
+                        success = False
+                except (httpx.HTTPError, asyncio.CancelledError, OSError) as err:
                     logger.error("Telegram fallback post failed: %s", err)
                     success = False
 
@@ -577,11 +658,11 @@ class FinancialSentinelTelegramBot:
                 ]
                 for opp in opps[:3]:
                     horizon_val = opp.horizon.value if hasattr(opp.horizon, 'value') else opp.horizon
-                    lines.append(f"• <b>{opp.ticker}</b> — {opp.name} ({opp.sector})")
-                    lines.append(f"  <b>Theme:</b> {opp.theme} ({horizon_val})")
+                    lines.append(f"• <b>{tg_safe(opp.ticker)}</b> — {tg_safe(opp.name)} ({tg_safe(opp.sector)})")
+                    lines.append(f"  <b>Theme:</b> {tg_safe(opp.theme)} ({tg_safe(horizon_val)})")
                     lines.append(f"  <b>Target:</b> +{opp.estimated_upside_pct:.1f}% Upside | Stop: -{opp.suggested_stop_loss_pct:.1f}% | R/R {opp.asymmetric_ratio}:1")
-                    lines.append(f"  <b>Catalyst:</b> {opp.catalyst_description}")
-                    lines.append(f"  <b>Portfolio Synergy:</b> {opp.portfolio_synergy}\n")
+                    lines.append(f"  <b>Catalyst:</b> {tg_safe(opp.catalyst_description)}")
+                    lines.append(f"  <b>Portfolio Synergy:</b> {tg_safe(opp.portfolio_synergy)}\n")
 
                 fallback_tick = portfolio.holdings[0].ticker if (portfolio and portfolio.holdings) else "SPY"
                 first_tick = opps[0].ticker if opps else fallback_tick
@@ -740,12 +821,12 @@ class FinancialSentinelTelegramBot:
 
                 lines = ["🚀 <b>HIGH-ASYMMETRY MOONSHOT RADAR</b>\n"]
                 for m in moonshots:
-                    lines.append(f"• <b>{m.ticker}</b> ({m.name})")
-                    lines.append(f"  Theme: {m.theme}")
+                    lines.append(f"• <b>{tg_safe(m.ticker)}</b> ({tg_safe(m.name)})")
+                    lines.append(f"  Theme: {tg_safe(m.theme)}")
                     lines.append(f"  🎯 Target: <b>+{m.estimated_upside_pct}%</b> | R/R {m.asymmetric_ratio}:1")
-                    lines.append(f"  Thesis: {m.upside_thesis}")
+                    lines.append(f"  Thesis: {tg_safe(m.upside_thesis)}")
                     if m.risk_factors:
-                        risks_str = ', '.join(m.risk_factors[:2])
+                        risks_str = ', '.join([tg_safe(r) for r in m.risk_factors[:2]])
                         lines.append(f"  ⚠️ Risk: {risks_str}\n")
                 self.send_message("\n".join(lines), chat_id)
             except Exception as e:
@@ -865,12 +946,12 @@ class FinancialSentinelTelegramBot:
             except ValueError as ve:
                 portfolio = self.portfolio_service.get_portfolio(user_id=user_id)
                 available = ', '.join([h.ticker for h in portfolio.holdings])
-                self.send_message(f"❌ <b>{ve}</b>\nActive holdings: <code>{available}</code>", chat_id)
+                self.send_message(f"❌ <b>{tg_safe(ve)}</b>\nActive holdings: <code>{tg_safe(available)}</code>", chat_id)
             except Exception as e:
-                self.send_message(f"⚠️ Failed to remove {target_ticker}: {e}", chat_id)
+                self.send_message(f"⚠️ Failed to remove {tg_safe(target_ticker)}: {tg_safe(e)}", chat_id)
 
         elif base_cmd.startswith("/"):
-            unrecog = parts[0]
+            unrecog = tg_safe(parts[0])
             self.send_message(
                 f"⚠️ <b>Unrecognized Command:</b> <code>{unrecog}</code>\n\n"
                 f"• <b>Stock Deep Dive:</b> Send <code>/&lt;ticker&gt;</code> (e.g. <code>/NVDA</code>, <code>/AAPL</code>, <code>/TSLA</code>)\n"

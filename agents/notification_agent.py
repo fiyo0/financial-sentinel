@@ -3,7 +3,10 @@ Notification Agent: Synthesizes executive briefings, categorizes alerts by prior
 and dispatches them across all configured channels (Telegram, Discord, Slack, Email, Webhook).
 """
 import uuid
+import logging
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 from zoneinfo import ZoneInfo
 from typing import List, Any, Optional
 from models import (
@@ -86,7 +89,7 @@ class NotificationAgent(BaseAgent):
 
         report = BriefingReport(
             report_id=f"rep_{uuid.uuid4().hex[:8]}",
-            generated_at=datetime.utcnow(),
+            generated_at=datetime.now(timezone.utc),
             executive_summary=exec_summary,
             total_holdings_monitored=total_holdings_monitored,
             portfolio_stress=portfolio_stress,
@@ -105,60 +108,75 @@ class NotificationAgent(BaseAgent):
 
         # 1. Telegram
         if self.telegram.is_configured():
-            tg_msg = self.format_telegram_message(report)
-            if self.telegram.send_message(tg_msg):
-                dispatched.append("Telegram")
+            try:
+                tg_msg = self.format_telegram_message(report)
+                if self.telegram.send_message(tg_msg):
+                    dispatched.append("Telegram")
+            except Exception as e:
+                logger.error("Failed dispatching briefing to Telegram: %s", e)
 
         # 2. Discord
         if self.discord.is_configured():
-            color = 0xE74C3C if report.critical_risk_alerts else 0x2ECC71
-            fields = []
-            if report.critical_risk_alerts:
-                fields.append({
-                    "name": "🚨 Critical Risk Alerts",
-                    "value": "\n".join([f"• **{r.holding_ticker}**: {r.rationale[:120]}" for r in report.critical_risk_alerts[:3]])
-                })
-            if report.top_opportunities:
-                fields.append({
-                    "name": "🟢 Alpha Opportunities",
-                    "value": "\n".join([f"• **{o.ticker}** ({o.theme}): +{o.estimated_upside_pct}% target" for o in report.top_opportunities[:3]])
-                })
-            if self.discord.send_embed(
-                title=f"📊 Financial Sentinel Briefing — {_format_pst_timestamp(report.generated_at, '%b %d, %I:%M %p %Z')}",
-                description=report.executive_summary,
-                color=color,
-                fields=fields
-            ):
-                dispatched.append("Discord")
+            try:
+                color = 0xE74C3C if report.critical_risk_alerts else 0x2ECC71
+                fields = []
+                if report.critical_risk_alerts:
+                    fields.append({
+                        "name": "🚨 Critical Risk Alerts",
+                        "value": "\n".join([f"• **{r.holding_ticker}**: {r.rationale[:120]}" for r in report.critical_risk_alerts[:3]])
+                    })
+                if report.top_opportunities:
+                    fields.append({
+                        "name": "🟢 Alpha Opportunities",
+                        "value": "\n".join([f"• **{o.ticker}** ({o.theme}): +{o.estimated_upside_pct}% target" for o in report.top_opportunities[:3]])
+                    })
+                if self.discord.send_embed(
+                    title=f"📊 Financial Sentinel Briefing — {_format_pst_timestamp(report.generated_at, '%b %d, %I:%M %p %Z')}",
+                    description=report.executive_summary,
+                    color=color,
+                    fields=fields
+                ):
+                    dispatched.append("Discord")
+            except Exception as e:
+                logger.error("Failed dispatching briefing to Discord: %s", e)
 
         # 3. Slack
         if self.slack.is_configured():
-            blocks = [
-                {
-                    "type": "header",
-                    "text": {"type": "plain_text", "text": "📊 Financial Sentinel Briefing"}
-                },
-                {
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": report.executive_summary}
-                }
-            ]
-            if self.slack.send_blocks("Financial Sentinel Alert", blocks):
-                dispatched.append("Slack")
+            try:
+                blocks = [
+                    {
+                        "type": "header",
+                        "text": {"type": "plain_text", "text": "📊 Financial Sentinel Briefing"}
+                    },
+                    {
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": report.executive_summary}
+                    }
+                ]
+                if self.slack.send_blocks("Financial Sentinel Alert", blocks):
+                    dispatched.append("Slack")
+            except Exception as e:
+                logger.error("Failed dispatching briefing to Slack: %s", e)
 
         # 4. Email
         if self.email.is_configured():
-            html = self.format_html_email(report)
-            if self.email.send_email(
-                subject=f"Financial Sentinel Briefing: {len(report.critical_risk_alerts)} Critical / {len(report.top_opportunities)} Opps",
-                html_body=html
-            ):
-                dispatched.append("Email")
+            try:
+                html = self.format_html_email(report)
+                if self.email.send_email(
+                    subject=f"Financial Sentinel Briefing: {len(report.critical_risk_alerts)} Critical / {len(report.top_opportunities)} Opps",
+                    html_body=html
+                ):
+                    dispatched.append("Email")
+            except Exception as e:
+                logger.error("Failed dispatching briefing to Email: %s", e)
 
         # 5. Generic Webhook
         if self.webhook.is_configured():
-            if self.webhook.send_payload("financial_briefing", report.model_dump()):
-                dispatched.append("Webhook")
+            try:
+                if self.webhook.send_payload("financial_briefing", report.model_dump()):
+                    dispatched.append("Webhook")
+            except Exception as e:
+                logger.error("Failed dispatching briefing to Webhook: %s", e)
 
         report.dispatched_channels = dispatched
         return dispatched

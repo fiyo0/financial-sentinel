@@ -226,26 +226,36 @@ def _fetch_historical_bars(ticker: str, force_fresh: bool = False) -> List[Dict[
         resp = httpx.get(y_url, headers=headers, timeout=5.0)
         if resp.status_code == 200:
             data = resp.json()
-            result = data.get("chart", {}).get("result", [{}])[0]
-            quotes = result.get("indicators", {}).get("quote", [{}])[0]
-            closes = quotes.get("close", [])
-            highs = quotes.get("high", [])
-            lows = quotes.get("low", [])
-            opens = quotes.get("open", [])
-            volumes = quotes.get("volume", [])
+            chart = data.get("chart") if isinstance(data, dict) else None
+            result_list = chart.get("result") if isinstance(chart, dict) else None
+            if not result_list or not isinstance(result_list, list) or len(result_list) == 0 or not isinstance(result_list[0], dict):
+                logger.debug("Yahoo historicals result invalid for %s: %s", clean_ticker, chart.get("error") if isinstance(chart, dict) else None)
+            else:
+                result = result_list[0]
+                indicators = result.get("indicators") if isinstance(result, dict) else None
+                quote_list = indicators.get("quote") if isinstance(indicators, dict) else None
+                if not quote_list or not isinstance(quote_list, list) or len(quote_list) == 0 or not isinstance(quote_list[0], dict):
+                    logger.debug("Yahoo historicals quotes missing for %s", clean_ticker)
+                else:
+                    quotes = quote_list[0]
+                    closes = quotes.get("close", [])
+                    highs = quotes.get("high", [])
+                    lows = quotes.get("low", [])
+                    opens = quotes.get("open", [])
+                    volumes = quotes.get("volume", [])
 
-            bars = []
-            for i in range(len(closes)):
-                c = closes[i]
-                if c is not None and c > 0:
-                    bars.append({
-                        "date": str(i),
-                        "close": float(c),
-                        "high": float(highs[i] if i < len(highs) and highs[i] else c),
-                        "low": float(lows[i] if i < len(lows) and lows[i] else c),
-                        "open": float(opens[i] if i < len(opens) and opens[i] else c),
-                        "volume": int(volumes[i] if i < len(volumes) and volumes[i] else 0)
-                    })
+                    bars = []
+                    for i in range(len(closes)):
+                        c = closes[i]
+                        if c is not None and c > 0:
+                            bars.append({
+                                "date": str(i),
+                                "close": float(c),
+                                "high": float(highs[i] if i < len(highs) and highs[i] else c),
+                                "low": float(lows[i] if i < len(lows) and lows[i] else c),
+                                "open": float(opens[i] if i < len(opens) and opens[i] else c),
+                                "volume": int(volumes[i] if i < len(volumes) and volumes[i] else 0)
+                            })
             if len(bars) >= 20:
                 BARS_CACHE[clean_ticker] = (now, bars)
                 cache_manager.set("bars", clean_ticker, bars, ttl_seconds=BARS_CACHE_TTL_SECONDS)
@@ -411,23 +421,31 @@ def compute_technical_snapshot(ticker: str, custom_bars: Optional[List[Dict[str,
         raw_upper = mean_20 + 2.0 * std_20
         raw_lower = mean_20 - 2.0 * std_20
         raw_range = raw_upper - raw_lower
-        raw_pct_b = (current_price - raw_lower) / raw_range if raw_range > 1e-9 else 0.5
-        raw_bandwidth = (raw_range / mean_20) * 100.0 if mean_20 > 1e-9 else 0.0
+        if raw_range > 1e-9:
+            raw_pct_b = (current_price - raw_lower) / raw_range
+            raw_bandwidth = (raw_range / mean_20) * 100.0 if mean_20 > 1e-9 else 0.0
 
-        bollinger_upper = round(raw_upper, 2)
-        bollinger_lower = round(raw_lower, 2)
-        bollinger_middle = round(mean_20, 2)
-        bollinger_pct_b = round(raw_pct_b, 2)
-        bollinger_bandwidth = round(raw_bandwidth, 2)
+            bollinger_upper = round(raw_upper, 2)
+            bollinger_lower = round(raw_lower, 2)
+            bollinger_middle = round(mean_20, 2)
+            bollinger_pct_b = round(raw_pct_b, 2)
+            bollinger_bandwidth = round(raw_bandwidth, 2)
 
-        if current_price >= raw_upper:
-            bollinger_status = "UPPER_BAND_EXTENDED"
-        elif current_price <= raw_lower:
-            bollinger_status = "LOWER_BAND_EXTENDED"
-        elif raw_bandwidth < 4.5:
-            bollinger_status = "VOLATILITY_SQUEEZE"
+            if current_price >= raw_upper:
+                bollinger_status = "UPPER_BAND_EXTENDED"
+            elif current_price <= raw_lower:
+                bollinger_status = "LOWER_BAND_EXTENDED"
+            elif raw_bandwidth < 4.5:
+                bollinger_status = "VOLATILITY_SQUEEZE"
+            else:
+                bollinger_status = "NORMAL"
         else:
-            bollinger_status = "NORMAL"
+            bollinger_upper = round(raw_upper, 2)
+            bollinger_lower = round(raw_lower, 2)
+            bollinger_middle = round(mean_20, 2)
+            bollinger_pct_b = 0.5
+            bollinger_bandwidth = 0.0
+            bollinger_status = "FLATLINE_NO_VOLATILITY"
     else:
         bollinger_upper = None
         bollinger_middle = None
