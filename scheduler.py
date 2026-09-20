@@ -15,6 +15,7 @@ from orchestrator import FinancialSentinelOrchestrator
 from models import Portfolio
 from agents.market_briefing_agent import MarketBriefingAgent
 from analytics.market_data import fetch_market_overview, fetch_market_movers, update_portfolio_live_prices
+from analytics.market_calendar import is_market_holiday
 from channels.telegram import TelegramChannel
 from config import config
 
@@ -83,7 +84,13 @@ class DailyMarketScheduler:
         """
         now_pst = datetime.now(self.tz)
         date_str = now_pst.strftime("%Y-%m-%d")
+        today_date = now_pst.date()
         slot_key = f"{date_str}_{slot}"
+
+        # Suppress intraday market briefings on official market holidays unless explicitly forced
+        if slot in ("premarket", "midmarket", "postmarket") and not force and is_market_holiday(today_date):
+            logger.info(f"Skipping {slot} briefing on market holiday {date_str} (NYSE closed).")
+            return f"Skipped {slot} briefing on market holiday {date_str} (NYSE closed)."
 
         # Deduplicate automated scheduled cron triggers to avoid double-pushing
         if not user_id and not force:
@@ -250,8 +257,12 @@ class DailyMarketScheduler:
                 weekday = now_pst.weekday()  # 0=Mon, 4=Fri, 5=Sat, 6=Sun
                 date_str = now_pst.strftime("%Y-%m-%d")
 
-                # Weekday Schedule (Mon-Fri)
-                if weekday < 5:
+                today_date = now_pst.date()
+                is_holiday = is_market_holiday(today_date)
+                is_weekend = weekday >= 5
+
+                # Active Trading Day Schedule (Mon-Fri and NOT an official market holiday)
+                if not is_weekend and not is_holiday:
                     # 1. 06:30 AM PST: Pre-Market (30-min grace window: 06:30 - 07:15)
                     if (hour == 6 and minute >= 30) or (hour == 7 and minute <= 15):
                         slot_key = f"{date_str}_premarket"
@@ -276,13 +287,14 @@ class DailyMarketScheduler:
                             self.execute_briefing("postmarket")
                             self._mark_slot_executed(slot_key)
 
-                # Weekend Schedule (Sat & Sun)
+                # Non-Trading Day Schedule (Weekend OR Market Holiday)
                 else:
-                    # 4. 09:00 PM PST (21:00): Weekend EOD (45-min grace window: 21:00 - 21:45)
+                    # 4. 09:00 PM PST (21:00): Weekend / Holiday EOD (45-min grace window: 21:00 - 21:45)
                     if hour == 21 and minute <= 45:
                         slot_key = f"{date_str}_weekend"
                         if slot_key not in self._executed_slots:
-                            logger.info("Triggering 9:00 PM PST Weekend Briefing...")
+                            slot_desc = "Holiday" if is_holiday else "Weekend"
+                            logger.info(f"Triggering 9:00 PM PST {slot_desc} Briefing...")
                             self.execute_briefing("weekend")
                             self._mark_slot_executed(slot_key)
 

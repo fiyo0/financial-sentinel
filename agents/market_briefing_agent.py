@@ -10,6 +10,7 @@ import logging
 from agents.base_agent import BaseAgent
 from models import Portfolio, NewsItem, NewsCategory
 from analytics.economic_calendar import get_economic_calendar_context, format_economic_calendar_for_prompt
+from analytics.market_calendar import is_market_holiday, get_next_trading_day
 
 logger = logging.getLogger(__name__)
 
@@ -482,42 +483,67 @@ class MarketBriefingAgent(BaseAgent):
         movers_context = self._extract_significant_portfolio_movers(portfolio, news_items, threshold_pct=1.5)
         news_str = self._format_news_summary(news_items, as_of=as_of_pst)
 
+        today_ref = as_of_pst.date()
+        is_holiday = is_market_holiday(today_ref)
+        is_weekend = as_of_pst.weekday() >= 5
+        next_trading_day = get_next_trading_day(today_ref)
+        next_session_str = next_trading_day.strftime('%A, %B %d, %Y')
+
+        if is_holiday and not is_weekend:
+            role_desc = "9:00 PM PST HOLIDAY MACRO & NEXT-SESSION BRIEFING"
+            header_title = "HOLIDAY MACRO & NEXT-SESSION PREVIEW (9:00 PM PST)"
+            session_phase = f"Market Holiday (NYSE Closed) / Next Trading Session: {next_session_str}"
+            macro_title = "Holiday Macro & Overnight Futures Sentiment"
+            slot_label = "Holiday"
+        elif is_holiday and is_weekend:
+            role_desc = "9:00 PM PST WEEKEND & HOLIDAY MACRO BRIEFING"
+            header_title = "WEEKEND & HOLIDAY MACRO PREVIEW (9:00 PM PST)"
+            session_phase = f"Long Weekend / Next Trading Session: {next_session_str}"
+            macro_title = "Weekend & Holiday Macro Sentiment"
+            slot_label = "Weekend & Holiday"
+        else:
+            role_desc = "9:00 PM PST WEEKEND MACRO & WEEK-AHEAD BRIEFING"
+            header_title = "WEEKEND MACRO & WEEK-AHEAD PREVIEW (9:00 PM PST)"
+            session_phase = f"Weekend Transition / Week-Ahead Setup (Next Session: {next_session_str})"
+            macro_title = "Weekend Macro & Sunday Sentiment"
+            slot_label = "Weekend"
+
         prompt = f"""
-        You are a seasoned Chief Investment Officer delivering the 9:00 PM PST WEEKEND MACRO & WEEK-AHEAD BRIEFING.
+        You are a seasoned Chief Investment Officer delivering the {role_desc}.
 
         {BRIEFING_COMMUNICATION_RULES}
 
         CURRENT TIME & SESSION GROUND TRUTH:
         • Calendar Date: {as_of_pst.strftime('%A, %B %d, %Y')}
         • Current Time: {as_of_pst.strftime('%I:%M %p %Z')} / {as_of_et.strftime('%I:%M %p %Z')}
-
-        • Session Phase: Weekend Transition / Week-Ahead Setup
+        • Next NYSE Trading Session: {next_session_str}
+        • Session Phase: {session_phase}
 
         {economic_str}
 
-        WEEKEND GLOBAL NEWS & MACRO DEVELOPMENTS:
+        GLOBAL NEWS & MACRO DEVELOPMENTS:
         {news_str}
 
         INVESTOR'S PORTFOLIO STATUS:
         {movers_context}
 
         TASK:
-        Generate a thoughtful, forward-looking weekend executive briefing in clean Telegram HTML format (use <b>, <i>, <code>).
+        Generate a thoughtful, forward-looking evening executive briefing in clean Telegram HTML format (use <b>, <i>, <code>).
 
         Structure the message with these exact sections:
-        🌟 <b>WEEKEND MACRO & WEEK-AHEAD PREVIEW (9:00 PM PST)</b>
+        🌟 <b>{header_title}</b>
 
-        🌍 <b>Weekend Macro & Sunday Sentiment:</b>
-        - Weekend global news, geopolitical updates, commodity/crypto moves, and initial Sunday futures sentiment.
+        🌍 <b>{macro_title}:</b>
+        - Global macro news, geopolitical updates, commodity/crypto moves, and overnight/futures sentiment heading into the next session ({next_session_str}).
 
-        📅 <b>The Week Ahead Catalyst Calendar:</b>
-        - Key upcoming CPI/PPI, Fed speaker events, and major earnings releases to anticipate this week.
+        📅 <b>The Catalyst Calendar Ahead:</b>
+        - Key upcoming CPI/PPI, Fed speaker events, and major earnings releases to anticipate heading into the next trading session.
 
-        💼 <b>Portfolio Week-Ahead Exposure:</b>
-        - If any portfolio holdings have major scheduled earnings or direct catalyst events this week, mention ONLY those specific holdings. Otherwise, provide a 1-line note confirming a balanced posture.
+        💼 <b>Portfolio Exposure Ahead:</b>
+        - If any portfolio holdings have major scheduled earnings or direct catalyst events ahead, mention ONLY those specific holdings. Otherwise, provide a 1-line note confirming a balanced posture.
 
         💡 <b>Secular Opportunities & Themes:</b>
-        - 1-2 secular themes or high-conviction investment ideas to watch as markets open. Prioritize companies with durable moats, proven cash generation, or recent positive analyst revisions.
+        - 1-2 secular themes or high-conviction investment ideas to watch as markets reopen. Prioritize companies with durable moats, proven cash generation, or recent positive analyst revisions.
 
         Keep it forward-looking, disciplined, grounded, and styled with clean HTML. Avoid unwarranted puffery or false profundity.
         """
@@ -525,7 +551,7 @@ class MarketBriefingAgent(BaseAgent):
         effective_key = api_key or self.api_key
         if not effective_key:
             return (
-                "🔒 <b>Weekend Briefing Paused:</b> Gemini API key is missing.\n\n"
+                f"🔒 <b>{slot_label} Briefing Paused:</b> Gemini API key is missing.\n\n"
                 "Please configure your Gemini API key in Settings to activate automated scheduled AI briefings."
             )
 
@@ -534,7 +560,7 @@ class MarketBriefingAgent(BaseAgent):
             return res.strip()
 
         return (
-            "⚠️ <b>AI Briefing Generation Unavailable:</b> Gemini was unable to generate the Weekend Preview at this time.\n\n"
+            f"⚠️ <b>AI Briefing Generation Unavailable:</b> Gemini was unable to generate the {slot_label} Preview at this time.\n\n"
             "Please check network connectivity or your Gemini API quota."
         )
 

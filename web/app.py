@@ -12,6 +12,7 @@ import secrets
 import re
 import sqlite3
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Dict, Any, Optional, List
 
 
@@ -64,6 +65,7 @@ from services import (
     AnalysisService,
     BriefingService,
 )
+from analytics.market_calendar import is_market_holiday
 
 orchestrator = FinancialSentinelOrchestrator()
 daily_scheduler = DailyMarketScheduler(
@@ -1264,6 +1266,18 @@ async def api_trigger_scheduled_briefing(slot: str, force: bool = False, caller:
         raise HTTPException(status_code=400, detail="Invalid slot. Choose premarket, midmarket, postmarket, weekend, or earnings.")
 
     target_user_id = caller.get("id") if caller.get("id") != "cron_scheduler" else None
+
+    # Check for market holiday suppression on unforced intraday slots
+    if slot in ("premarket", "midmarket", "postmarket") and not force:
+        now_et = datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York"))
+        if is_market_holiday(now_et.date()):
+            return {
+                "status": "skipped",
+                "slot": slot,
+                "message": f"Market holiday today ({now_et.date()}, NYSE closed). Intraday briefings suppressed in favor of 9:00 PM evening wrap. Pass force=true to override.",
+                "preview": ""
+            }
+
     msg = await asyncio.to_thread(briefing_service.generate_briefing, slot, target_user_id, None, True, force)
     return {
         "status": "success",
@@ -1293,10 +1307,10 @@ SLOT_METADATA = {
         "desc": "Closing bell summary, after-hours earnings call takeaways, top gainers/losers, and tomorrow's watchlist."
     },
     "weekend": {
-        "title": "Weekend Macro & Week-Ahead Preview",
+        "title": "Weekend & Holiday Macro Wrap",
         "icon": "🌟",
-        "schedule": "9:00 PM PST (Sun)",
-        "desc": "Weekend geopolitics, Sunday futures sentiment, macro calendar, and secular opportunities."
+        "schedule": "9:00 PM PST (Sun & Holidays)",
+        "desc": "Global macro & geopolitics, holiday & weekend futures sentiment, macro calendar, and next-session setup."
     },
     "earnings": {
         "title": "7-Day Corporate Earnings Outlook",

@@ -3,11 +3,14 @@ Unit tests for MarketBriefingAgent and DailyMarketScheduler.
 """
 import pytest
 from datetime import datetime
+from freezegun import freeze_time
 from zoneinfo import ZoneInfo
 from models import Portfolio, PortfolioHolding, NewsItem, NewsCategory
 from agents.market_briefing_agent import MarketBriefingAgent
 from scheduler import DailyMarketScheduler
 from analytics.market_data import fetch_market_overview, fetch_market_movers
+from starlette.testclient import TestClient
+from web.app import app
 
 
 @pytest.fixture
@@ -205,5 +208,80 @@ def test_briefing_deduplication_and_pruning(sample_portfolio):
     # Prune should delete duplicate rows from SQLite table
     pruned = store.prune_briefings(retention_days=30)
     assert pruned >= 1
+
+
+@freeze_time("2026-09-07 13:30:00")  # Monday Labor Day 06:30 AM PDT
+def test_holiday_intraday_briefings_suppressed(sample_portfolio, monkeypatch):
+    """On an official NYSE holiday, intraday premarket is suppressed unless explicitly forced."""
+    scheduler = DailyMarketScheduler(portfolio_loader=lambda: sample_portfolio)
+    called = []
+    monkeypatch.setattr(scheduler.briefing_agent, "generate_premarket_briefing", lambda *a, **kw: called.append("premarket") or "mock_premarket")
+
+    # 1. Unforced premarket trigger on holiday should be skipped
+    res = scheduler.execute_briefing("premarket", force=False)
+    assert "Skipped premarket briefing on market holiday" in res
+    assert "NYSE closed" in res
+    assert len(called) == 0
+
+    # 2. Forced premarket trigger should proceed
+    res_forced = scheduler.execute_briefing("premarket", force=True)
+    assert res_forced == "mock_premarket"
+    assert len(called) == 1
+
+
+@freeze_time("2026-09-08 04:00:00")  # Monday Labor Day 09:00 PM PDT
+def test_holiday_evening_briefing_executed(sample_portfolio, monkeypatch):
+    """On an official NYSE holiday, the evening 9:00 PM briefing executes with holiday context and next-session setup."""
+    scheduler = DailyMarketScheduler(portfolio_loader=lambda: sample_portfolio)
+    scheduler._executed_slots.clear()
+    scheduler.orchestrator.state_store.set_kv("executed_schedule_slots", [])
+    captured_prompts = []
+
+    def mock_query(prompt, *args, **kwargs):
+        captured_prompts.append(prompt)
+        return "🌟 <b>HOLIDAY MACRO & NEXT-SESSION PREVIEW (9:00 PM PST)</b>\n- Overnight futures firm."
+
+    monkeypatch.setattr(scheduler.briefing_agent, "query_llm_text", mock_query)
+
+    # Executing weekend slot on Monday Labor Day
+    res = scheduler.execute_briefing("weekend", force=False)
+    assert "HOLIDAY MACRO & NEXT-SESSION PREVIEW" in res
+    assert len(captured_prompts) == 1
+    prompt = captured_prompts[0]
+    assert "HOLIDAY MACRO & NEXT-SESSION" in prompt
+    assert "Market Holiday (NYSE Closed)" in prompt
+    assert "Tuesday, September 08, 2026" in prompt
+
+
+@freeze_time("2026-09-07 13:30:00")  # Monday Labor Day 06:30 AM PDT / 09:30 AM EDT
+def test_api_trigger_holiday_skip(monkeypatch):
+    """The /api/schedule/trigger/{slot} endpoint skips unforced intraday slots on holidays."""
+    from config import config
+
+    monkeypatch.setattr(config, "dashboard_auth_enabled", True)
+    monkeypatch.setattr(config, "cron_secret", "test_cron_secret")
+
+    client = TestClient(app)
+    # 1. Unforced premarket on Labor Day -> skipped
+    resp = client.post(
+        "/api/schedule/trigger/premarket",
+        headers={"X-Cron-Secret": "test_cron_secret"}
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "skipped"
+    assert "Market holiday today" in data["message"]
+
+    # 2. Forced premarket on Labor Day -> success
+    monkeypatch.setattr("web.app.briefing_service.generate_briefing", lambda *a, **kw: "Forced premarket text")
+    resp_forced = client.post(
+        "/api/schedule/trigger/premarket?force=true",
+        headers={"X-Cron-Secret": "test_cron_secret"}
+    )
+    assert resp_forced.status_code == 200
+    data_forced = resp_forced.json()
+    assert data_forced["status"] == "success"
+
+
 
 
