@@ -52,6 +52,64 @@ def compute_empirical_beta(asset_returns: List[float], benchmark_returns: List[f
     return round(cov / var_bm, 3)
 
 
+def align_daily_bars_by_date(
+    bars_by_ticker: Dict[str, List[Dict[str, Any]]],
+    tickers: List[str]
+) -> Tuple[List[str], Dict[str, List[float]]]:
+    """
+    Performs an inner-join across daily price bars by date YYYY-MM-DD.
+    If bars lack date keys (e.g. synthetic test bars), falls back to positional alignment.
+    Returns (sorted_common_dates, {ticker: list_of_aligned_closing_prices}).
+    """
+    if isinstance(bars_by_ticker, (list, tuple, set)) and isinstance(tickers, dict):
+        bars_by_ticker, tickers = tickers, list(bars_by_ticker)
+
+    if not tickers:
+        return [], {}
+
+    has_dates = all(
+        all(bool(b.get("date")) for b in bars_by_ticker.get(t, []))
+        for t in tickers if bars_by_ticker.get(t)
+    )
+
+    if not has_dates:
+        valid_lens = [len(bars_by_ticker.get(t, [])) for t in tickers if bars_by_ticker.get(t)]
+        if not valid_lens:
+            return [], {t: [] for t in tickers}
+        min_len = min(valid_lens)
+        dates = [str(i) for i in range(min_len)]
+        aligned = {
+            t: [float(b["close"]) for b in bars_by_ticker.get(t, [])[-min_len:]]
+            for t in tickers
+        }
+        return dates, aligned
+
+    dates_sets = []
+    close_by_date: Dict[str, Dict[str, float]] = {}
+    for t in tickers:
+        bars = bars_by_ticker.get(t, [])
+        t_dict = {}
+        for b in bars:
+            d = str(b.get("date") or "")[:10]
+            c = float(b.get("close") or 0.0)
+            if d and c > 0:
+                t_dict[d] = c
+        close_by_date[t] = t_dict
+        dates_sets.append(set(t_dict.keys()))
+
+    if not dates_sets:
+        return [], {}
+
+    common_dates = set.intersection(*dates_sets)
+    sorted_dates = sorted(list(common_dates))
+
+    aligned_closes = {
+        t: [close_by_date[t][d] for d in sorted_dates]
+        for t in tickers
+    }
+    return sorted_dates, aligned_closes
+
+
 class QuantRiskEngine:
     def __init__(self, max_sector_threshold_pct: float = 35.0):
         self.max_sector_threshold_pct = max_sector_threshold_pct
@@ -80,16 +138,19 @@ class QuantRiskEngine:
                 t_bars = fetch_historical_bars(clean_ticker)
                 bm_bars = fetch_historical_bars(benchmark)
 
-            if t_bars and bm_bars and len(t_bars) >= 15 and len(bm_bars) >= 15:
-                n = min(len(t_bars), len(bm_bars), 90)
-                t_closes = [float(b["close"]) for b in t_bars[-n:]]
-                bm_closes = [float(b["close"]) for b in bm_bars[-n:]]
-                r_asset = compute_daily_log_returns(t_closes)
-                r_bm = compute_daily_log_returns(bm_closes)
-                if len(r_asset) >= 10 and len(r_bm) >= 10:
-                    emp_beta = compute_empirical_beta(r_asset, r_bm)
-                    if emp_beta is not None:
-                        return emp_beta
+            if t_bars and bm_bars:
+                bars_map = {clean_ticker: t_bars, benchmark.upper(): bm_bars}
+                common_dates, aligned = align_daily_bars_by_date(bars_map, [clean_ticker, benchmark.upper()])
+                if len(common_dates) >= 15:
+                    window_dates = common_dates[-90:]
+                    t_closes = aligned[clean_ticker][-len(window_dates):]
+                    bm_closes = aligned[benchmark.upper()][-len(window_dates):]
+                    r_asset = compute_daily_log_returns(t_closes)
+                    r_bm = compute_daily_log_returns(bm_closes)
+                    if len(r_asset) >= 10 and len(r_bm) >= 10:
+                        emp_beta = compute_empirical_beta(r_asset, r_bm)
+                        if emp_beta is not None:
+                            return emp_beta
         except Exception as e:
             logger.debug("Empirical beta computation error for %s: %s", clean_ticker, e)
 
@@ -165,8 +226,15 @@ class QuantRiskEngine:
         equity_tickers = [h.ticker.strip().upper() for h in portfolio.holdings]
         valid_bar_tickers = [t for t in equity_tickers if t in bars_by_ticker and len(bars_by_ticker[t]) >= 15]
 
-        # Are empirical calculations possible?
-        use_empirical = len(valid_bar_tickers) == len(equity_tickers) and len(equity_tickers) > 0
+        # Align daily bars by date across all portfolio holdings + benchmark
+        bm_sym = benchmark_ticker.upper()
+        tickers_to_align = list(valid_bar_tickers)
+        has_bm_bars = bm_sym in bars_by_ticker and len(bars_by_ticker[bm_sym]) >= 15
+        if has_bm_bars and bm_sym not in tickers_to_align:
+            tickers_to_align.append(bm_sym)
+
+        common_dates, aligned_closes = align_daily_bars_by_date(bars_by_ticker, tickers_to_align)
+        use_empirical = len(valid_bar_tickers) == len(equity_tickers) and len(equity_tickers) > 0 and len(common_dates) >= 15
 
         covariance_matrix: Dict[str, Dict[str, float]] = {}
         empirical_betas: Dict[str, float] = {}
@@ -177,21 +245,17 @@ class QuantRiskEngine:
 
         if use_empirical:
             # Determine common sample length N (up to 90 trading days)
-            min_len = min([len(bars_by_ticker[t]) for t in valid_bar_tickers])
-            if benchmark_ticker.upper() in bars_by_ticker and len(bars_by_ticker[benchmark_ticker.upper()]) >= 15:
-                min_len = min(min_len, len(bars_by_ticker[benchmark_ticker.upper()]))
-            window_n = min(min_len, 90)
+            window_dates = common_dates[-90:]
 
             # Extract aligned closing prices and compute daily log returns
             returns_by_ticker: Dict[str, List[float]] = {}
             for t in valid_bar_tickers:
-                closes = [float(b["close"]) for b in bars_by_ticker[t][-window_n:]]
+                closes = aligned_closes[t][-len(window_dates):]
                 returns_by_ticker[t] = compute_daily_log_returns(closes)
 
-            bm_sym = benchmark_ticker.upper()
             bm_returns: List[float] = []
-            if bm_sym in bars_by_ticker and len(bars_by_ticker[bm_sym]) >= window_n:
-                bm_closes = [float(b["close"]) for b in bars_by_ticker[bm_sym][-window_n:]]
+            if has_bm_bars:
+                bm_closes = aligned_closes[bm_sym][-len(window_dates):]
                 bm_returns = compute_daily_log_returns(bm_closes)
 
             n_returns = len(next(iter(returns_by_ticker.values())))
@@ -477,8 +541,14 @@ def apply_data_quality_ceiling(
     tech_unavailable = list(missing_technical_fields or [])
     if tech_snapshot is not None:
         unavail = getattr(tech_snapshot, "fields_unavailable", None)
-        if isinstance(unavail, list):
+        if unavail is None and getattr(tech_snapshot, "provenance", None):
+            unavail = getattr(tech_snapshot.provenance, "fields_unavailable", None)
+        if isinstance(unavail, (list, tuple)):
             tech_unavailable.extend(unavail)
+        if not getattr(tech_snapshot, "is_live", True):
+            tech_unavailable.append("is_live=False")
+        if getattr(tech_snapshot, "error", None):
+            tech_unavailable.append(str(tech_snapshot.error))
         has_macd = getattr(tech_snapshot, "macd_line", None) is not None or getattr(tech_snapshot, "macd", None) is not None
         if not has_macd:
             tech_unavailable.append("macd")
@@ -489,7 +559,7 @@ def apply_data_quality_ceiling(
 
     missing_core_tech = any(
         k in " ".join(tech_unavailable).lower()
-        for k in ["rsi", "macd", "atr"]
+        for k in ["rsi", "macd", "atr", "insufficient"]
     )
     if missing_core_tech:
         if capped_conviction > 55.0:
@@ -497,10 +567,15 @@ def apply_data_quality_ceiling(
             reasons.append("Capped conviction at 55.0% due to missing or degraded technical indicators (RSI-14/MACD/ATR-14).")
 
     # Check macro / stress metrics
-    if stress_metrics is None:
+    missing_stress = (
+        stress_metrics is None
+        or getattr(stress_metrics, "estimated_portfolio_beta", None) is None
+        or bool(getattr(stress_metrics, "fields_unavailable", None))
+    )
+    if missing_stress:
         if capped_conviction > 75.0:
             capped_conviction = 75.0
-            reasons.append("Capped conviction at 75.0% due to missing portfolio stress/macro risk metrics.")
+            reasons.append("Capped conviction at 75.0% due to missing or degraded portfolio stress/macro risk metrics.")
 
     return round(capped_conviction, 1), reasons
 
@@ -544,10 +619,13 @@ def compute_deterministic_position_size(
     equity_cap_usd = portfolio_equity * (max_position_pct / 100.0)
     capped_target_usd = min(raw_target_usd, equity_cap_usd)
 
-    # Cash constraint
+    # Cash constraint: clamp unconditionally (even when cash is $0.00)
     cash_cap_usd = max(0.0, float(portfolio_cash))
-    if cash_cap_usd > 0:
-        capped_target_usd = min(capped_target_usd, cash_cap_usd)
+    capped_target_usd = min(capped_target_usd, cash_cap_usd)
+
+    # Sub-50% conviction cutoff: zero capital allocated to low-conviction/avoid assets
+    if conviction_pct < 50.0:
+        capped_target_usd = 0.0
 
     # ADV turnover liquidity constraints (1% median ADV 30d turnover)
     adv_constraints = compute_adv_liquidity_constraints(

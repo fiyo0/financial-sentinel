@@ -117,3 +117,36 @@ def test_fetch_historical_bars_robinhood_mock(mock_get):
     bars = _fetch_historical_bars("AAPL")
     assert len(bars) == 30
     assert bars[0]["close"] == 150.0
+
+
+def test_t3_1_rsi_14_bars_returns_none_15_bars_computes():
+    """T3.1: 14 bars yields 13 deltas (insufficient for RSI-14 -> None); 15 bars yields 14 deltas -> computes float."""
+    bars_14 = generate_bars(n=14, start_price=100.0, trend=1.0)
+    snap_14 = compute_technical_snapshot("TEST_14", custom_bars=bars_14)
+    assert snap_14.rsi_14 is None
+    assert "rsi_14" in snap_14.provenance.fields_unavailable
+
+    bars_15 = generate_bars(n=15, start_price=100.0, trend=1.0)
+    snap_15 = compute_technical_snapshot("TEST_15", custom_bars=bars_15)
+    assert snap_15.rsi_14 is not None
+    assert isinstance(snap_15.rsi_14, float)
+    assert "rsi_14" not in snap_15.provenance.fields_unavailable
+
+
+@patch("httpx.get")
+def test_t5_2_yahoo_fallback_unbound_local_fixed(mock_get):
+    """T5.2: Yahoo fallback with malformed/empty payload returns [] without UnboundLocalError."""
+    # First call (Robinhood) fails with 500
+    # Second call (Yahoo) returns 200 with empty result
+    resp_rh = MagicMock()
+    resp_rh.status_code = 500
+
+    resp_yahoo = MagicMock()
+    resp_yahoo.status_code = 200
+    resp_yahoo.json.return_value = {"chart": {"result": [], "error": "Not found"}}
+
+    mock_get.side_effect = [resp_rh, resp_yahoo]
+
+    bars = _fetch_historical_bars("UNKNOWN_TICKER", force_fresh=True)
+    assert bars == []
+

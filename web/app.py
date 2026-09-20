@@ -13,9 +13,8 @@ import re
 import sqlite3
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
-from typing import Dict, Any, Optional, List
-
-
+from typing import Dict, Any, Optional, List, Set
+import threading
 import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
@@ -84,6 +83,17 @@ telegram_bot = FinancialSentinelTelegramBot(
     analysis_service=analysis_service,
     briefing_service=briefing_service,
 )
+
+# Concurrency guard: track active user scan tasks to prevent stampedes and race conditions
+_ACTIVE_SCANS: Set[str] = set()
+_ACTIVE_SCANS_LOCK = threading.Lock()
+
+
+def validate_ticker(ticker: str) -> str:
+    sym = (ticker or "").strip().upper().replace("$", "")
+    if not sym or len(sym) > 10 or not re.match(r"^[A-Z0-9\.\-]+$", sym):
+        raise ValueError(f"Invalid ticker symbol: '{ticker}'. Symbol must be 1-10 alphanumeric characters.")
+    return sym
 
 
 
@@ -740,10 +750,11 @@ async def api_add_holding_alias(holding: HoldingUpdateRequest, user: Dict[str, A
 async def api_update_holding(holding: HoldingUpdateRequest, user: Dict[str, Any] = Depends(require_user)):
     user_id = user["id"]
     try:
+        clean_ticker = validate_ticker(holding.ticker)
         res = await asyncio.to_thread(
             portfolio_service.add_or_update_holding,
             user_id=user_id,
-            ticker=holding.ticker,
+            ticker=clean_ticker,
             shares=holding.shares,
             price=holding.avg_price,
             name=holding.name,
@@ -766,13 +777,12 @@ async def api_delete_holding(request: Request, user: Dict[str, Any] = Depends(re
     user_id = user["id"]
     try:
         body = await request.json()
-        ticker = body.get("ticker", "").strip().upper()
-    except (ValueError, KeyError, sqlite3.Error) as e:
+        ticker = validate_ticker(body.get("ticker", ""))
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except (KeyError, sqlite3.Error) as e:
         logger.error("Failed to parse delete holding payload for user %s: %s", user_id, e)
         raise HTTPException(status_code=400, detail="Invalid payload")
-
-    if not ticker:
-        raise HTTPException(status_code=400, detail="Ticker is required")
 
     try:
         res = await asyncio.to_thread(
@@ -797,16 +807,27 @@ async def api_delete_holding(request: Request, user: Dict[str, Any] = Depends(re
 @app.post("/api/scan")
 async def api_trigger_scan(force_fresh: bool = False, user: Dict[str, Any] = Depends(require_user)):
     user_id = user["id"]
+
+    with _ACTIVE_SCANS_LOCK:
+        if user_id in _ACTIVE_SCANS:
+            raise HTTPException(
+                status_code=429,
+                detail="A scan is already in progress for your account. Please wait for it to complete."
+            )
+        _ACTIVE_SCANS.add(user_id)
+
     user_key = await asyncio.to_thread(orchestrator.resolve_user_api_key, user_id)
 
     if not user_key:
+        with _ACTIVE_SCANS_LOCK:
+            _ACTIVE_SCANS.discard(user_id)
         raise HTTPException(
             status_code=400,
             detail="Gemini API Key Required: Please configure GEMINI_API_KEY on the server or add your personal Gemini API key in Dashboard Settings."
         )
 
-    portfolio = await asyncio.to_thread(orchestrator.get_active_portfolio, user_id=user_id)
     try:
+        portfolio = await asyncio.to_thread(orchestrator.get_active_portfolio, user_id=user_id)
         briefing = await asyncio.to_thread(
             orchestrator.run_monitoring_cycle,
             portfolio=portfolio,
@@ -825,18 +846,30 @@ async def api_trigger_scan(force_fresh: bool = False, user: Dict[str, Any] = Dep
             "stress": briefing.portfolio_stress.model_dump() if briefing.portfolio_stress else None
         }
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Scan execution error: {str(e)}")
+        logger.error("Scan execution error for user %s: %s", user_id, e)
+        raise HTTPException(status_code=500, detail="Scan execution failed. Please check system logs.")
+    finally:
+        with _ACTIVE_SCANS_LOCK:
+            _ACTIVE_SCANS.discard(user_id)
 
 
 @app.get("/api/scan/stream")
 @app.post("/api/scan/stream")
 async def api_scan_stream(request: Request, force_fresh: bool = False, user: Dict[str, Any] = Depends(require_user)):
     user_id = user["id"]
+    with _ACTIVE_SCANS_LOCK:
+        if user_id in _ACTIVE_SCANS:
+            raise HTTPException(
+                status_code=429,
+                detail="A scan is already in progress for your account. Please wait for it to complete."
+            )
+        _ACTIVE_SCANS.add(user_id)
+
     user_key = await asyncio.to_thread(orchestrator.resolve_user_api_key, user_id)
 
     if not user_key:
+        with _ACTIVE_SCANS_LOCK:
+            _ACTIVE_SCANS.discard(user_id)
         raise HTTPException(
             status_code=400,
             detail="Gemini API Key Required: Please configure GEMINI_API_KEY on the server or add your personal Gemini API key in Dashboard Settings."
@@ -876,18 +909,23 @@ async def api_scan_stream(request: Request, force_fresh: bool = False, user: Dic
                     "stress": b.portfolio_stress.model_dump() if b.portfolio_stress else None
                 })
             except Exception as ex:
-                import traceback
-                traceback.print_exc()
-                await queue.put({"type": "error", "message": str(ex)})
+                logger.error("Streaming scan error for user %s: %s", user_id, ex)
+                await queue.put({"type": "error", "message": "Scan execution failed. Please check system logs."})
 
         _scan_task = asyncio.create_task(run_scan())
 
-        while True:
-            item = await queue.get()
-            event_type = item.get("type", "progress")
-            yield f"data: {json.dumps(item, default=str)}\n\n"
-            if event_type in ("complete", "error"):
-                break
+        try:
+            while True:
+                item = await queue.get()
+                event_type = item.get("type", "progress")
+                yield f"data: {json.dumps(item, default=str)}\n\n"
+                if event_type in ("complete", "error"):
+                    break
+        finally:
+            with _ACTIVE_SCANS_LOCK:
+                _ACTIVE_SCANS.discard(user_id)
+            if not _scan_task.done():
+                _scan_task.cancel()
 
     return StreamingResponse(
         event_generator(),
@@ -999,9 +1037,10 @@ async def api_get_economic_calendar(
 async def api_analyze_ticker(ticker: str, user: Dict[str, Any] = Depends(require_user)):
     user_id = user["id"]
     try:
+        clean_ticker = validate_ticker(ticker)
         res = await asyncio.to_thread(
             analysis_service.run_single_ticker_analysis,
-            ticker=ticker,
+            ticker=clean_ticker,
             user_id=user_id,
         )
         res_copy = dict(res)
@@ -1093,8 +1132,8 @@ async def api_chat(req: ChatMessageRequest, user: Dict[str, Any] = Depends(requi
     def _prepare_chat_context(uid):
         p = orchestrator.get_active_portfolio(user_id=uid)
         s = orchestrator.quant_engine.analyze_portfolio(p)
-        rb = orchestrator.state_store.get_recent_briefings(limit=1)
-        bp = rb[0].get("payload", {}) if rb else {}
+        scan = orchestrator.state_store.get_latest_user_scan(user_id=uid)
+        bp = scan.model_dump(mode="json") if scan else {}
         return p, s, bp
 
     portfolio, stress, briefing_payload = await asyncio.to_thread(_prepare_chat_context, user_id)
@@ -1234,7 +1273,7 @@ async def api_telegram_webhook(request: Request):
         return await asyncio.to_thread(telegram_bot.process_webhook_update, data)
     except Exception as e:
         logger.error(f"Error processing Telegram webhook: {e}")
-        return JSONResponse(status_code=400, content={"status": "error", "detail": "Invalid payload"})
+        return JSONResponse(status_code=200, content={"status": "error", "detail": "Invalid payload"})
 
 
 @app.get("/api/schedule/status")
@@ -1434,7 +1473,7 @@ async def api_dispatch_market_briefing(report_id: str, user: Dict[str, Any] = De
     target_chat = None
     if user and user.get("telegram_chat_id"):
         target_chat = user["telegram_chat_id"]
-    else:
+    elif is_admin:
         target_chat = telegram_bot.get_effective_chat_id() or config.telegram_chat_id
 
     if not target_chat:
@@ -1445,7 +1484,8 @@ async def api_dispatch_market_briefing(report_id: str, user: Dict[str, Any] = De
         await asyncio.to_thread(telegram_bot.send_message, msg, chat_id=target_chat)
         return {"status": "success", "message": f"Dispatched {b.get('slot')} briefing to Telegram."}
     except Exception as ex:
-        raise HTTPException(status_code=500, detail=f"Failed to send to Telegram: {str(ex)}")
+        logger.error("Failed to dispatch briefing to Telegram for user %s: %s", user_id, ex)
+        raise HTTPException(status_code=500, detail="Failed to dispatch briefing to Telegram.")
 
 
 @app.post("/api/briefings/prune")

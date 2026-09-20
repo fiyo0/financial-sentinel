@@ -10,7 +10,8 @@ from analytics.economic_calendar import (
     fetch_live_fed_bulletins,
     escape_ics_text,
     _macro_cache,
-    FOMC_SCHEDULE
+    FOMC_SCHEDULE,
+    KEY_MACRO_RELEASES_2026,
 )
 
 
@@ -162,7 +163,7 @@ def test_escape_ics_text():
 
 def test_catalytic_only_context_flag():
     """Verify get_economic_calendar_context respects catalytic_only parameter."""
-    as_of = datetime(2026, 9, 11, 12, 0, tzinfo=EST)  # Day of CPI release (Sept 11)
+    as_of = datetime(2026, 9, 9, 12, 0, tzinfo=EST)  # Day before PPI release (Sept 10)
     ctx_cat = get_economic_calendar_context(as_of=as_of, catalytic_only=True)
     ctx_all = get_economic_calendar_context(as_of=as_of, catalytic_only=False)
 
@@ -171,9 +172,9 @@ def test_catalytic_only_context_flag():
     assert "feed_urls" in ctx_cat
     assert ctx_cat["feed_urls"]["ics"] == "/api/economic/calendar.ics"
 
-    # In catalytic mode, tomorrow (Sept 12 PPI) should be empty because PPI is MEDIUM
+    # In catalytic mode, tomorrow (Sept 10 PPI) should be empty because PPI is MEDIUM
     assert len(ctx_cat["tomorrow_events"]) == 0
-    # In all mode, tomorrow (Sept 12 PPI) should be present
+    # In all mode, tomorrow (Sept 10 PPI) should be present
     assert any("Producer Price Index" in e["name"] for e in ctx_all["tomorrow_events"])
 
 
@@ -275,5 +276,15 @@ def test_prospective_3month_horizon_events():
     prompt_str_intraday = format_economic_calendar_for_prompt(ctx, include_horizon=False)
     assert "PROSPECTIVE 3-MONTH CENTRAL BANK SCHEDULE" not in prompt_str_intraday
     assert "tier-1" not in prompt_str_intraday.lower()
+
+
+def test_t4_1_macro_releases_no_weekends():
+    """T4.1: Every verified macro release in KEY_MACRO_RELEASES_2026 falls strictly on Monday-Friday."""
+    assert len(KEY_MACRO_RELEASES_2026) > 0
+    for event in KEY_MACRO_RELEASES_2026:
+        dt = datetime.strptime(event["date"], "%Y-%m-%d")
+        weekday = dt.weekday()
+        assert weekday < 5, f"Event '{event['name']}' scheduled on weekend ({event['date']}, weekday={weekday})"
+
 
 

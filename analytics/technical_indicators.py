@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Optional, Tuple
 import math
 import time
 import logging
+from datetime import datetime, timezone
 import httpx
 from analytics.provenance import Provenance
 from storage.cache_manager import cache_manager
@@ -198,18 +199,18 @@ def _fetch_historical_bars(ticker: str, force_fresh: bool = False) -> List[Dict[
         resp = httpx.get(rh_url, headers=headers, timeout=5.0)
         if resp.status_code == 200:
             data = resp.json()
-            bars = data.get("historicals", [])
-            if len(bars) >= 20:
+            rh_bars = data.get("historicals", [])
+            if len(rh_bars) >= 20:
                 parsed_bars = [
                     {
-                        "date": b.get("begins_at"),
+                        "date": str(b.get("begins_at") or "")[:10],
                         "close": float(b.get("close_price") or 0.0),
                         "high": float(b.get("high_price") or 0.0),
                         "low": float(b.get("low_price") or 0.0),
                         "open": float(b.get("open_price") or 0.0),
                         "volume": int(b.get("volume") or 0)
                     }
-                    for b in bars
+                    for b in rh_bars
                     if float(b.get("close_price") or 0.0) > 0
                 ]
                 if len(parsed_bars) >= 20:
@@ -225,6 +226,7 @@ def _fetch_historical_bars(ticker: str, force_fresh: bool = False) -> List[Dict[
     try:
         resp = httpx.get(y_url, headers=headers, timeout=5.0)
         if resp.status_code == 200:
+            bars: List[Dict[str, Any]] = []
             data = resp.json()
             chart = data.get("chart") if isinstance(data, dict) else None
             result_list = chart.get("result") if isinstance(chart, dict) else None
@@ -232,6 +234,7 @@ def _fetch_historical_bars(ticker: str, force_fresh: bool = False) -> List[Dict[
                 logger.debug("Yahoo historicals result invalid for %s: %s", clean_ticker, chart.get("error") if isinstance(chart, dict) else None)
             else:
                 result = result_list[0]
+                timestamps = result.get("timestamp", []) if isinstance(result, dict) else []
                 indicators = result.get("indicators") if isinstance(result, dict) else None
                 quote_list = indicators.get("quote") if isinstance(indicators, dict) else None
                 if not quote_list or not isinstance(quote_list, list) or len(quote_list) == 0 or not isinstance(quote_list[0], dict):
@@ -244,12 +247,19 @@ def _fetch_historical_bars(ticker: str, force_fresh: bool = False) -> List[Dict[
                     opens = quotes.get("open", [])
                     volumes = quotes.get("volume", [])
 
-                    bars = []
                     for i in range(len(closes)):
                         c = closes[i]
                         if c is not None and c > 0:
+                            dt_str = ""
+                            if i < len(timestamps) and timestamps[i]:
+                                try:
+                                    dt_str = datetime.fromtimestamp(timestamps[i], tz=timezone.utc).strftime("%Y-%m-%d")
+                                except (TypeError, ValueError, OSError):
+                                    dt_str = str(i)
+                            else:
+                                dt_str = str(i)
                             bars.append({
-                                "date": str(i),
+                                "date": dt_str,
                                 "close": float(c),
                                 "high": float(highs[i] if i < len(highs) and highs[i] else c),
                                 "low": float(lows[i] if i < len(lows) and lows[i] else c),
@@ -287,7 +297,7 @@ def compute_technical_snapshot(ticker: str, custom_bars: Optional[List[Dict[str,
     fields_unavailable: List[str] = []
     fields_estimated: List[str] = []
 
-    if not bars or len(bars) < 14:
+    if not bars or len(bars) < 15:
         unavail = ("rsi_14", "macd", "bollinger", "sma_20", "sma_50", "sma_200", "atr_14")
         prov = Provenance.create(
             source=source,
@@ -337,35 +347,40 @@ def compute_technical_snapshot(ticker: str, custom_bars: Optional[List[Dict[str,
     losses = [max(0.0, -d) for d in deltas]
 
     period = 14
-    avg_gain = sum(gains[:period]) / float(period)
-    avg_loss = sum(losses[:period]) / float(period)
+    if len(deltas) >= period:
+        avg_gain = sum(gains[:period]) / float(period)
+        avg_loss = sum(losses[:period]) / float(period)
 
-    for i in range(period, len(deltas)):
-        avg_gain = (avg_gain * (period - 1) + gains[i]) / float(period)
-        avg_loss = (avg_loss * (period - 1) + losses[i]) / float(period)
+        for i in range(period, len(deltas)):
+            avg_gain = (avg_gain * (period - 1) + gains[i]) / float(period)
+            avg_loss = (avg_loss * (period - 1) + losses[i]) / float(period)
 
-    if avg_gain == 0.0 and avg_loss == 0.0:
-        rsi_14 = 50.0
-        rsi_status = "NEUTRAL"
-        fields_estimated.append("rsi_14_flat_series")
-    else:
-        rs = avg_gain / (avg_loss if avg_loss > 0 else 1e-9)
-        rsi_14 = round(100.0 - (100.0 / (1.0 + rs)), 2)
-
-        if rsi_14 >= 75.0:
-            rsi_status = "EXTREME_OVERBOUGHT"
-        elif rsi_14 >= 70.0:
-            rsi_status = "OVERBOUGHT"
-        elif rsi_14 <= 25.0:
-            rsi_status = "EXTREME_OVERSOLD"
-        elif rsi_14 <= 30.0:
-            rsi_status = "OVERSOLD"
-        elif rsi_14 >= 55.0:
-            rsi_status = "NEUTRAL_BULLISH"
-        elif rsi_14 <= 45.0:
-            rsi_status = "NEUTRAL_BEARISH"
-        else:
+        if avg_gain == 0.0 and avg_loss == 0.0:
+            rsi_14 = 50.0
             rsi_status = "NEUTRAL"
+            fields_estimated.append("rsi_14_flat_series")
+        else:
+            rs = avg_gain / (avg_loss if avg_loss > 0 else 1e-9)
+            rsi_14 = round(100.0 - (100.0 / (1.0 + rs)), 2)
+
+            if rsi_14 >= 75.0:
+                rsi_status = "EXTREME_OVERBOUGHT"
+            elif rsi_14 >= 70.0:
+                rsi_status = "OVERBOUGHT"
+            elif rsi_14 <= 25.0:
+                rsi_status = "EXTREME_OVERSOLD"
+            elif rsi_14 <= 30.0:
+                rsi_status = "OVERSOLD"
+            elif rsi_14 >= 55.0:
+                rsi_status = "NEUTRAL_BULLISH"
+            elif rsi_14 <= 45.0:
+                rsi_status = "NEUTRAL_BEARISH"
+            else:
+                rsi_status = "NEUTRAL"
+    else:
+        rsi_14 = None
+        rsi_status = "INSUFFICIENT_DATA"
+        fields_unavailable.append("rsi_14")
 
     # 2. Moving Averages: SMA 20, SMA 50, SMA 200
     if n_bars >= 20:

@@ -284,25 +284,12 @@ class FinancialSentinelOrchestrator:
                 return dec
 
 
-        # Check if user is admin or matches allowed admin telegram identifiers
-        allowed_tg = [u.lower().replace("@", "") for u in config.telegram_allowed_usernames if u]
-        user_tg = (user.get("telegram_username") or "").lower().replace("@", "")
-        user_chat = str(user.get("telegram_chat_id") or "").strip()
-        user_name = (user.get("username") or "").lower().strip()
-        is_allowed_admin = (
-            user.get("role") == "admin"
-            or (user_tg and user_tg in allowed_tg)
-            or (user_chat and user_chat in config.telegram_allowed_chat_ids)
-            or (user_name and user_name in allowed_tg)
-        )
-
-        if is_allowed_admin:
+        # Check if user is admin: ONLY user.get("role") == "admin" grants system fallback key
+        if user.get("role") == "admin":
             return config.gemini_api_key
 
         # Non-admin user with no key: Return empty string (never fallback to admin key!)
         return ""
-
-
 
     def run_monitoring_cycle(
         self,
@@ -332,25 +319,6 @@ class FinancialSentinelOrchestrator:
 
         # Resolve active BYOK Gemini key
         active_key = api_key if api_key is not None else self.resolve_user_api_key(user_id)
-
-        # Step 1: Configure all agents with active user BYOK key
-        if active_key:
-            self.news_agent.api_key = active_key
-            self.news_agent.use_llm = True
-            self.analysis_agent.api_key = active_key
-            self.analysis_agent.use_llm = True
-            self.opportunity_agent.api_key = active_key
-            self.opportunity_agent.use_llm = True
-            self.critic_agent.api_key = active_key
-            self.critic_agent.use_llm = True
-            self.notification_agent.api_key = active_key
-            self.notification_agent.use_llm = True
-        else:
-            self.news_agent.use_llm = False
-            self.analysis_agent.use_llm = False
-            self.opportunity_agent.use_llm = False
-            self.critic_agent.use_llm = False
-            self.notification_agent.use_llm = False
 
         # Step 2: Concurrently refresh live market prices and ingest real-time news/filings
         _emit_progress(
@@ -415,7 +383,7 @@ class FinancialSentinelOrchestrator:
         )
 
         # Step 7: Persist Briefing in State Store immediately (guarantees persistence before external calls)
-        self.state_store.save_briefing(briefing)
+        self.state_store.save_briefing(briefing, user_id=user_id)
         if user_id:
             self.state_store.record_user_scan(user_id, briefing.report_id, briefing.model_dump(mode="json"))
 

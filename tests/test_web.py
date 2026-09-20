@@ -481,6 +481,36 @@ def test_api_analyze_ticker(client, monkeypatch):
     assert data["analysis"] == "Mocked Analysis for AAPL"
 
 
+def test_t5_5_telegram_webhook_returns_200_on_processing_error(client, monkeypatch):
+    """T5.5: Telegram webhook returns 200 on handled parsing/processing errors to prevent retry loops."""
+    monkeypatch.setattr(config, "telegram_webhook_secret", "test_webhook_secret")
+
+    # Send malformed JSON payload with valid secret token header
+    resp = client.post(
+        "/api/telegram/webhook",
+        content=b"this is not json",
+        headers={"X-Telegram-Bot-Api-Secret-Token": "test_webhook_secret", "Content-Type": "application/json"}
+    )
+    assert resp.status_code == 200
+    assert resp.json().get("status") == "error"
+
+
+def test_t4_4_invalid_ticker_returns_400(client):
+    """T4.4: Invalid ticker symbols (excessive length, illegal characters) return HTTP 400."""
+    headers, cookies = get_auth_context()
+
+    # Special characters
+    resp_spec = client.post("/api/analyze/AAPL$$!@", headers=headers, cookies=cookies)
+    assert resp_spec.status_code == 400
+    assert "invalid ticker" in resp_spec.json().get("detail", "").lower()
+
+    # Excessively long ticker (> 10 chars)
+    resp_long = client.post("/api/analyze/VERYLONGTICKERNAME", headers=headers, cookies=cookies)
+    assert resp_long.status_code == 400
+    assert "invalid ticker" in resp_long.json().get("detail", "").lower()
+
+
+
 
 
 

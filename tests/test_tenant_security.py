@@ -135,3 +135,104 @@ def test_briefing_strict_tenant_isolation(test_users):
     admin_token = create_session_token(admin["id"], admin["username"], role="admin")
     client.cookies.set("sentinel_token", admin_token)
     assert client.post("/api/briefings/prune").status_code == 200
+
+
+def test_t1_1_new_user_dashboard_empty_briefing(test_users):
+    """T1.1: Brand-new user without scans receives None instead of leaking previous tenant's briefing."""
+    alice, bob, _ = test_users
+    store = orchestrator.state_store
+
+    from models import BriefingReport
+    alice_briefing = BriefingReport(
+        report_id="rep_alice_scan_isolation",
+        user_id=alice["id"],
+        slot="general",
+        executive_summary="Alice's confidential multi-agent portfolio analysis.",
+        total_holdings_monitored=5,
+        raw_news_count=10
+    )
+    store.save_briefing(alice_briefing, user_id=alice["id"])
+    store.record_user_scan(alice["id"], alice_briefing.report_id, alice_briefing.model_dump(mode="json"))
+
+    # Alice's latest scan is her own briefing
+    alice_latest = store.get_latest_user_scan(alice["id"])
+    assert alice_latest is not None
+    assert alice_latest.report_id == "rep_alice_scan_isolation"
+
+    # Bob's latest scan is strictly None (zero leakage!)
+    bob_latest = store.get_latest_user_scan(bob["id"])
+    assert bob_latest is None
+
+
+def test_t1_3_allowlisted_handle_grants_no_operator_key():
+    """T1.3: User registering with handle matching allowed telegram name cannot hijack master API key."""
+    store = orchestrator.state_store
+    # Create or retrieve user named 'forello0' with standard 'user' role
+    try:
+        user = store.create_user("forello0_untrusted", "untrusted@attacker.com", "pw123", role="user", telegram_username="forello0")
+    except Exception:
+        user = store.get_user_by_username("forello0_untrusted")
+
+    assert user["role"] == "user"
+    resolved_key = orchestrator.resolve_user_api_key(user["id"])
+    assert resolved_key == "", "Non-admin user MUST NOT receive system master API key!"
+
+
+def test_t1_4_duplicate_scan_returns_429(test_users):
+    """T1.4: Concurrent scans for the same tenant trigger HTTP 429."""
+    from web.app import _ACTIVE_SCANS, _ACTIVE_SCANS_LOCK
+    alice, _, _ = test_users
+    client = TestClient(app)
+    alice_token = create_session_token(alice["id"], alice["username"], role="user")
+    client.cookies.set("sentinel_token", alice_token)
+
+    with _ACTIVE_SCANS_LOCK:
+        _ACTIVE_SCANS.add(alice["id"])
+
+    try:
+        res = client.post("/api/scan")
+        assert res.status_code == 429
+        assert "already in progress" in res.json()["detail"].lower()
+    finally:
+        with _ACTIVE_SCANS_LOCK:
+            _ACTIVE_SCANS.discard(alice["id"])
+
+
+def test_t1_2_restore_failure_aborts_backup():
+    """T1.2: A failed GCS restore marks state as failed and halts any destructive backup overwrite."""
+    import storage.state_store as ss
+    orig_state = ss._GCS_RESTORE_STATE
+    try:
+        ss._GCS_RESTORE_STATE = "failed"
+        store = orchestrator.state_store
+        result = store.backup_to_gcs(blocking=True)
+        assert result is False, "Backup to GCS must abort when restore failed!"
+    finally:
+        ss._GCS_RESTORE_STATE = orig_state
+
+
+def test_t1_5_non_admin_cannot_dispatch_to_operator_chat(test_users):
+    """T1.5: Non-admin without personal telegram link cannot dispatch briefings to operator Telegram."""
+    alice, _, _ = test_users
+    store = orchestrator.state_store
+    client = TestClient(app)
+
+    # Ensure Alice has no telegram chat ID configured
+    with store._get_connection() as conn:
+        conn.execute("UPDATE users SET telegram_chat_id = NULL WHERE id = ?", (alice["id"],))
+        conn.commit()
+
+    rep_id = "rep_alice_test_dispatch"
+    store.record_market_briefing(
+        briefing_id=rep_id,
+        slot="general",
+        message="Test message",
+        user_id=alice["id"]
+    )
+
+    alice_token = create_session_token(alice["id"], alice["username"], role="user")
+    client.cookies.set("sentinel_token", alice_token)
+
+    res = client.post(f"/api/briefings/{rep_id}/dispatch")
+    assert res.status_code == 400
+    assert "telegram chat id is not configured" in res.json()["detail"].lower()

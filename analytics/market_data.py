@@ -5,6 +5,7 @@ If a live price cannot be fetched, it explicitly reports failure instead of fall
 """
 import time
 import logging
+import re
 from typing import Dict, Any, Optional, List, Tuple
 import httpx
 from models import Portfolio
@@ -109,13 +110,15 @@ def classify_equity_sector(ticker: str, name: str, explicit_type: Optional[str] 
             return sec
 
     # 2. Broad Index ETFs / Mutual Funds / Closed-End Funds
+    etf_patterns = [
+        r"\betf\b", r"\bindex\b", r"\bfund\b", r"\bspdr\b", r"\bishares\b",
+        r"\bvanguard\b", r"\bproshares\b", r"\bdirexion\b",
+        r"\btotal stock\b", r"\byield fund\b", r"\btreasury fund\b", r"\bs&p 500\b",
+        r"\bnasdaq 100\b", r"\brussell 2000\b"
+    ]
     is_etf = (
         (explicit_type or "").lower() == "etf" or
-        any(k in name_lower for k in [
-            "etf", "index", "fund", "trust", "spdr", "ishares", "vanguard",
-            "invesco", "proshares", "direxion", "schwab", "total stock", "yield fund",
-            "treasury fund", "s&p 500", "nasdaq 100", "russell 2000"
-        ])
+        any(re.search(pat, name_lower) for pat in etf_patterns)
     )
     if is_etf:
         return "Index ETF / Fund"
@@ -270,8 +273,10 @@ def update_portfolio_live_prices(portfolio: Portfolio, override_all: bool = True
                     holding.daily_change_pct = float(quote.get("change_pct", 0.0) or 0.0)
                     if quote.get("name") and quote["name"] != holding.ticker:
                         holding.name = quote["name"]
-                    if quote.get("sector"):
-                        holding.sector = quote["sector"]
+                    quote_sec = quote.get("sector")
+                    if quote_sec and quote_sec != "Unclassified":
+                        if not holding.sector or holding.sector == "Unclassified":
+                            holding.sector = quote_sec
                 else:
                     failed_tickers.append(holding.ticker)
 

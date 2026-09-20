@@ -93,7 +93,7 @@ KEY_MACRO_RELEASES_2026 = [
     # September 2026
     {"date": "2026-09-04", "time_et": "08:30", "category": "LABOR", "name": "U.S. Employment Situation (Non-Farm Payrolls)", "importance": "HIGH"},
     {"date": "2026-09-11", "time_et": "08:30", "category": "INFLATION", "name": "Consumer Price Index (CPI)", "importance": "HIGH"},
-    {"date": "2026-09-12", "time_et": "08:30", "category": "INFLATION", "name": "Producer Price Index (PPI)", "importance": "MEDIUM"},
+    {"date": "2026-09-10", "time_et": "08:30", "category": "INFLATION", "name": "Producer Price Index (PPI)", "importance": "MEDIUM"},
     {"date": "2026-09-16", "time_et": "14:00", "category": "CENTRAL_BANK", "name": "Federal Reserve FOMC Interest Rate Decision & Summary of Economic Projections", "importance": "CRITICAL"},
     {"date": "2026-09-16", "time_et": "14:30", "category": "CENTRAL_BANK", "name": "Federal Reserve Chair Press Conference", "importance": "CRITICAL"},
     {"date": "2026-09-24", "time_et": "08:30", "category": "GROWTH", "name": "Q2 GDP Final Estimate", "importance": "MEDIUM"},

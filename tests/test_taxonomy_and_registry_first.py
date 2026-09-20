@@ -11,7 +11,8 @@ import json
 
 from storage.state_store import StateStore
 from agents.news_ingestion import NewsIngestionAgent
-from analytics.market_data import classify_equity_sector
+from analytics.market_data import classify_equity_sector, update_portfolio_live_prices
+from models import Portfolio, PortfolioHolding
 
 
 def test_taxonomy_contains_zero_corporate_names():
@@ -147,3 +148,52 @@ def test_llm_zero_shot_fallback_for_unseen_macro_news(monkeypatch):
 
     res = agent.extract_entities(obscure_headline)
     assert "Financials" in res["sectors"]
+
+
+def test_t3_5_netflix_and_northern_trust_not_funds():
+    """T3.5: Netflix and Northern Trust are not falsely classified as Index ETF / Fund."""
+    sec_nflx = classify_equity_sector("NFLX", "Netflix, Inc.")
+    assert sec_nflx != "Index ETF / Fund"
+
+    sec_ntrs = classify_equity_sector("NTRS", "Northern Trust Corp")
+    assert sec_ntrs != "Index ETF / Fund"
+
+    sec_spy = classify_equity_sector("SPY", "SPDR S&P 500 ETF Trust")
+    assert sec_spy == "Index ETF / Fund"
+
+
+def test_t3_5_user_sector_preserved_on_quote_refresh(monkeypatch):
+    """T3.5: User-assigned sector is not overwritten when live quote returns Unclassified or another sector."""
+    portfolio = Portfolio(
+        name="Custom Sector Portfolio",
+        cash=1000.0,
+        holdings=[
+            PortfolioHolding(
+                ticker="CUSTOM",
+                name="Custom Company",
+                shares=10,
+                avg_price=50.0,
+                current_price=50.0,
+                sector="Custom Healthcare"
+            )
+        ]
+    )
+
+    def mock_fetch_quote(ticker):
+        return {
+            "ticker": ticker,
+            "name": "Custom Company",
+            "current_price": 55.0,
+            "change_pct": 10.0,
+            "sector": "Financials",  # Attempt to overwrite
+            "is_live": True
+        }
+
+    monkeypatch.setattr("analytics.market_data.fetch_live_quote", mock_fetch_quote)
+    updated_p, failed = update_portfolio_live_prices(portfolio)
+
+    assert len(failed) == 0
+    # Custom sector must be preserved because holding.sector was already set and not "Unclassified"
+    assert updated_p.holdings[0].sector == "Custom Healthcare"
+    assert updated_p.holdings[0].current_price == 55.0
+

@@ -4,7 +4,7 @@ Tests PortfolioService, AnalysisService, IdentityService, and BriefingService in
 """
 import pytest
 from unittest.mock import patch
-from models import Portfolio, PortfolioHolding, SingleTickerAnalysis
+from models import Portfolio, PortfolioHolding, SingleTickerAnalysis, PortfolioStressMetric
 from orchestrator import FinancialSentinelOrchestrator
 from services.identity_service import IdentityService
 from services.portfolio_service import PortfolioService
@@ -199,8 +199,10 @@ def test_analysis_service_execution_and_provenance(service_env):
     from analytics.technical_indicators import TechnicalSnapshot
     mock_tech = TechnicalSnapshot(ticker="MSFT", current_price=430.0, rsi_14=58.5, macd_line=2.1, atr_14=5.2, is_live=True)
 
+    mock_stress = PortfolioStressMetric(estimated_portfolio_beta=1.1, fields_unavailable=[])
     with patch("analytics.market_data.fetch_live_quote", return_value={"name": "Microsoft", "current_price": 430.0, "sector": "Technology"}), \
          patch("analytics.technical_indicators.compute_technical_snapshot", return_value=mock_tech), \
+         patch("analytics.quant_risk.QuantRiskEngine.analyze_portfolio", return_value=mock_stress), \
          patch.object(orch.analysis_agent, "analyze_single_ticker_structured", return_value=mock_analysis):
 
         res = analysis_svc.run_single_ticker_analysis(

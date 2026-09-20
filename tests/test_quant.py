@@ -2,7 +2,11 @@
 Unit tests for the Quantitative Risk & Macro Stress Matrix engine.
 """
 from models import Portfolio, PortfolioHolding
-from analytics.quant_risk import QuantRiskEngine
+from analytics.quant_risk import (
+    QuantRiskEngine,
+    align_daily_bars_by_date,
+    compute_deterministic_position_size,
+)
 
 
 def test_quant_risk_concentration_detection():
@@ -219,5 +223,64 @@ def test_empirical_quant_risk_engine_realized_metrics():
     # 7. Single ticker empirical beta helper
     aapl_beta = QuantRiskEngine.compute_single_ticker_beta("AAPL", benchmark="SPY", custom_bars_map=custom_bars)
     assert aapl_beta > 0.5
+
+
+def test_t3_2_date_aligned_returns():
+    """T3.2: Verify disjoint price bars are date-aligned via inner join before covariance/beta."""
+    bars_aapl = [
+        {"date": "2026-01-01", "close": 150.0},
+        {"date": "2026-01-02", "close": 152.0},
+        {"date": "2026-01-03", "close": 155.0},
+        {"date": "2026-01-05", "close": 160.0},
+    ]
+    bars_spy = [
+        {"date": "2026-01-02", "close": 450.0},
+        {"date": "2026-01-03", "close": 455.0},
+        {"date": "2026-01-04", "close": 453.0},
+        {"date": "2026-01-05", "close": 460.0},
+    ]
+    bars_map = {"AAPL": bars_aapl, "SPY": bars_spy}
+
+    dates, aligned = align_daily_bars_by_date(bars_map, ["AAPL", "SPY"])
+    assert dates == ["2026-01-02", "2026-01-03", "2026-01-05"]
+    assert aligned["AAPL"] == [152.0, 155.0, 160.0]
+    assert aligned["SPY"] == [450.0, 455.0, 460.0]
+
+
+def test_t3_4_position_size_zero_cash_and_low_conviction():
+    """T3.4: Verify zero allocation when portfolio cash is $0.00 or conviction < 50%."""
+    # Zero cash case
+    res_zero_cash = compute_deterministic_position_size(
+        portfolio_equity=100000.0,
+        portfolio_cash=0.0,
+        current_price=100.0,
+        atr_14=2.5,
+        conviction_pct=85.0
+    )
+    assert res_zero_cash["target_position_usd"] == 0.0
+    assert res_zero_cash["target_shares"] == 0.0
+
+    # Low conviction case (< 50%)
+    res_low_conviction = compute_deterministic_position_size(
+        portfolio_equity=100000.0,
+        portfolio_cash=50000.0,
+        current_price=100.0,
+        atr_14=2.5,
+        conviction_pct=45.0
+    )
+    assert res_low_conviction["target_position_usd"] == 0.0
+    assert res_low_conviction["target_shares"] == 0.0
+
+    # Normal case (> 50% conviction with cash)
+    res_normal = compute_deterministic_position_size(
+        portfolio_equity=100000.0,
+        portfolio_cash=50000.0,
+        current_price=100.0,
+        atr_14=2.5,
+        conviction_pct=75.0
+    )
+    assert res_normal["target_position_usd"] > 0.0
+    assert res_normal["target_shares"] > 0.0
+
 
 

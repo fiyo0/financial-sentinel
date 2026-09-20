@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 # Process-level guard to ensure GCS restore runs at most ONCE per container lifecycle
 _GCS_RESTORED = False
 _GCS_RESTORE_LOCK = threading.Lock()
+_GCS_RESTORE_STATE: str = "unknown"  # "unknown", "restored", "no_remote_blob", "failed"
+_GCS_REMOTE_GENERATION: Optional[int] = None
 
 # Serialized, debounced GCS backup worker state
 _GCS_BACKUP_LOCK = threading.Lock()
@@ -114,12 +116,13 @@ class StateStore:
 
     def restore_from_gcs(self, force: bool = False) -> bool:
         """Restores state.db from Google Cloud Storage on Cloud Run startup with timestamp safety check."""
-        global _GCS_RESTORED
+        global _GCS_RESTORED, _GCS_RESTORE_STATE, _GCS_REMOTE_GENERATION
         if _GCS_RESTORED and not force:
             return True
 
         is_cloud_run = bool(os.getenv("K_SERVICE") or os.getenv("GCS_SYNC_ENABLED") == "true")
         if not is_cloud_run:
+            _GCS_RESTORE_STATE = "not_cloud_run"
             return False
 
         with _GCS_RESTORE_LOCK:
@@ -128,6 +131,7 @@ class StateStore:
 
             bucket_name = os.getenv("GCS_DATA_BUCKET", "financial-sentinel-data-507007")
             if not bucket_name:
+                _GCS_RESTORE_STATE = "no_bucket"
                 return False
             try:
                 from google.cloud import storage
@@ -135,10 +139,11 @@ class StateStore:
                 bucket = client.bucket(bucket_name)
                 blob = bucket.blob("state.db")
                 if blob.exists():
+                    blob.reload()
+                    _GCS_REMOTE_GENERATION = blob.generation
                     # Timestamp check: avoid overwriting newer local state with older GCS snapshot
                     if os.path.exists(self.db_path) and not force:
                         try:
-                            blob.reload()
                             gcs_updated = blob.updated
                             if gcs_updated:
                                 local_mtime = os.path.getmtime(self.db_path)
@@ -148,6 +153,7 @@ class StateStore:
                                         local_mtime, gcs_updated.timestamp()
                                     )
                                     _GCS_RESTORED = True
+                                    _GCS_RESTORE_STATE = "restored"
                                     return True
                         except Exception as time_err:
                             logger.debug("Could not verify GCS blob timestamp: %s", time_err)
@@ -169,8 +175,10 @@ class StateStore:
                             res = check_conn.execute("PRAGMA integrity_check;").fetchone()
                             if not res or res[0] != "ok":
                                 logger.critical(f"Corrupted state.db snapshot restored from GCS: {res}")
+                                _GCS_RESTORE_STATE = "failed"
                                 raise RuntimeError(f"Corrupted state.db snapshot: {res}")
                     except Exception as err:
+                        _GCS_RESTORE_STATE = "failed"
                         logger.error(f"State store integrity check failed on restore: {err}")
                         raise
                     try:
@@ -179,10 +187,18 @@ class StateStore:
                     except sqlite3.Error as e:
                         logger.warning("Post-restore WAL checkpoint warning: %s", e)
                     _GCS_RESTORED = True
+                    _GCS_RESTORE_STATE = "restored"
                     self._init_db()
                     return True
+                else:
+                    logger.info("No remote state.db found in GCS bucket %s. Starting fresh.", bucket_name)
+                    _GCS_RESTORED = True
+                    _GCS_RESTORE_STATE = "no_remote_blob"
+                    _GCS_REMOTE_GENERATION = None
+                    return False
             except Exception as e:
-                logger.warning(f"Failed to restore state.db from GCS: {e}")
+                _GCS_RESTORE_STATE = "failed"
+                logger.critical(f"Failed to restore state.db from GCS: {e}")
                 return False
         return False
 
@@ -196,12 +212,15 @@ class StateStore:
         is_cloud_run = bool(os.getenv("K_SERVICE") or os.getenv("GCS_SYNC_ENABLED") == "true")
         if not is_cloud_run:
             return False
+        if _GCS_RESTORE_STATE == "failed":
+            logger.critical("Aborting GCS backup: startup restore failed; refusing to overwrite remote state with potentially empty/corrupted local DB.")
+            return False
         bucket_name = os.getenv("GCS_DATA_BUCKET", "financial-sentinel-data-507007")
         if not bucket_name or not os.path.exists(self.db_path):
             return False
 
         def _do_upload_cycle():
-            global _GCS_BACKUP_PENDING
+            global _GCS_BACKUP_PENDING, _GCS_REMOTE_GENERATION
             with _GCS_BACKUP_LOCK:
                 while True:
                     _GCS_BACKUP_PENDING = False
@@ -222,8 +241,13 @@ class StateStore:
                         client = storage.Client()
                         bucket = client.bucket(bucket_name)
                         blob = bucket.blob("state.db")
-                        blob.upload_from_filename(tmp_path)
-                        logger.info("Successfully backed up consistent state.db snapshot to GCS.")
+                        upload_kwargs = {}
+                        if _GCS_REMOTE_GENERATION is not None:
+                            upload_kwargs["if_generation_match"] = _GCS_REMOTE_GENERATION
+                        blob.upload_from_filename(tmp_path, **upload_kwargs)
+                        if blob.generation:
+                            _GCS_REMOTE_GENERATION = blob.generation
+                        logger.info("Successfully backed up consistent state.db snapshot to GCS (generation %s).", _GCS_REMOTE_GENERATION)
                     except Exception as e:
                         logger.warning(f"Failed to snapshot and upload state.db to GCS: {e}")
                     finally:
@@ -867,6 +891,7 @@ class StateStore:
             logger.warning("Failed to cache latest scan briefing in KV store: %s", e)
 
     def get_latest_scan_briefing(self) -> Optional[BriefingReport]:
+        """Returns the latest scheduled system-wide briefing (e.g. premarket, postmarket, weekend)."""
         cached = self.get_kv("latest_scan_briefing")
         if cached and isinstance(cached, dict) and "report_id" in cached:
             try:
@@ -874,11 +899,12 @@ class StateStore:
             except Exception as e:
                 logger.warning("Malformed cached briefing in KV store: %s", e)
 
-        # Fallback: scan recent briefing history for a BriefingReport
+        # Fallback: scan recent scheduled system briefing history
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT payload_json FROM briefing_history
+                WHERE user_id IS NULL AND slot IS NOT NULL
                 ORDER BY generated_at DESC
                 LIMIT 15
             """)
@@ -887,9 +913,7 @@ class StateStore:
                     try:
                         d = json.loads(row["payload_json"])
                         if "total_holdings_monitored" in d or "critical_risk_alerts" in d:
-                            report = BriefingReport(**d)
-                            self.set_kv("latest_scan_briefing", d)
-                            return report
+                            return BriefingReport(**d)
                     except (json.JSONDecodeError, TypeError, ValueError) as e:
                         logger.debug("Failed parsing historical briefing payload: %s", e)
                         continue
@@ -987,14 +1011,14 @@ class StateStore:
                     try:
                         p = json.loads(r["payload_json"])
                     except (json.JSONDecodeError, TypeError) as e:
-                        logger.debug("Malformed payload_json for briefing %s: %s", r.get("report_id"), e)
+                        logger.debug("Malformed payload_json for briefing %s: %s", r["report_id"], e)
                         p = {}
                 dispatched = []
                 if r["dispatched_channels"]:
                     try:
                         dispatched = json.loads(r["dispatched_channels"])
                     except (json.JSONDecodeError, TypeError) as e:
-                        logger.debug("Malformed dispatched_channels for briefing %s: %s", r.get("report_id"), e)
+                        logger.debug("Malformed dispatched_channels for briefing %s: %s", r["report_id"], e)
                         dispatched = []
 
                 slot_val = r["slot"] or p.get("slot", "general")
@@ -1088,15 +1112,25 @@ class StateStore:
                 "dispatched_channels": dispatched
             }
 
-    def get_recent_briefings(self, limit: int = 10) -> List[Dict[str, Any]]:
+    def get_recent_briefings(self, limit: int = 10, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                SELECT report_id, generated_at, executive_summary, raw_news_count, payload_json, dispatched_channels
-                FROM briefing_history
-                ORDER BY generated_at DESC
-                LIMIT ?
-            """, (limit,))
+            if user_id:
+                cursor.execute("""
+                    SELECT report_id, generated_at, executive_summary, raw_news_count, payload_json, dispatched_channels
+                    FROM briefing_history
+                    WHERE user_id = ?
+                    ORDER BY generated_at DESC
+                    LIMIT ?
+                """, (user_id, limit))
+            else:
+                cursor.execute("""
+                    SELECT report_id, generated_at, executive_summary, raw_news_count, payload_json, dispatched_channels
+                    FROM briefing_history
+                    WHERE user_id IS NULL AND slot IS NOT NULL
+                    ORDER BY generated_at DESC
+                    LIMIT ?
+                """, (limit,))
             rows = cursor.fetchall()
             results = []
             for r in rows:
@@ -1308,15 +1342,6 @@ class StateStore:
             if row:
                 admin = dict(row)
 
-        if not admin:
-            admin = self.get_user_by_username("forello0") or self.get_user_by_username("admin")
-            if not admin and tg_user:
-                admin = self.get_user_by_username(tg_user) or self.get_user_by_telegram(tg_user)
-            if not admin:
-                admin = self.get_user_by_telegram("forello0")
-
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
             if not admin:
                 import secrets
                 import uuid
@@ -1339,20 +1364,9 @@ class StateStore:
                 user_id = f"usr_{uuid.uuid4().hex[:12]}"
                 cursor.execute("""
                     INSERT INTO users (id, username, email, password_hash, telegram_username, telegram_chat_id, encrypted_gemini_key, role)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (user_id, "forello0", "admin@sentinel.internal", pw_hash, tg_user or "forello0", tg_chat, enc_key, "admin"))
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'admin')
+                """, (user_id, "forello0", "admin@sentinel.internal", pw_hash, tg_user or "forello0", tg_chat, enc_key))
                 conn.commit()
-                admin = self.get_user_by_id(user_id)
-
-            else:
-                user_id = admin["id"]
-                enc_key = encrypt_api_key(config.gemini_api_key) if config.gemini_api_key else ""
-                if not admin.get("encrypted_gemini_key") and enc_key:
-                    cursor.execute("UPDATE users SET encrypted_gemini_key = ? WHERE id = ?", (enc_key, user_id))
-                    conn.commit()
-                if admin.get("role") != "admin":
-                    cursor.execute("UPDATE users SET role = 'admin' WHERE id = ?", (user_id,))
-                    conn.commit()
                 admin = self.get_user_by_id(user_id)
 
 
@@ -1557,15 +1571,26 @@ class StateStore:
             return [json.loads(r["payload_json"]) for r in rows if r["payload_json"]]
 
     def get_latest_user_scan(self, user_id: Optional[str] = None) -> Optional[BriefingReport]:
-        """Returns the most recent multi-agent scan briefing for the user or global fallback."""
-        if user_id:
-            user_scans = self.get_recent_user_scans(user_id, limit=1)
-            if user_scans and isinstance(user_scans[0], dict):
-                try:
-                    return BriefingReport(**user_scans[0])
-                except Exception as e:
-                    logger.warning("Failed deserializing latest user scan: %s", e)
-        return self.get_latest_scan_briefing()
+        """Returns the most recent multi-agent scan briefing for the user or None if no scan exists."""
+        if not user_id:
+            return None
+
+        # 1. Check user-namespaced KV cache
+        cached = self.get_kv(f"latest_scan_briefing:{user_id}")
+        if cached and isinstance(cached, dict) and "report_id" in cached:
+            try:
+                return BriefingReport(**cached)
+            except Exception as e:
+                logger.warning("Failed deserializing cached user scan for %s: %s", user_id, e)
+
+        # 2. Check user_scans table
+        user_scans = self.get_recent_user_scans(user_id, limit=1)
+        if user_scans and isinstance(user_scans[0], dict):
+            try:
+                return BriefingReport(**user_scans[0])
+            except Exception as e:
+                logger.warning("Failed deserializing latest user scan: %s", e)
+        return None
 
 
     def get_all_active_telegram_users(self) -> List[Dict[str, Any]]:
