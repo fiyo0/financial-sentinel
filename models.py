@@ -1,10 +1,10 @@
 """
 Data models and schemas for the Financial Multi-Agent System.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import List, Optional, Dict, Literal
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, computed_field, field_validator
 
 
 class DirectionalImpact(str, Enum):
@@ -75,7 +75,14 @@ class Portfolio(BaseModel):
     name: str = "Primary Portfolio"
     cash: float = 0.0
     holdings: List[PortfolioHolding] = Field(default_factory=list)
-    last_updated: datetime = Field(default_factory=datetime.utcnow)
+    last_updated: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+ 
+    @field_validator("last_updated", mode="after")
+    @classmethod
+    def ensure_utc_last_updated(cls, v: datetime) -> datetime:
+        if v is not None and v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v
 
     def total_equity(self) -> float:
         return round(self.cash + sum(h.market_value for h in self.holdings), 2)
@@ -145,7 +152,7 @@ class NewsItem(BaseModel):
     title: str
     source: str
     url: str
-    published_at: datetime = Field(default_factory=datetime.utcnow)
+    published_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     summary: str
     full_text: Optional[str] = None
     category: NewsCategory = NewsCategory.BREAKING
@@ -153,6 +160,13 @@ class NewsItem(BaseModel):
     related_tickers: List[str] = Field(default_factory=list)
     related_sectors: List[str] = Field(default_factory=list)
     raw_hash: str = ""
+
+    @field_validator("published_at", mode="after")
+    @classmethod
+    def ensure_utc_published_at(cls, v: datetime) -> datetime:
+        if v is not None and v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v
 
 
 class HoldingExposureAnalysis(BaseModel):
@@ -231,8 +245,15 @@ class BriefingReport(BaseModel):
     report_id: str
     user_id: Optional[str] = None
     slot: Optional[str] = "general"
-    generated_at: datetime = Field(default_factory=datetime.utcnow)
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     executive_summary: str
+
+    @field_validator("generated_at", mode="after")
+    @classmethod
+    def ensure_utc_generated_at(cls, v: datetime) -> datetime:
+        if v is not None and v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v
     total_holdings_monitored: int
     portfolio_stress: Optional[PortfolioStressMetric] = None
     critical_risk_alerts: List[HoldingExposureAnalysis] = Field(default_factory=list)

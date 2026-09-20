@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 from typing import Optional, Callable, Set
 
 from orchestrator import FinancialSentinelOrchestrator
-from models import Portfolio
+from models import Portfolio, NewsItem
 from agents.market_briefing_agent import MarketBriefingAgent
 from analytics.market_data import fetch_market_overview, fetch_market_movers, update_portfolio_live_prices
 from analytics.market_calendar import is_market_holiday
@@ -110,7 +110,15 @@ class DailyMarketScheduler:
             if h not in seen_hashes:
                 seen_hashes.add(h)
                 combined_news.append(n)
-        combined_news.sort(key=lambda x: x.published_at if x.published_at else datetime.min, reverse=True)
+        def _safe_pub_time(it: NewsItem) -> datetime:
+            dt = getattr(it, "published_at", None)
+            if not dt:
+                return datetime.min.replace(tzinfo=timezone.utc)
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=timezone.utc)
+            return dt
+
+        combined_news.sort(key=_safe_pub_time, reverse=True)
         news_items = combined_news
 
         movers = fetch_market_movers() if slot == "postmarket" else []

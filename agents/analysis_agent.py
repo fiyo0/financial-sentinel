@@ -7,6 +7,7 @@ Zero hardcoded ecosystem dictionaries.
 import json
 import logging
 import re
+from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 from models import (
     Portfolio, PortfolioHolding, NewsItem, HoldingExposureAnalysis,
@@ -92,7 +93,15 @@ def deduplicate_and_prioritize_regulatory_items(items: List[NewsItem], max_items
         # Tier 1: Speeches, discursive remarks, and panel commentary
         return 1
 
-    sorted_items = sorted(items, key=lambda x: (_priority_score(x), x.published_at), reverse=True)
+    def _safe_pub_time(it: NewsItem) -> datetime:
+        dt = getattr(it, "published_at", None)
+        if not dt:
+            return datetime.min.replace(tzinfo=timezone.utc)
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt
+
+    sorted_items = sorted(items, key=lambda x: (_priority_score(x), _safe_pub_time(x)), reverse=True)
 
     curated: List[NewsItem] = []
     for item in sorted_items:

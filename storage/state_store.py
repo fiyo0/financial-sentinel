@@ -632,7 +632,12 @@ class StateStore:
             """, (cutoff, limit))
             for row in cursor.fetchall():
                 try:
-                    pub_dt = datetime.fromisoformat(row[5])
+                    raw_val = str(row[5]).strip() if row[5] is not None else ""
+                    if raw_val.endswith("Z"):
+                        raw_val = raw_val[:-1] + "+00:00"
+                    pub_dt = datetime.fromisoformat(raw_val)
+                    if pub_dt.tzinfo is None:
+                        pub_dt = pub_dt.replace(tzinfo=timezone.utc)
                 except (ValueError, TypeError):
                     pub_dt = datetime.now(timezone.utc)
                 try:
@@ -714,7 +719,12 @@ class StateStore:
             """, (cutoff, limit))
             for row in cursor.fetchall():
                 try:
-                    pub_dt = datetime.fromisoformat(row[5])
+                    raw_val = str(row[5]).strip() if row[5] is not None else ""
+                    if raw_val.endswith("Z"):
+                        raw_val = raw_val[:-1] + "+00:00"
+                    pub_dt = datetime.fromisoformat(raw_val)
+                    if pub_dt.tzinfo is None:
+                        pub_dt = pub_dt.replace(tzinfo=timezone.utc)
                 except (ValueError, TypeError):
                     pub_dt = datetime.now(timezone.utc)
                 try:

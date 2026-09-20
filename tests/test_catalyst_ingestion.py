@@ -382,3 +382,149 @@ def test_algorithmic_nlp_topic_clustering_across_industries():
     assert are_headlines_same_event_cluster(fed_1, fed_2) is True
 
 
+def test_news_item_datetime_utc_coercion():
+    """Verify that NewsItem, Portfolio, and BriefingReport automatically coerce naive datetimes to UTC."""
+    from datetime import datetime, timezone
+    from models import NewsItem, Portfolio, BriefingReport
+
+    # 1. Default factories must produce timezone-aware UTC datetimes
+    item_default = NewsItem(id="d1", title="Title", source="src", url="http://x.com", summary="sum")
+    assert item_default.published_at.tzinfo is not None
+    assert item_default.published_at.tzinfo == timezone.utc
+
+    port_default = Portfolio()
+    assert port_default.last_updated.tzinfo is not None
+    assert port_default.last_updated.tzinfo == timezone.utc
+
+    rep_default = BriefingReport(report_id="r1", executive_summary="Summary", total_holdings_monitored=5)
+    assert rep_default.generated_at.tzinfo is not None
+    assert rep_default.generated_at.tzinfo == timezone.utc
+
+    # 2. Naive datetimes passed explicitly must be coerced to UTC
+    naive_dt = datetime(2026, 9, 20, 12, 30, 0)
+    item_naive = NewsItem(id="n1", title="Title", source="src", url="http://x.com", summary="sum", published_at=naive_dt)
+    assert item_naive.published_at.tzinfo == timezone.utc
+    assert item_naive.published_at.hour == 12
+
+    port_naive = Portfolio(last_updated=naive_dt)
+    assert port_naive.last_updated.tzinfo == timezone.utc
+
+    rep_naive = BriefingReport(report_id="r2", executive_summary="Sum", total_holdings_monitored=2, generated_at=naive_dt)
+    assert rep_naive.generated_at.tzinfo == timezone.utc
+
+
+def test_deduplicate_and_prioritize_regulatory_items_mixed_naive_and_aware():
+    """
+    Verify deduplicate_and_prioritize_regulatory_items safely handles a mix of offset-naive
+    and offset-aware datetimes with identical priority scores without raising TypeError.
+    """
+    from datetime import datetime, timezone
+    from agents.analysis_agent import deduplicate_and_prioritize_regulatory_items
+    from models import NewsItem, NewsCategory
+
+    # Create items that yield identical priority scores (_priority_score == 4)
+    item_aware = NewsItem(
+        id="aware_1",
+        title="SEC Issues Commission Order Approving Trading Facilities",
+        source="SEC Press Releases",
+        url="https://sec.gov/1",
+        published_at=datetime(2026, 9, 20, 14, 0, tzinfo=timezone.utc),
+        summary="Commission order",
+        category=NewsCategory.SEC_FILING
+    )
+
+    item_naive = NewsItem(
+        id="naive_1",
+        title="SEC Grants Innovation Exemption for Tokenized Securities",
+        source="SEC Press Releases",
+        url="https://sec.gov/2",
+        published_at=datetime(2026, 9, 20, 10, 0, tzinfo=timezone.utc),
+        summary="Exemption order",
+        category=NewsCategory.SEC_FILING
+    )
+    # Simulate a raw or legacy object with an offset-naive datetime bypassing pydantic
+    object.__setattr__(item_naive, "published_at", datetime(2026, 9, 20, 10, 0))
+
+    # Also test an item with published_at = None
+    item_none = NewsItem(
+        id="none_1",
+        title="SEC Adopts Final Rule on Reporting Standards",
+        source="SEC Press Releases",
+        url="https://sec.gov/3",
+        summary="Rule adoption",
+        category=NewsCategory.SEC_FILING
+    )
+    object.__setattr__(item_none, "published_at", None)
+
+    # Sorting items with identical scores must not crash with TypeError: can't compare offset-naive and offset-aware datetimes
+    curated = deduplicate_and_prioritize_regulatory_items([item_aware, item_naive, item_none], max_items=5)
+    assert len(curated) == 3
+    # The aware item with the later timestamp (14:00) should appear before the naive item (10:00)
+    assert curated[0].id == "aware_1"
+    assert curated[1].id == "naive_1"
+    assert curated[2].id == "none_1"
+
+
+def test_state_store_datetime_awareness_and_iso_normalization(tmp_path):
+    """
+    Verify StateStore parses ISO strings with 'Z', offset-naive strings,
+    and offset-aware strings as timezone-aware UTC datetime objects.
+    """
+    import sqlite3
+    from datetime import datetime, timezone
+    from storage.state_store import StateStore
+    from models import NewsCategory
+
+    db_file = str(tmp_path / "tz_test.db")
+    store = StateStore(db_file)
+
+    # Directly insert raw rows with different ISO datetime shapes into SQLite
+    with sqlite3.connect(db_file) as conn:
+        cursor = conn.cursor()
+        now_str = datetime.now(timezone.utc).isoformat()
+        cursor.execute("""
+            INSERT INTO ingested_news (id, raw_hash, title, source, url, published_at, category, reliability_score, related_tickers, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            "iso_z", "hash_z", "SEC Orders Action On Exchange Platform Z",
+            "SEC Press Releases", "https://sec.gov/z", "2026-09-20T10:00:00Z",
+            NewsCategory.SEC_FILING.value, 0.95, '["SRRK"]', now_str
+        ))
+        cursor.execute("""
+            INSERT INTO ingested_news (id, raw_hash, title, source, url, published_at, category, reliability_score, related_tickers, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            "iso_naive", "hash_naive", "SEC Issues Exemptive Order For Biotech Issuer",
+            "SEC Press Releases", "https://sec.gov/naive", "2026-09-20 09:30:00",
+            NewsCategory.SEC_FILING.value, 0.95, '["SRRK"]', now_str
+        ))
+        cursor.execute("""
+            INSERT INTO ingested_news (id, raw_hash, title, source, url, published_at, category, reliability_score, related_tickers, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            "iso_aware", "hash_aware", "SRRK Announces Positive Phase 3 Clinical Moat",
+            "BusinessWire", "https://bw.com/srrk", "2026-09-20T11:00:00+00:00",
+            NewsCategory.BREAKING.value, 0.90, '["SRRK"]', now_str
+        ))
+        conn.commit()
+
+    # Retrieve via get_recent_news
+    recent = store.get_recent_news(hours=48, limit=10)
+    assert len(recent) == 3
+    for it in recent:
+        assert it.published_at is not None
+        assert it.published_at.tzinfo is not None, f"Item {it.id} published_at must be timezone-aware"
+
+    # Retrieve via get_recent_regulatory_news
+    reg = store.get_recent_regulatory_news(hours=48, limit=10)
+    assert len(reg) == 2
+    for r in reg:
+        assert r.published_at.tzinfo is not None, f"Regulatory item {r.id} published_at must be timezone-aware"
+
+    # Retrieve via get_recent_news_for_ticker
+    ticker_news = store.get_recent_news_for_ticker("SRRK", hours=48, limit=10)
+    assert len(ticker_news) == 3
+    for tn in ticker_news:
+        assert tn.published_at.tzinfo is not None
+
+

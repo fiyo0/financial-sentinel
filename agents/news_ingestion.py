@@ -675,7 +675,15 @@ class NewsIngestionAgent(BaseAgent):
             new_items = self.enrich_items_with_gemini(new_items, api_key=api_key)
 
         # Sort news items chronologically so freshest breaking news appears first
-        new_items.sort(key=lambda x: x.published_at, reverse=True)
+        def _safe_pub_time(it: NewsItem) -> datetime:
+            dt = getattr(it, "published_at", None)
+            if not dt:
+                return datetime.min.replace(tzinfo=timezone.utc)
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=timezone.utc)
+            return dt
+
+        new_items.sort(key=_safe_pub_time, reverse=True)
 
         # Update in-memory TTL cache for live feeds
         if live and new_items:
