@@ -299,3 +299,40 @@ def test_quant_flat_prices_division_by_zero_resilience():
     assert stress.var_95_daily_pct == 0.0
     assert stress.sharpe_ratio is None or stress.sharpe_ratio == 0.0
     assert stress.sortino_ratio is None or stress.sortino_ratio == 0.0
+
+
+def test_sqlite_wal_concurrent_immediate_writers(tmp_path):
+    """
+    Verify 20 concurrent threads writing via _write_transaction (BEGIN IMMEDIATE)
+    eliminate reader-to-writer lock upgrade deadlocks in WAL mode.
+    """
+    db_file = str(tmp_path / "concurrent_immediate.db")
+    store = StateStore(db_file)
+
+    num_threads = 20
+    writes_per_thread = 20
+    barrier = threading.Barrier(num_threads)
+    errors = []
+
+    def writer_task(thread_idx: int):
+        barrier.wait()
+        for i in range(writes_per_thread):
+            try:
+                with store._write_transaction() as conn:
+                    conn.execute(
+                        "INSERT INTO kv_store (key, value_json, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) "
+                        "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, updated_at=CURRENT_TIMESTAMP;",
+                        (f"k_{thread_idx}_{i}", f"val_{thread_idx}_{i}")
+                    )
+            except Exception as e:
+                errors.append(f"Thread {thread_idx} write {i} failed: {e}")
+
+    with ThreadPoolExecutor(max_workers=num_threads) as executor:
+        futures = [executor.submit(writer_task, idx) for idx in range(num_threads)]
+        for f in futures:
+            f.result(timeout=15.0)
+
+    assert len(errors) == 0, f"Encountered errors with _write_transaction: {errors}"
+    with store._get_connection() as conn:
+        count = conn.execute("SELECT COUNT(*) FROM kv_store;").fetchone()[0]
+    assert count == num_threads * writes_per_thread

@@ -6,6 +6,7 @@ import json
 import hashlib
 import os
 import logging
+import contextlib
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any
 from models import NewsItem, BriefingReport, NewsCategory
@@ -288,7 +289,7 @@ class StateStore:
                     logger.error("Failed closing stale DB connection: %s", close_err)
                 self._local.conn = None
 
-        conn = sqlite3.connect(self.db_path, timeout=30.0)
+        conn = sqlite3.connect(self.db_path, timeout=30.0, isolation_level=None)
         conn.row_factory = sqlite3.Row
         try:
             conn.execute("PRAGMA journal_mode=WAL;")
@@ -299,6 +300,25 @@ class StateStore:
             logger.debug("PRAGMA configuration note on connection: %s", e)
         self._local.conn = conn
         return conn
+
+    @contextlib.contextmanager
+    def _write_transaction(self):
+        """
+        Executes writes inside an explicit BEGIN IMMEDIATE transaction.
+        Acquires write lock immediately, eliminating reader-to-writer lock upgrade deadlocks.
+        """
+        conn = self._get_connection()
+        conn.execute("BEGIN IMMEDIATE;")
+        try:
+            yield conn
+            conn.execute("COMMIT;")
+        except (sqlite3.Error, Exception) as e:
+            try:
+                conn.execute("ROLLBACK;")
+            except sqlite3.Error:
+                pass
+            logger.error("Transaction rolled back due to error: %s", e)
+            raise
 
     def close_connection(self):
         """Closes the current thread's connection pool entry if open."""

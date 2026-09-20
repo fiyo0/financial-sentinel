@@ -151,3 +151,38 @@ def test_price_cache_bounded_proxy():
     assert len(PRICE_CACHE) == 0
     assert "NVDA" not in PRICE_CACHE
 
+
+def test_cache_manager_concurrent_get_and_get_or_compute():
+    """Verify concurrent get() and get_or_compute() across 50 threads do not cause lock inversion deadlocks."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    cm = CacheManager(default_ttl_seconds=60.0)
+    errors = []
+
+    def reader(tid: int):
+        for i in range(20):
+            try:
+                cm.get("concurrent_ns", f"k_{i % 5}")
+            except Exception as e:
+                errors.append(e)
+
+    def computer(tid: int):
+        for i in range(20):
+            try:
+                cm.get_or_compute("concurrent_ns", f"k_{i % 5}", lambda val=f"val_{tid}_{i}": val, ttl_seconds=60.0)
+            except Exception as e:
+                errors.append(e)
+
+    with ThreadPoolExecutor(max_workers=50) as executor:
+        futures = []
+        for tid in range(25):
+            futures.append(executor.submit(reader, tid))
+            futures.append(executor.submit(computer, tid))
+        for f in futures:
+            f.result(timeout=10.0)
+
+    assert len(errors) == 0, f"Encountered errors during concurrent cache execution: {errors}"
+    stats = cm.stats()
+    assert stats["total_active_keys"] > 0
+    assert stats["hits"] + stats["misses"] > 0
+

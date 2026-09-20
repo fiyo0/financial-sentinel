@@ -120,10 +120,10 @@ class QuantRiskEngine:
         benchmark: str = "SPY",
         fallback_sector: str = "Unclassified",
         custom_bars_map: Optional[Dict[str, List[Dict[str, Any]]]] = None
-    ) -> float:
+    ) -> Optional[float]:
         """
         Dynamically calculates empirical Beta of a single ticker against benchmark (SPY).
-        Returns 1.0 (market-neutral default) if trading history is unavailable.
+        Returns None if trading history is unavailable or insufficient.
         """
         clean_ticker = ticker.strip().upper()
         if clean_ticker == benchmark.upper():
@@ -154,7 +154,7 @@ class QuantRiskEngine:
         except Exception as e:
             logger.debug("Empirical beta computation error for %s: %s", clean_ticker, e)
 
-        return 1.0
+        return None
 
     def analyze_portfolio(
         self,
@@ -206,21 +206,28 @@ class QuantRiskEngine:
             for weight in sector_concentrations.values()
         ) or top_3_concentration >= 60.0
 
-        # 3. Retrieve Historical Bars for Empirical Risk Modeling
+        # 3. Retrieve Historical Bars for Empirical Risk Modeling (Parallelized via ThreadPoolExecutor)
         bars_by_ticker: Dict[str, List[Dict[str, Any]]] = {}
         unique_tickers = list(set([h.ticker.strip().upper() for h in portfolio.holdings] + [benchmark_ticker.upper()]))
 
-        for sym in unique_tickers:
-            if custom_bars_map and sym in custom_bars_map:
-                bars_by_ticker[sym] = custom_bars_map[sym]
-            else:
-                try:
-                    from analytics.technical_indicators import fetch_historical_bars
-                    b = fetch_historical_bars(sym)
-                    if b:
-                        bars_by_ticker[sym] = b
-                except Exception as e:
-                    logger.debug("Failed fetching bars for %s: %s", sym, e)
+        to_fetch = [s for s in unique_tickers if not (custom_bars_map and s in custom_bars_map)]
+        for s in unique_tickers:
+            if custom_bars_map and s in custom_bars_map:
+                bars_by_ticker[s] = custom_bars_map[s]
+
+        if to_fetch:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            from analytics.technical_indicators import fetch_historical_bars
+            with ThreadPoolExecutor(max_workers=min(8, len(to_fetch) or 1)) as executor:
+                future_to_sym = {executor.submit(fetch_historical_bars, sym): sym for sym in to_fetch}
+                for future in as_completed(future_to_sym):
+                    sym = future_to_sym[future]
+                    try:
+                        b = future.result()
+                        if b:
+                            bars_by_ticker[sym] = b
+                    except Exception as e:
+                        logger.debug("Failed fetching bars for %s: %s", sym, e)
 
         # Check if we have sufficient empirical bars for the portfolio
         equity_tickers = [h.ticker.strip().upper() for h in portfolio.holdings]
@@ -239,6 +246,11 @@ class QuantRiskEngine:
         covariance_matrix: Dict[str, Dict[str, float]] = {}
         empirical_betas: Dict[str, float] = {}
         fields_unavailable: List[str] = []
+
+        # Grounding: Flag unverified zero-price holdings
+        for h in portfolio.holdings:
+            if h.current_price <= 0.0:
+                fields_unavailable.append(f"{h.ticker}: Live market price feed failed ($0.00)")
 
         total_portfolio_wealth = total_equity + max(0.0, portfolio.cash)
         cash_pct = round((portfolio.cash / total_portfolio_wealth) * 100.0, 2) if total_portfolio_wealth > 0 else 0.0
@@ -267,8 +279,8 @@ class QuantRiskEngine:
                     cov = compute_sample_covariance(returns_by_ticker[t1], returns_by_ticker[t2])
                     covariance_matrix[t1][t2] = round(cov * 252.0, 6)
 
-            # Empirical Betas against SPY
-            weighted_beta = 0.0
+            # Empirical Betas against SPY (zero silent 1.0 fallbacks)
+            weighted_beta: Optional[float] = 0.0
             for h in portfolio.holdings:
                 sym = h.ticker.strip().upper()
                 w = h.weight_pct / 100.0
@@ -276,11 +288,21 @@ class QuantRiskEngine:
                     b_val = 1.0
                 elif bm_returns and len(bm_returns) == n_returns:
                     raw_b = compute_empirical_beta(returns_by_ticker[sym], bm_returns)
-                    b_val = raw_b if raw_b is not None else 1.0
+                    if raw_b is not None:
+                        b_val = raw_b
+                    else:
+                        b_val = None
+                        fields_unavailable.append(f"{sym}: Empirical beta unavailable (insufficient trading history)")
                 else:
-                    b_val = 1.0
-                empirical_betas[sym] = round(b_val, 2)
-                weighted_beta += w * b_val
+                    b_val = None
+                    fields_unavailable.append(f"{sym}: Empirical beta unavailable (insufficient trading history)")
+
+                if b_val is not None:
+                    empirical_betas[sym] = round(b_val, 2)
+                    if weighted_beta is not None:
+                        weighted_beta += w * b_val
+                else:
+                    weighted_beta = None
 
             # Realized Portfolio Daily Return Series & Variance
             # w^T * Σ * w
@@ -355,9 +377,9 @@ class QuantRiskEngine:
             sortino = None
             max_drawdown_pct = None
 
-            fields_unavailable = [
-                "Insufficient historical data for empirical computation (minimum 15 trading days required)",
-            ]
+            insufficient_msg = "Insufficient historical data for empirical computation (minimum 15 trading days required)"
+            if insufficient_msg not in fields_unavailable:
+                fields_unavailable.append(insufficient_msg)
             provenance = "Insufficient historical data for empirical computation (minimum 15 trading days required). Empirical returns required for realized volatility, beta, VaR, Sharpe, and Sortino."
 
         # Historical Scenario Replay: empirical stress testing across verified crisis windows & benchmark shifts

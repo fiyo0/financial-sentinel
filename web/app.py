@@ -107,10 +107,10 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Could not set default executor: {e}")
 
-    # Startup actions
+    # Startup actions (non-blocking off-loop execution)
     try:
-        orchestrator.state_store.restore_from_gcs()
-        orchestrator.state_store._init_db()
+        await asyncio.to_thread(orchestrator.state_store.restore_from_gcs)
+        await asyncio.to_thread(orchestrator.state_store._init_db)
     except Exception as e:
         logger.warning(f"Startup GCS restore: {e}")
 

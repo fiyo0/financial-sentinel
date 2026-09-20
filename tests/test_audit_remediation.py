@@ -552,3 +552,51 @@ def test_r7_dashboard_auth_disabled_fails_closed_in_production(monkeypatch):
     with pytest.raises(RuntimeError, match="CRITICAL SECURITY CONFIGURATION ERROR"):
         get_current_user_optional(req)
 
+
+def test_market_data_circuit_breaker_trips_on_consecutive_failures(monkeypatch):
+    """Verify provider circuit breaker trips on 3 consecutive failures and bypasses Robinhood."""
+    from analytics.market_data import (
+        PROVIDER_METRICS, _is_provider_healthy, _record_provider_failure, _record_provider_success
+    )
+    from storage.cache_manager import cache_manager
+
+    # Reset metrics
+    PROVIDER_METRICS["robinhood"] = {
+        "successes": 0, "failures": 0, "consecutive_failures": 0, "circuit_broken": False, "circuit_reset_at": 0.0
+    }
+    PROVIDER_METRICS["yahoo"] = {
+        "successes": 0, "failures": 0, "consecutive_failures": 0, "circuit_broken": False, "circuit_reset_at": 0.0
+    }
+    cache_manager.delete("prices", "TEST_CB")
+
+    assert _is_provider_healthy("robinhood") is True
+    _record_provider_failure("robinhood", status_code=500)
+    _record_provider_failure("robinhood", status_code=500)
+    _record_provider_failure("robinhood", status_code=500)
+
+    assert _is_provider_healthy("robinhood") is False
+    assert PROVIDER_METRICS["robinhood"]["circuit_broken"] is True
+
+    # When healthy resets or success occurs
+    _record_provider_success("robinhood")
+    assert _is_provider_healthy("robinhood") is True
+    assert PROVIDER_METRICS["robinhood"]["circuit_broken"] is False
+
+
+def test_market_data_circuit_breaker_trips_on_429_with_retry_after():
+    """Verify provider circuit breaker trips immediately on HTTP 429 and parses Retry-After."""
+    import time
+    from analytics.market_data import (
+        PROVIDER_METRICS, _is_provider_healthy, _record_provider_failure
+    )
+
+    PROVIDER_METRICS["robinhood"] = {
+        "successes": 0, "failures": 0, "consecutive_failures": 0, "circuit_broken": False, "circuit_reset_at": 0.0
+    }
+
+    start = time.time()
+    _record_provider_failure("robinhood", status_code=429, retry_after_header="30")
+    assert _is_provider_healthy("robinhood") is False
+    assert PROVIDER_METRICS["robinhood"]["circuit_broken"] is True
+    assert PROVIDER_METRICS["robinhood"]["circuit_reset_at"] >= start + 29.0
+

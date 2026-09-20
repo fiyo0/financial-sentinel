@@ -282,6 +282,7 @@ class NewsIngestionAgent(BaseAgent):
             role_description="Scrapes RSS feeds, financial filings, and macro news with source scoring and entity extraction."
         )
         self.state_store = state_store or StateStore(config.db_path)
+        self.degraded_feeds: Dict[str, str] = {}
 
     def extract_entities(self, text: str, user_id: Optional[str] = None) -> Dict[str, List[str]]:
         """
@@ -442,15 +443,20 @@ class NewsIngestionAgent(BaseAgent):
 
             resp = httpx.get(url, headers=headers, timeout=8.0, follow_redirects=True)
             if resp.status_code == 429:
-                retry_after = resp.headers.get("Retry-After")
+                retry_after = resp.headers.get("Retry-After") or "60"
+                self.degraded_feeds[name] = f"HTTP 429 Rate Limited (Retry-After: {retry_after}s)"
                 logger.warning("RATE_LIMITED: %s (%s) returned HTTP 429. Retry-After: %s", name, url, retry_after)
                 return []
             if resp.status_code in (403, 503):
+                self.degraded_feeds[name] = f"HTTP {resp.status_code} Blocked/Unavailable"
                 logger.warning("BLOCKED: %s (%s) returned HTTP %d. Upstream block or challenge.", name, url, resp.status_code)
                 return []
             if resp.status_code != 200:
+                self.degraded_feeds[name] = f"HTTP {resp.status_code} Status"
                 logger.warning("INGESTION_NON_200: %s (%s) returned HTTP %d", name, url, resp.status_code)
                 return []
+
+            self.degraded_feeds.pop(name, None)
 
             content_type = resp.headers.get("content-type", "").lower()
             if "text/html" in content_type and "xml" not in content_type:
@@ -684,6 +690,9 @@ class NewsIngestionAgent(BaseAgent):
             return dt
 
         new_items.sort(key=_safe_pub_time, reverse=True)
+
+        if self.degraded_feeds:
+            logger.warning("Feed telemetry: %d degraded feeds detected during ingestion: %s", len(self.degraded_feeds), self.degraded_feeds)
 
         # Update in-memory TTL cache for live feeds
         if live and new_items:

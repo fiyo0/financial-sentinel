@@ -39,23 +39,26 @@ class CacheManager:
     def get(self, namespace: str, key: str, default: Any = None) -> Any:
         """Retrieve value if unexpired; returns default if missing or expired."""
         now = time.time()
+        is_hit = False
+        val_to_return = default
+
         with self._get_ns_lock(namespace):
             ns_dict = self._store.get(namespace)
-            if not ns_dict or key not in ns_dict:
-                with self._meta_lock:
-                    self._misses += 1
-                return default
+            if ns_dict and key in ns_dict:
+                expiry, val = ns_dict[key]
+                if now < expiry:
+                    is_hit = True
+                    val_to_return = val
+                else:
+                    del ns_dict[key]
 
-            expiry, val = ns_dict[key]
-            if now >= expiry:
-                del ns_dict[key]
-                with self._meta_lock:
-                    self._misses += 1
-                return default
-
-            with self._meta_lock:
+        with self._meta_lock:
+            if is_hit:
                 self._hits += 1
-            return val
+            else:
+                self._misses += 1
+
+        return val_to_return
 
     def set(self, namespace: str, key: str, value: Any, ttl_seconds: Optional[float] = None) -> None:
         """Store value under namespace:key with given or default TTL and bounded eviction."""
@@ -104,11 +107,6 @@ class CacheManager:
         leader = False
 
         with self._meta_lock:
-            # Re-check under meta lock
-            val = self.get(namespace, key)
-            if val is not None:
-                return val
-
             event = self._inflight.get(coord_key)
             if event is None:
                 event = threading.Event()

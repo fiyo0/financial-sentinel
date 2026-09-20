@@ -283,4 +283,23 @@ def test_t3_4_position_size_zero_cash_and_low_conviction():
     assert res_normal["target_shares"] > 0.0
 
 
+def test_compute_single_ticker_beta_returns_none_when_data_missing():
+    """Verify compute_single_ticker_beta returns None instead of 1.0 when price bars are unavailable or insufficient."""
+    # 1. Non-existent ticker or empty bars
+    beta_missing = QuantRiskEngine.compute_single_ticker_beta("NONEXISTENT_TICKER_999", custom_bars_map={})
+    assert beta_missing is None, f"Expected None for missing ticker, got {beta_missing}"
+
+    # 2. Insufficient bars (< 15 bars)
+    short_bars = {
+        "SHORT": [{"date": f"2026-01-{i+1:02d}", "close": 100.0 + i} for i in range(5)],
+        "SPY": [{"date": f"2026-01-{i+1:02d}", "close": 400.0 + i} for i in range(5)]
+    }
+    beta_short = QuantRiskEngine.compute_single_ticker_beta("SHORT", benchmark="SPY", custom_bars_map=short_bars)
+    assert beta_short is None, f"Expected None for <15 days history, got {beta_short}"
+
+    # 3. SPY against SPY returns 1.0
+    beta_spy = QuantRiskEngine.compute_single_ticker_beta("SPY", benchmark="SPY")
+    assert beta_spy == 1.0
+
+
 

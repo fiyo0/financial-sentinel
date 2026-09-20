@@ -74,9 +74,86 @@ except ImportError:
     _HAS_HTTP2 = False
 
 PROVIDER_METRICS: Dict[str, Dict[str, Any]] = {
-    "robinhood": {"successes": 0, "failures": 0, "circuit_broken": False},
-    "yahoo": {"successes": 0, "failures": 0, "circuit_broken": False},
+    "robinhood": {
+        "successes": 0,
+        "failures": 0,
+        "consecutive_failures": 0,
+        "circuit_broken": False,
+        "circuit_reset_at": 0.0,
+    },
+    "yahoo": {
+        "successes": 0,
+        "failures": 0,
+        "consecutive_failures": 0,
+        "circuit_broken": False,
+        "circuit_reset_at": 0.0,
+    },
 }
+
+
+def _is_provider_healthy(provider: str) -> bool:
+    """
+    Checks if a market data provider is currently healthy or in circuit breaker state.
+    Allows canary probe if circuit timeout has expired.
+    """
+    m = PROVIDER_METRICS.get(provider)
+    if not m:
+        return True
+    now = time.time()
+    if m.get("circuit_broken"):
+        reset_at = m.get("circuit_reset_at", 0.0)
+        if now >= reset_at:
+            # Cooldown expired: allow a canary probe
+            return True
+        return False
+    if m.get("consecutive_failures", 0) >= 3:
+        m["circuit_broken"] = True
+        m["circuit_reset_at"] = now + 60.0
+        logger.warning("Provider %s tripped circuit breaker after %d consecutive failures. Cooldown for 60s.", provider, m["consecutive_failures"])
+        return False
+    return True
+
+
+def _record_provider_success(provider: str) -> None:
+    m = PROVIDER_METRICS.get(provider)
+    if m:
+        m["successes"] = m.get("successes", 0) + 1
+        m["consecutive_failures"] = 0
+        m["circuit_broken"] = False
+        m["circuit_reset_at"] = 0.0
+
+
+def _record_provider_failure(
+    provider: str,
+    status_code: Optional[int] = None,
+    retry_after_header: Optional[str] = None
+) -> None:
+    m = PROVIDER_METRICS.get(provider)
+    if not m:
+        return
+    m["failures"] = m.get("failures", 0) + 1
+    m["consecutive_failures"] = m.get("consecutive_failures", 0) + 1
+    now = time.time()
+    if status_code == 429:
+        cooldown = 60.0
+        if retry_after_header:
+            try:
+                cooldown = max(5.0, float(retry_after_header))
+            except (ValueError, TypeError):
+                cooldown = 60.0
+        m["circuit_broken"] = True
+        m["circuit_reset_at"] = now + cooldown
+        logger.warning(
+            "Provider %s rate-limited (HTTP 429). Circuit open for %.1fs (reset at %.0f).",
+            provider, cooldown, m["circuit_reset_at"]
+        )
+    elif m["consecutive_failures"] >= 3:
+        m["circuit_broken"] = True
+        m["circuit_reset_at"] = now + 60.0
+        logger.warning(
+            "Provider %s consecutive failures reached %d. Circuit open for 60s.",
+            provider, m["consecutive_failures"]
+        )
 
 
 def get_market_http_client() -> httpx.Client:
@@ -168,68 +245,81 @@ def fetch_live_quote(ticker: str) -> Dict[str, Any]:
         client = get_market_http_client()
 
         # 1. Primary Live API: Robinhood Unauthenticated Market Quote API
-        rh_url = f"https://api.robinhood.com/quotes/{clean_ticker}/"
-        try:
-            resp = client.get(rh_url, headers=headers, timeout=5.0)
-            if resp.status_code == 200:
-                d = resp.json()
-                raw_trade = d.get("last_trade_price") or d.get("last_extended_hours_trade_price") or d.get("adjusted_previous_close")
-                raw_prev = d.get("adjusted_previous_close") or d.get("previous_close")
-                if raw_trade:
-                    p = float(raw_trade)
-                    if p > 0:
-                        current_price = p
-                        fetch_success = True
-                        provider_used = "robinhood"
-                        PROVIDER_METRICS["robinhood"]["successes"] += 1
-                        if raw_prev:
-                            prev_close = float(raw_prev)
-
-                # Dynamically fetch verified company or fund name
-                inst_url = d.get("instrument")
-                if inst_url:
-                    try:
-                        inst_resp = client.get(inst_url, headers=headers, timeout=3.0)
-                        if inst_resp.status_code == 200:
-                            inst_data = inst_resp.json()
-                            resolved_name = inst_data.get("simple_name") or inst_data.get("name")
-                            if resolved_name:
-                                short_name = resolved_name
-                    except Exception as e:
-                        logger.debug("Robinhood instrument resolution failed for %s: %s", clean_ticker, e)
-            else:
-                PROVIDER_METRICS["robinhood"]["failures"] += 1
-        except Exception as e:
-            PROVIDER_METRICS["robinhood"]["failures"] += 1
-            logger.debug(f"Robinhood quote fetch error for {clean_ticker}: {e}")
-
-        # 2. Secondary Live API: Yahoo Finance Chart API (if primary did not return a price)
-        if not fetch_success or current_price <= 0:
-            y_url = f"https://query1.finance.yahoo.com/v8/finance/chart/{clean_ticker}?interval=1d&range=1d"
+        if _is_provider_healthy("robinhood"):
+            rh_url = f"https://api.robinhood.com/quotes/{clean_ticker}/"
             try:
-                resp = client.get(y_url, headers=headers, timeout=4.0)
+                resp = client.get(rh_url, headers=headers, timeout=5.0)
                 if resp.status_code == 200:
-                    data = resp.json()
-                    chart = data.get("chart") if isinstance(data, dict) else None
-                    result_list = chart.get("result") if isinstance(chart, dict) else None
-                    if not result_list or not isinstance(result_list, list) or len(result_list) == 0 or not isinstance(result_list[0], dict):
-                        err = chart.get("error") if isinstance(chart, dict) else "Missing chart.result"
-                        logger.warning("YAHOO_CONTRACT_VIOLATION: 'result' is invalid for %s. Error: %s", clean_ticker, err)
-                    else:
-                        meta = result_list[0].get("meta", {})
-                        p = float(meta.get("regularMarketPrice", 0.0) or 0.0)
+                    d = resp.json()
+                    raw_trade = d.get("last_trade_price") or d.get("last_extended_hours_trade_price") or d.get("adjusted_previous_close")
+                    raw_prev = d.get("adjusted_previous_close") or d.get("previous_close")
+                    if raw_trade:
+                        p = float(raw_trade)
                         if p > 0:
                             current_price = p
                             fetch_success = True
-                            provider_used = "yahoo"
-                            PROVIDER_METRICS["yahoo"]["successes"] += 1
-                            prev_close = float(meta.get("chartPreviousClose", current_price) or current_price)
-                            y_name = meta.get("shortName")
-                            if y_name:
-                                short_name = y_name
+                            provider_used = "robinhood"
+                            _record_provider_success("robinhood")
+                            if raw_prev:
+                                prev_close = float(raw_prev)
+
+                    # Dynamically fetch verified company or fund name
+                    inst_url = d.get("instrument")
+                    if inst_url:
+                        try:
+                            inst_resp = client.get(inst_url, headers=headers, timeout=3.0)
+                            if inst_resp.status_code == 200:
+                                inst_data = inst_resp.json()
+                                resolved_name = inst_data.get("simple_name") or inst_data.get("name")
+                                if resolved_name:
+                                    short_name = resolved_name
+                        except Exception as e:
+                            logger.debug("Robinhood instrument resolution failed for %s: %s", clean_ticker, e)
+                elif resp.status_code == 429:
+                    _record_provider_failure("robinhood", status_code=429, retry_after_header=resp.headers.get("Retry-After"))
+                else:
+                    _record_provider_failure("robinhood", status_code=resp.status_code)
             except Exception as e:
-                PROVIDER_METRICS["yahoo"]["failures"] += 1
-                logger.debug(f"Yahoo quote fetch error for {clean_ticker}: {e}")
+                _record_provider_failure("robinhood")
+                logger.debug(f"Robinhood quote fetch error for {clean_ticker}: {e}")
+        else:
+            logger.debug("Robinhood circuit breaker open, skipping for %s", clean_ticker)
+
+        # 2. Secondary Live API: Yahoo Finance Chart API (if primary did not return a price)
+        if not fetch_success or current_price <= 0:
+            if _is_provider_healthy("yahoo"):
+                y_url = f"https://query1.finance.yahoo.com/v8/finance/chart/{clean_ticker}?interval=1d&range=1d"
+                try:
+                    resp = client.get(y_url, headers=headers, timeout=4.0)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        chart = data.get("chart") if isinstance(data, dict) else None
+                        result_list = chart.get("result") if isinstance(chart, dict) else None
+                        if not result_list or not isinstance(result_list, list) or len(result_list) == 0 or not isinstance(result_list[0], dict):
+                            err = chart.get("error") if isinstance(chart, dict) else "Missing chart.result"
+                            logger.warning("YAHOO_CONTRACT_VIOLATION: 'result' is invalid for %s. Error: %s", clean_ticker, err)
+                            _record_provider_failure("yahoo")
+                        else:
+                            meta = result_list[0].get("meta", {})
+                            p = float(meta.get("regularMarketPrice", 0.0) or 0.0)
+                            if p > 0:
+                                current_price = p
+                                fetch_success = True
+                                provider_used = "yahoo"
+                                _record_provider_success("yahoo")
+                                prev_close = float(meta.get("chartPreviousClose", current_price) or current_price)
+                                y_name = meta.get("shortName")
+                                if y_name:
+                                    short_name = y_name
+                    elif resp.status_code == 429:
+                        _record_provider_failure("yahoo", status_code=429, retry_after_header=resp.headers.get("Retry-After"))
+                    else:
+                        _record_provider_failure("yahoo", status_code=resp.status_code)
+                except Exception as e:
+                    _record_provider_failure("yahoo")
+                    logger.debug(f"Yahoo quote fetch error for {clean_ticker}: {e}")
+            else:
+                logger.debug("Yahoo circuit breaker open, skipping for %s", clean_ticker)
 
         # Dynamic Sector Classification from resolved name & ticker
         sector = classify_equity_sector(clean_ticker, short_name)
@@ -246,7 +336,10 @@ def fetch_live_quote(ticker: str) -> Dict[str, Any]:
             "error": None if fetch_success else f"Unable to fetch live quote for {clean_ticker}"
         }
 
-    return cache_manager.get_or_compute("prices", clean_ticker, _do_fetch, ttl_seconds=CACHE_TTL_SECONDS)
+    res = cache_manager.get_or_compute("prices", clean_ticker, _do_fetch, ttl_seconds=CACHE_TTL_SECONDS)
+    if res and not res.get("is_live"):
+        cache_manager.delete("prices", clean_ticker)
+    return res
 
 
 
@@ -278,6 +371,8 @@ def update_portfolio_live_prices(portfolio: Portfolio, override_all: bool = True
                         if not holding.sector or holding.sector == "Unclassified":
                             holding.sector = quote_sec
                 else:
+                    if holding.current_price <= 0.0:
+                        logger.warning("Holding %s has unverified zero price ($0.00) after failed quote refresh", holding.ticker)
                     failed_tickers.append(holding.ticker)
 
             except Exception as e:

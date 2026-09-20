@@ -209,7 +209,7 @@ def test_market_briefings_no_tier1_boilerplate(sample_portfolio, monkeypatch):
     as_of_pst = datetime(2026, 9, 21, 10, 0, tzinfo=PST)
 
     captured_prompts = []
-    agent.query_llm_text = lambda prompt, **kwargs: (captured_prompts.append(prompt), "☀️ <b>MID-MARKET PULSE</b>")[1]
+    agent.query_llm_text = lambda prompt, **kwargs: (captured_prompts.append(prompt + (kwargs.get("system_instruction") or "")), "☀️ <b>MID-MARKET PULSE</b>")[1]
 
     overview = {"indices": {"SPY": {"current_price": 550.0, "change_pct": 0.2}}}
 
