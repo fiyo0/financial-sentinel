@@ -1,0 +1,63 @@
+{
+  "statutory_authorities": {
+    "score": 0.99,
+    "patterns": [
+      ".gov",
+      ".mil",
+      ".fed.us",
+      "sec.gov",
+      "federal reserve",
+      "european central bank",
+      "bank of england"
+    ]
+  },
+  "premier_wires": {
+    "score": 0.92,
+    "patterns": [
+      "reuters",
+      "bloomberg",
+      "wsj.com",
+      "wall street journal",
+      "ft.com",
+      "financial times",
+      "apnews",
+      "associated press",
+      "barrons.com",
+      "barron's",
+      "nasdaq.com",
+      "nyse.com",
+      "dow jones"
+    ]
+  },
+  "mainstream_financial_media": {
+    "score": 0.85,
+    "patterns": [
+      "cnbc",
+      "marketwatch",
+      "finance.yahoo",
+      "yahoo finance",
+      "news.google",
+      "google news",
+      "forbes",
+      "fortune",
+      "economist",
+      "investors.com",
+      "investor's business daily",
+      "ibd"
+    ]
+  },
+  "crowdsourced_opinion": {
+    "score": 0.65,
+    "patterns": [
+      "seekingalpha",
+      "seeking alpha",
+      "benzinga",
+      "motley fool",
+      "fool.com",
+      "thestreet",
+      "tipranks",
+      "zacks"
+    ]
+  },
+  "default_score": 0.75
+}

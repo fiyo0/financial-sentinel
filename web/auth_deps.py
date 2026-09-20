@@ -9,14 +9,19 @@ from auth.crypto import verify_session_token
 from config import config
 
 
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 def get_state_store(request: Request):
     """Retrieves state_store from active orchestrator or app.state."""
     try:
         import web.app as web_app
         if hasattr(web_app, "orchestrator") and web_app.orchestrator is not None:
             return web_app.orchestrator.state_store
-    except (ImportError, AttributeError):
-        pass
+    except (ImportError, AttributeError) as e:
+        logger.debug("Could not resolve orchestrator from web.app: %s", e)
     if hasattr(request.app.state, "store") and request.app.state.store is not None:
         return request.app.state.store
     from orchestrator import FinancialSentinelOrchestrator

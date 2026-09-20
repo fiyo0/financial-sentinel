@@ -257,6 +257,9 @@ def _fetch_historical_bars(ticker: str, force_fresh: bool = False) -> List[Dict[
     return []
 
 
+fetch_historical_bars = _fetch_historical_bars
+
+
 def compute_technical_snapshot(ticker: str, custom_bars: Optional[List[Dict[str, Any]]] = None) -> TechnicalSnapshot:
     """
     Computes deterministic technical momentum and trend indicators for any ticker.
@@ -363,7 +366,7 @@ def compute_technical_snapshot(ticker: str, custom_bars: Optional[List[Dict[str,
 
     if n_bars >= 50:
         sma_50 = round(sum(closes[-50:]) / 50.0, 2)
-        dist_from_50 = round(((current_price - sma_50) / sma_50) * 100.0, 2)
+        dist_from_50 = round(((current_price - sma_50) / sma_50) * 100.0, 2) if (sma_50 is not None and abs(sma_50) > 1e-9) else 0.0
     else:
         sma_50 = None
         dist_from_50 = None
@@ -371,7 +374,7 @@ def compute_technical_snapshot(ticker: str, custom_bars: Optional[List[Dict[str,
 
     if n_bars >= 200:
         sma_200 = round(sum(closes[-200:]) / 200.0, 2)
-        dist_from_200 = round(((current_price - sma_200) / sma_200) * 100.0, 2)
+        dist_from_200 = round(((current_price - sma_200) / sma_200) * 100.0, 2) if (sma_200 is not None and abs(sma_200) > 1e-9) else 0.0
     else:
         sma_200 = None
         dist_from_200 = None

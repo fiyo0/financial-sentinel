@@ -62,12 +62,21 @@ def test_api_deepdives_endpoints(client, monkeypatch):
     cookies = {"sentinel_token": token}
 
     # 1. Mock analyze single ticker
+    from models import SingleTickerAnalysis
     def mock_analyze_single_ticker(*args, **kwargs):
-        return """<b>VERDICT: BULLISH</b>
+        return SingleTickerAnalysis(
+            ticker="NVDA",
+            company_name="NVIDIA Corporation",
+            verdict="BULLISH",
+            conviction_score=88.0,
+            thesis="Mocked",
+            telegram_html="""<b>VERDICT: BULLISH</b>
 • Conviction Score: 88%
 • Upside Target: $150.00"""
+        )
 
-    monkeypatch.setattr(orchestrator.analysis_agent, 'analyze_single_ticker', mock_analyze_single_ticker)
+    monkeypatch.setattr(orchestrator.analysis_agent, 'analyze_single_ticker_structured', mock_analyze_single_ticker)
+    monkeypatch.setattr('analytics.market_data.fetch_live_quote', lambda sym: {'current_price': 130.0, 'name': 'NVIDIA Corporation', 'price': 130.0})
 
     # 2. Call /api/analyze/NVDA
     resp = client.post('/api/analyze/NVDA', headers=headers, cookies=cookies)

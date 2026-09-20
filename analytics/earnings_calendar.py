@@ -25,7 +25,8 @@ def parse_market_cap(cap_str: Optional[str]) -> float:
     try:
         clean = cap_str.replace("$", "").replace(",", "").strip()
         return float(clean)
-    except Exception:
+    except (ValueError, TypeError, IndexError) as e:
+        logger.debug("Failed parsing market cap '%s': %s", cap_str, e)
         return 0.0
 
 

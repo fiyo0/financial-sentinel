@@ -2,9 +2,12 @@
 Slack Notification Channel Adapter.
 Sends Block Kit formatted cards to Slack Incoming Webhooks.
 """
+import logging
 import httpx
 from typing import Optional, Dict, Any, List
 from config import config
+
+logger = logging.getLogger(__name__)
 
 
 class SlackChannel:
@@ -25,5 +28,6 @@ class SlackChannel:
         try:
             resp = httpx.post(self.webhook_url, json=payload, timeout=8.0)
             return resp.status_code == 200
-        except Exception:
+        except httpx.HTTPError as e:
+            logger.error("Failed sending Slack notification: %s", e)
             return False

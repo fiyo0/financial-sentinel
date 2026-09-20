@@ -60,6 +60,25 @@ class SystemConfig(BaseModel):
         ]
     )
 
+    # Market Benchmarks
+    benchmark_tickers: List[str] = Field(
+        default_factory=lambda: [
+            t.strip().upper() for t in os.getenv("BENCHMARK_TICKERS", "SPY,QQQ,DIA,IWM,VIXY").split(",") if t.strip()
+        ]
+    )
+
+    # NLP & Topic Clustering Stopwords
+    regulatory_nlp_stopwords: List[str] = Field(
+        default_factory=lambda: [
+            "the", "and", "for", "with", "from", "that", "this", "remarks",
+            "speech", "statement", "roundtable", "meeting", "about", "preparations",
+            "clock", "around", "towards", "annual", "official", "sec", "federal",
+            "reserve", "board", "commission", "press", "release", "trading", "market",
+            "markets", "stock", "stocks", "financial", "securities", "investor",
+            "investors", "public", "general", "united", "states", "agency", "action"
+        ]
+    )
+
     # Server & Auth Settings
     web_host: str = "0.0.0.0"
     web_port: int = 8000

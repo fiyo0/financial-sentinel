@@ -10,6 +10,7 @@ import io
 import time
 import secrets
 import re
+import sqlite3
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 
@@ -126,16 +127,16 @@ async def lifespan(app: FastAPI):
     # Shutdown actions
     try:
         daily_scheduler.stop()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Error stopping daily_scheduler: %s", e)
     try:
         telegram_bot.stop_polling()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Error stopping telegram_bot: %s", e)
     try:
         sentinel_executor.shutdown(wait=False)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Error shutting down sentinel_executor: %s", e)
 
 
 from fastapi.middleware.gzip import GZipMiddleware
@@ -300,12 +301,14 @@ async def api_register(payload: UserRegisterRequest, request: Request, response:
         raise HTTPException(status_code=400, detail="Username, email, and password are required.")
 
     # Check uniqueness
-    if orchestrator.state_store.get_user_by_username(clean_user):
+    existing_user = await asyncio.to_thread(orchestrator.state_store.get_user_by_username, clean_user)
+    if existing_user:
         raise HTTPException(status_code=400, detail="Username is already taken.")
 
     # Create user (role is forced to 'user')
     try:
-        user = orchestrator.state_store.create_user(
+        user = await asyncio.to_thread(
+            orchestrator.state_store.create_user,
             username=clean_user,
             email=clean_email,
             password=payload.password,
@@ -359,7 +362,7 @@ async def api_login(payload: UserLoginRequest, request: Request, response: Respo
     clean_id = payload.username_or_email.strip()
 
     # 1. Check user database authentication via PBKDF2 hash verification
-    user = orchestrator.state_store.authenticate_user(clean_id, payload.password)
+    user = await asyncio.to_thread(orchestrator.state_store.authenticate_user, clean_id, payload.password)
 
     if user:
         login_attempts.pop(client_ip, None)
@@ -401,7 +404,7 @@ async def api_get_user_me(user: Dict[str, Any] = Depends(require_user)):
     raw_key = decrypt_api_key(user.get("encrypted_gemini_key", "")) if user.get("encrypted_gemini_key") else ""
     masked = mask_api_key(raw_key)
 
-    portfolio = orchestrator.get_active_portfolio(user_id=user["id"])
+    portfolio = await asyncio.to_thread(orchestrator.get_active_portfolio, user_id=user["id"])
 
     return {
         "user_id": user["id"],
@@ -419,7 +422,8 @@ async def api_get_user_me(user: Dict[str, Any] = Depends(require_user)):
 @app.post("/api/user/settings")
 async def api_update_user_settings(payload: UserSettingsUpdateRequest, user: Dict[str, Any] = Depends(require_user)):
     user_id = user["id"]
-    updated_user = orchestrator.state_store.update_user_settings(
+    updated_user = await asyncio.to_thread(
+        orchestrator.state_store.update_user_settings,
         user_id=user_id,
         telegram_username=payload.telegram_username,
         raw_gemini_key=payload.gemini_api_key if payload.gemini_api_key is not None else None,
@@ -428,9 +432,11 @@ async def api_update_user_settings(payload: UserSettingsUpdateRequest, user: Dic
     )
 
     if payload.cash is not None:
-        p = orchestrator.get_active_portfolio(user_id=user_id)
-        p.cash = max(0.0, float(payload.cash))
-        orchestrator.persist_active_portfolio(p, user_id=user_id)
+        def _update_cash(uid, cash_val):
+            p = orchestrator.get_active_portfolio(user_id=uid)
+            p.cash = max(0.0, float(cash_val))
+            orchestrator.persist_active_portfolio(p, user_id=uid)
+        await asyncio.to_thread(_update_cash, user_id, payload.cash)
 
     raw_key = decrypt_api_key(updated_user.get("encrypted_gemini_key", "")) if updated_user.get("encrypted_gemini_key") else ""
 
@@ -460,10 +466,15 @@ async def dashboard_view(request: Request):
         return RedirectResponse(url="/login")
 
     user_id = user["id"]
-    portfolio = orchestrator.get_active_portfolio(user_id=user_id)
-    portfolio.recalculate_weights()
-    stress = orchestrator.quant_engine.analyze_portfolio(portfolio)
-    latest_briefing = orchestrator.state_store.get_latest_user_scan(user_id)
+
+    def _fetch_dashboard_data(uid):
+        p = orchestrator.get_active_portfolio(user_id=uid)
+        p.recalculate_weights()
+        s = orchestrator.quant_engine.analyze_portfolio(p)
+        lb = orchestrator.state_store.get_latest_user_scan(uid)
+        return p, s, lb
+
+    portfolio, stress, latest_briefing = await asyncio.to_thread(_fetch_dashboard_data, user_id)
 
     total_equity = portfolio.total_equity()
     total_wealth = total_equity + max(0.0, portfolio.cash)
@@ -497,10 +508,15 @@ async def dashboard_view(request: Request):
 @app.get("/api/portfolio")
 async def api_get_portfolio(user: Dict[str, Any] = Depends(require_user)):
     user_id = user["id"]
-    portfolio = orchestrator.get_active_portfolio(user_id=user_id)
-    portfolio.recalculate_weights()
-    stress = orchestrator.quant_engine.analyze_portfolio(portfolio)
-    latest_briefing = orchestrator.state_store.get_latest_user_scan(user_id)
+
+    def _fetch_portfolio_and_stress():
+        p = orchestrator.get_active_portfolio(user_id=user_id)
+        p.recalculate_weights()
+        s = orchestrator.quant_engine.analyze_portfolio(p)
+        lb = orchestrator.state_store.get_latest_user_scan(user_id)
+        return p, s, lb
+
+    portfolio, stress, latest_briefing = await asyncio.to_thread(_fetch_portfolio_and_stress)
     return {
         "portfolio": portfolio.model_dump(),
         "stress": stress.model_dump(),
@@ -515,7 +531,8 @@ async def api_update_portfolio_cash(request: Request, user: Dict[str, Any] = Dep
     try:
         body = await request.json()
         new_cash = float(body.get("cash", 0.0))
-    except Exception:
+    except (ValueError, KeyError) as e:
+        logger.error("Failed to parse cash payload for user %s: %s", user_id, e)
         raise HTTPException(status_code=400, detail="Invalid cash payload")
 
     res = await asyncio.to_thread(portfolio_service.update_cash_balance, user_id=user_id, new_cash=new_cash)
@@ -524,128 +541,149 @@ async def api_update_portfolio_cash(request: Request, user: Dict[str, Any] = Dep
 
 
 
+def _parse_json_portfolio_content(content: bytes) -> Portfolio:
+    """CPU-bound JSON decoding and Pydantic validation executed in worker thread."""
+    data = json.loads(content.decode("utf-8"))
+    if isinstance(data, dict) and "holdings" in data:
+        return Portfolio(**data)
+    elif isinstance(data, list):
+        return Portfolio(name="Uploaded Portfolio", holdings=[PortfolioHolding(**h) for h in data])
+    else:
+        raise ValueError("Invalid JSON portfolio structure")
+
+
+def _parse_csv_portfolio_content(content: bytes) -> tuple[List[PortfolioHolding], float]:
+    """CPU-bound CSV decoding, DictReader parsing, and position extraction executed in worker thread."""
+    text = content.decode("utf-8-sig")
+
+    def clean_num(val, default=0.0):
+        if val is None or str(val).strip() == "":
+            return default
+        try:
+            s = str(val).replace("$", "").replace(",", "").replace("%", "").strip()
+            return float(s)
+        except (ValueError, TypeError):
+            return default
+
+    reader = csv.DictReader(io.StringIO(text))
+    holdings: List[PortfolioHolding] = []
+    imported_cash = 0.0
+
+    for row in reader:
+        clean_row = {}
+        for k, v in row.items():
+            if k:
+                norm_k = "".join(c for c in k.lower() if c.isalnum())
+                clean_row[norm_k] = v.strip() if isinstance(v, str) else v
+
+        ticker = (
+            clean_row.get("ticker") or clean_row.get("symbol") or clean_row.get("stock")
+            or clean_row.get("sym") or clean_row.get("security") or clean_row.get("symbolticker")
+        )
+        ticker_upper = str(ticker).strip().upper() if ticker else ""
+        name = clean_row.get("name") or clean_row.get("description") or clean_row.get("company") or clean_row.get("securityname") or ticker_upper
+        name_upper = str(name).upper()
+
+        shares = clean_num(
+            clean_row.get("shares") or clean_row.get("quantity") or clean_row.get("qty")
+            or clean_row.get("units") or clean_row.get("sharecount") or clean_row.get("totalshares")
+        )
+        avg_price = clean_num(
+            clean_row.get("avgprice") or clean_row.get("costbasis") or clean_row.get("averagecost")
+            or clean_row.get("averageprice") or clean_row.get("costbasispershare") or clean_row.get("unitcost")
+            or clean_row.get("purchaseprice") or clean_row.get("price")
+        )
+        current_price = clean_num(
+            clean_row.get("currentprice") or clean_row.get("lastprice") or clean_row.get("marketprice")
+            or clean_row.get("price") or clean_row.get("latestprice") or avg_price
+        )
+
+        if ticker_upper in ("CASH", "USD", "SPAXX", "FDRXX", "SWVXX", "MMF", "CORE", "FCASH") or "CASH" in name_upper or "MONEY MARKET" in name_upper:
+            cash_amount = (shares * avg_price) if (shares > 0 and avg_price > 0) else (shares if shares > 0 else (avg_price if avg_price > 0 else current_price))
+            if cash_amount > 0:
+                imported_cash += cash_amount
+            continue
+
+        if not ticker or ticker_upper in ("TOTAL", "--", "ACCOUNT TOTAL", "TOTALS"):
+            continue
+
+        if shares <= 0:
+            continue
+
+        if current_price <= 0 and avg_price > 0:
+            current_price = avg_price
+        elif current_price <= 0 and avg_price <= 0:
+            current_price = 100.0
+            avg_price = 100.0
+
+        sector = clean_row.get("sector") or clean_row.get("industry") or clean_row.get("assetclass") or "Unclassified"
+        tags_str = clean_row.get("thematictags") or clean_row.get("tags") or clean_row.get("theme") or ""
+        tags = [t.strip() for t in str(tags_str).split(",") if t.strip()]
+
+        holdings.append(PortfolioHolding(
+            ticker=ticker_upper,
+            name=str(name).strip(),
+            shares=shares,
+            avg_price=avg_price,
+            current_price=current_price,
+            sector=str(sector).strip(),
+            thematic_tags=tags
+        ))
+
+    if not holdings and imported_cash <= 0:
+        raise ValueError("No valid stock positions or cash found.")
+
+    return holdings, imported_cash
+
+
 @app.post("/api/portfolio/upload")
 async def api_upload_portfolio(file: UploadFile = File(...), user: Dict[str, Any] = Depends(require_user)):
     user_id = user["id"]
     filename = file.filename.lower()
     content = await file.read()
 
-    holdings = []
-
     if filename.endswith(".json"):
         try:
-            data = json.loads(content.decode("utf-8"))
-            if isinstance(data, dict) and "holdings" in data:
-                p = Portfolio(**data)
-            elif isinstance(data, list):
-                p = Portfolio(name="Uploaded Portfolio", holdings=[PortfolioHolding(**h) for h in data])
-            else:
-                raise ValueError("Invalid JSON portfolio structure")
-            dumped = orchestrator.persist_active_portfolio(p, user_id=user_id)
-            stress = orchestrator.quant_engine.analyze_portfolio(p)
-            return {
-                "status": "success",
-                "message": f"Successfully imported {len(p.holdings)} holdings",
-                "portfolio": dumped,
-                "stress": stress.model_dump(mode="json")
-            }
+            p = await asyncio.to_thread(_parse_json_portfolio_content, content)
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Failed to parse JSON: {e}")
 
+        def _persist_and_analyze(port, uid):
+            d = orchestrator.persist_active_portfolio(port, user_id=uid)
+            s = orchestrator.quant_engine.analyze_portfolio(port)
+            return d, s
+
+        dumped, stress = await asyncio.to_thread(_persist_and_analyze, p, user_id)
+        return {
+            "status": "success",
+            "message": f"Successfully imported {len(p.holdings)} holdings",
+            "portfolio": dumped,
+            "stress": stress.model_dump(mode="json")
+        }
+
     elif filename.endswith(".csv"):
         try:
-            text = content.decode("utf-8-sig")
-            def clean_num(val, default=0.0):
-                if val is None or str(val).strip() == "":
-                    return default
-                try:
-                    s = str(val).replace("$", "").replace(",", "").replace("%", "").strip()
-                    return float(s)
-                except Exception:
-                    return default
-
-            reader = csv.DictReader(io.StringIO(text))
-            imported_cash = 0.0
-
-            for row in reader:
-                clean_row = {}
-                for k, v in row.items():
-                    if k:
-                        norm_k = "".join(c for c in k.lower() if c.isalnum())
-                        clean_row[norm_k] = v.strip() if isinstance(v, str) else v
-
-                ticker = (
-                    clean_row.get("ticker") or clean_row.get("symbol") or clean_row.get("stock")
-                    or clean_row.get("sym") or clean_row.get("security") or clean_row.get("symbolticker")
-                )
-                ticker_upper = str(ticker).strip().upper() if ticker else ""
-                name = clean_row.get("name") or clean_row.get("description") or clean_row.get("company") or clean_row.get("securityname") or ticker_upper
-                name_upper = str(name).upper()
-
-                shares = clean_num(
-                    clean_row.get("shares") or clean_row.get("quantity") or clean_row.get("qty")
-                    or clean_row.get("units") or clean_row.get("sharecount") or clean_row.get("totalshares")
-                )
-
-                avg_price = clean_num(
-                    clean_row.get("avgprice") or clean_row.get("costbasis") or clean_row.get("averagecost")
-                    or clean_row.get("averageprice") or clean_row.get("costbasispershare") or clean_row.get("unitcost")
-                    or clean_row.get("purchaseprice") or clean_row.get("price")
-                )
-                current_price = clean_num(
-                    clean_row.get("currentprice") or clean_row.get("lastprice") or clean_row.get("marketprice")
-                    or clean_row.get("price") or clean_row.get("latestprice") or avg_price
-                )
-
-                if ticker_upper in ("CASH", "USD", "SPAXX", "FDRXX", "SWVXX", "MMF", "CORE", "FCASH") or "CASH" in name_upper or "MONEY MARKET" in name_upper:
-                    cash_amount = (shares * avg_price) if (shares > 0 and avg_price > 0) else (shares if shares > 0 else (avg_price if avg_price > 0 else current_price))
-                    if cash_amount > 0:
-                        imported_cash += cash_amount
-                    continue
-
-                if not ticker or ticker_upper in ("TOTAL", "--", "ACCOUNT TOTAL", "TOTALS"):
-                    continue
-
-                if shares <= 0:
-                    continue
-
-                if current_price <= 0 and avg_price > 0:
-                    current_price = avg_price
-                elif current_price <= 0 and avg_price <= 0:
-                    current_price = 100.0
-                    avg_price = 100.0
-
-                sector = clean_row.get("sector") or clean_row.get("industry") or clean_row.get("assetclass") or "Unclassified"
-                tags_str = clean_row.get("thematictags") or clean_row.get("tags") or clean_row.get("theme") or ""
-                tags = [t.strip() for t in str(tags_str).split(",") if t.strip()]
-
-                holdings.append(PortfolioHolding(
-                    ticker=ticker_upper,
-                    name=str(name).strip(),
-                    shares=shares,
-                    avg_price=avg_price,
-                    current_price=current_price,
-                    sector=str(sector).strip(),
-                    thematic_tags=tags
-                ))
-
-            if not holdings and imported_cash <= 0:
-                raise ValueError("No valid stock positions or cash found.")
-
-            cur_p = orchestrator.get_active_portfolio(user_id=user_id)
-            final_cash = imported_cash if imported_cash > 0 else cur_p.cash
-
-            p = Portfolio(name="Imported Portfolio", cash=final_cash, holdings=holdings)
-            dumped = orchestrator.persist_active_portfolio(p, user_id=user_id)
-            stress = orchestrator.quant_engine.analyze_portfolio(p)
-            return {
-                "status": "success",
-                "message": f"Successfully imported {len(p.holdings)} holdings (Cash: ${p.cash:,.2f})",
-                "portfolio": dumped,
-                "stress": stress.model_dump(mode="json")
-            }
+            holdings, imported_cash = await asyncio.to_thread(_parse_csv_portfolio_content, content)
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Failed to parse CSV: {e}")
+
+        def _persist_csv_portfolio(imported_holdings, imp_cash, uid):
+            cur_p = orchestrator.get_active_portfolio(user_id=uid)
+            final_cash = imp_cash if imp_cash > 0 else cur_p.cash
+            port = Portfolio(name="Imported Portfolio", cash=final_cash, holdings=imported_holdings)
+            d = orchestrator.persist_active_portfolio(port, user_id=uid)
+            s = orchestrator.quant_engine.analyze_portfolio(port)
+            return port, d, s
+
+        p, dumped, stress = await asyncio.to_thread(_persist_csv_portfolio, holdings, imported_cash, user_id)
+        return {
+            "status": "success",
+            "message": f"Successfully imported {len(p.holdings)} holdings (Cash: ${p.cash:,.2f})",
+            "portfolio": dumped,
+            "stress": stress.model_dump(mode="json")
+        }
+    else:
+        raise HTTPException(status_code=400, detail="Unsupported file format. Please upload a .csv or .json file.")
 @app.post("/api/portfolio/save")
 async def api_save_portfolio(payload: PortfolioSavePayload, user: Dict[str, Any] = Depends(require_user)):
     user_id = user["id"]
@@ -673,14 +711,16 @@ async def api_save_portfolio(payload: PortfolioSavePayload, user: Dict[str, Any]
         last_updated=datetime.utcnow()
     )
 
-    # Concurrently sync live quotes for current market prices
-    try:
-        portfolio, _ = update_portfolio_live_prices(portfolio)
-    except Exception:
-        pass
+    def _sync_persist_and_stress(port, uid):
+        try:
+            port, _ = update_portfolio_live_prices(port)
+        except Exception as e:
+            logger.warning("Error syncing live quotes for updated portfolio: %s", e)
+        d = orchestrator.persist_active_portfolio(port, user_id=uid)
+        s = orchestrator.quant_engine.analyze_portfolio(port)
+        return d, s
 
-    dumped = orchestrator.persist_active_portfolio(portfolio, user_id=user_id)
-    stress = orchestrator.quant_engine.analyze_portfolio(portfolio)
+    dumped, stress = await asyncio.to_thread(_sync_persist_and_stress, portfolio, user_id)
 
     return {
         "status": "success",
@@ -725,7 +765,8 @@ async def api_delete_holding(request: Request, user: Dict[str, Any] = Depends(re
     try:
         body = await request.json()
         ticker = body.get("ticker", "").strip().upper()
-    except Exception:
+    except (ValueError, KeyError, sqlite3.Error) as e:
+        logger.error("Failed to parse delete holding payload for user %s: %s", user_id, e)
         raise HTTPException(status_code=400, detail="Invalid payload")
 
     if not ticker:
@@ -754,7 +795,7 @@ async def api_delete_holding(request: Request, user: Dict[str, Any] = Depends(re
 @app.post("/api/scan")
 async def api_trigger_scan(force_fresh: bool = False, user: Dict[str, Any] = Depends(require_user)):
     user_id = user["id"]
-    user_key = orchestrator.resolve_user_api_key(user_id)
+    user_key = await asyncio.to_thread(orchestrator.resolve_user_api_key, user_id)
 
     if not user_key:
         raise HTTPException(
@@ -762,8 +803,7 @@ async def api_trigger_scan(force_fresh: bool = False, user: Dict[str, Any] = Dep
             detail="Gemini API Key Required: Please configure GEMINI_API_KEY on the server or add your personal Gemini API key in Dashboard Settings."
         )
 
-
-    portfolio = orchestrator.get_active_portfolio(user_id=user_id)
+    portfolio = await asyncio.to_thread(orchestrator.get_active_portfolio, user_id=user_id)
     try:
         briefing = await asyncio.to_thread(
             orchestrator.run_monitoring_cycle,
@@ -792,7 +832,7 @@ async def api_trigger_scan(force_fresh: bool = False, user: Dict[str, Any] = Dep
 @app.post("/api/scan/stream")
 async def api_scan_stream(request: Request, force_fresh: bool = False, user: Dict[str, Any] = Depends(require_user)):
     user_id = user["id"]
-    user_key = orchestrator.resolve_user_api_key(user_id)
+    user_key = await asyncio.to_thread(orchestrator.resolve_user_api_key, user_id)
 
     if not user_key:
         raise HTTPException(
@@ -800,7 +840,7 @@ async def api_scan_stream(request: Request, force_fresh: bool = False, user: Dic
             detail="Gemini API Key Required: Please configure GEMINI_API_KEY on the server or add your personal Gemini API key in Dashboard Settings."
         )
 
-    portfolio = orchestrator.get_active_portfolio(user_id=user_id)
+    portfolio = await asyncio.to_thread(orchestrator.get_active_portfolio, user_id=user_id)
 
     async def event_generator():
         queue: asyncio.Queue = asyncio.Queue()
@@ -862,7 +902,7 @@ async def api_scan_stream(request: Request, force_fresh: bool = False, user: Dic
 @app.get("/api/news/live")
 async def api_get_live_news(user: Dict[str, Any] = Depends(require_user)):
     user_id = user["id"]
-    portfolio = orchestrator.get_active_portfolio(user_id=user_id)
+    portfolio = await asyncio.to_thread(orchestrator.get_active_portfolio, user_id=user_id)
     portfolio_tickers = [h.ticker for h in portfolio.holdings]
     news_items = await asyncio.to_thread(orchestrator.news_agent.ingest_all_feeds, live=True, portfolio_tickers=portfolio_tickers)
     return {
@@ -884,10 +924,15 @@ async def api_get_quote(ticker: str, user: Dict[str, Any] = Depends(require_user
 @app.get("/api/quotes/refresh")
 async def api_refresh_quotes(user: Dict[str, Any] = Depends(require_user)):
     user_id = user["id"]
-    portfolio = orchestrator.get_active_portfolio(user_id=user_id)
-    portfolio, quotes = await asyncio.to_thread(update_portfolio_live_prices, portfolio)
-    dumped = orchestrator.persist_active_portfolio(portfolio, user_id=user_id)
-    stress = orchestrator.quant_engine.analyze_portfolio(portfolio)
+
+    def _refresh_portfolio_quotes(uid):
+        port = orchestrator.get_active_portfolio(user_id=uid)
+        port, qts = update_portfolio_live_prices(port)
+        d = orchestrator.persist_active_portfolio(port, user_id=uid)
+        s = orchestrator.quant_engine.analyze_portfolio(port)
+        return qts, d, s
+
+    quotes, dumped, stress = await asyncio.to_thread(_refresh_portfolio_quotes, user_id)
     return {
         "status": "success",
         "quotes": quotes,
@@ -900,9 +945,13 @@ async def api_refresh_quotes(user: Dict[str, Any] = Depends(require_user)):
 async def api_get_earnings_calendar(user: Dict[str, Any] = Depends(require_user)):
     from analytics.earnings_calendar import fetch_7day_earnings_schedule
     user_id = user["id"]
-    portfolio = orchestrator.get_active_portfolio(user_id=user_id)
-    portfolio_tickers = [h.ticker for h in portfolio.holdings]
-    schedule = fetch_7day_earnings_schedule(portfolio_tickers=portfolio_tickers)
+
+    def _get_earnings(uid):
+        port = orchestrator.get_active_portfolio(user_id=uid)
+        tickers = [h.ticker for h in port.holdings]
+        return fetch_7day_earnings_schedule(portfolio_tickers=tickers)
+
+    schedule = await asyncio.to_thread(_get_earnings, user_id)
     return {
         "status": "success",
         "schedule": schedule
@@ -918,7 +967,7 @@ async def api_get_economic_calendar_ics(catalytic_only: bool = True):
     """
     from fastapi.responses import Response
     from analytics.economic_calendar import generate_economic_calendar_ics
-    ics_text = generate_economic_calendar_ics(catalytic_only=catalytic_only)
+    ics_text = await asyncio.to_thread(generate_economic_calendar_ics, catalytic_only=catalytic_only)
     return Response(
         content=ics_text,
         media_type="text/calendar; charset=utf-8",
@@ -935,7 +984,7 @@ async def api_get_economic_calendar(
     user: Dict[str, Any] = Depends(require_user)
 ):
     from analytics.economic_calendar import get_economic_calendar_context
-    ctx = get_economic_calendar_context(catalytic_only=catalytic_only)
+    ctx = await asyncio.to_thread(get_economic_calendar_context, catalytic_only=catalytic_only)
     return {
         "status": "success",
         "calendar": ctx
@@ -968,7 +1017,7 @@ async def api_analyze_ticker(ticker: str, user: Dict[str, Any] = Depends(require
 @app.get("/api/deepdives")
 async def api_get_user_deepdives(limit: int = 50, ticker: Optional[str] = None, user: Dict[str, Any] = Depends(require_user)):
     user_id = user["id"]
-    deepdives = orchestrator.state_store.get_user_deepdives(user_id=user_id, limit=limit, ticker=ticker)
+    deepdives = await asyncio.to_thread(orchestrator.state_store.get_user_deepdives, user_id=user_id, limit=limit, ticker=ticker)
     return {"status": "success", "deepdives": deepdives}
 
 
@@ -977,7 +1026,7 @@ async def api_get_deepdive_detail(deepdive_id: str, user: Dict[str, Any] = Depen
     user_id = user["id"]
     is_admin = bool(user.get("role") == "admin")
 
-    dd = orchestrator.state_store.get_deepdive_by_id(deepdive_id, user_id=user_id if not is_admin else None)
+    dd = await asyncio.to_thread(orchestrator.state_store.get_deepdive_by_id, deepdive_id, user_id=user_id if not is_admin else None)
     if not dd:
         raise HTTPException(status_code=404, detail="Archived deep dive not found.")
     return {"status": "success", "deepdive": dd}
@@ -988,14 +1037,19 @@ async def api_delete_deepdive(deepdive_id: str, user: Dict[str, Any] = Depends(r
     user_id = user["id"]
     is_admin = bool(user.get("role") == "admin")
 
-    existing = orchestrator.state_store.get_deepdive_by_id(deepdive_id, user_id=user_id if not is_admin else None)
-    if not existing:
-        raise HTTPException(status_code=404, detail="Deep dive record not found.")
+    def _check_and_delete(dd_id, uid, admin_flag):
+        existing = orchestrator.state_store.get_deepdive_by_id(dd_id, user_id=uid if not admin_flag else None)
+        if not existing:
+            return False, "Deep dive record not found."
+        deleted = orchestrator.state_store.delete_deepdive(dd_id, user_id=uid, is_admin=admin_flag)
+        if not deleted:
+            return False, "Deep dive record not found or could not be deleted."
+        return True, "Archived deep dive deleted successfully."
 
-    deleted = orchestrator.state_store.delete_deepdive(deepdive_id, user_id=user_id, is_admin=is_admin)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="Deep dive record not found or could not be deleted.")
-    return {"status": "success", "message": "Archived deep dive deleted successfully."}
+    success, msg = await asyncio.to_thread(_check_and_delete, deepdive_id, user_id, is_admin)
+    if not success:
+        raise HTTPException(status_code=404, detail=msg)
+    return {"status": "success", "message": msg}
 
 
 
@@ -1009,7 +1063,8 @@ async def api_submit_feedback(req: FeedbackRequest, user: Dict[str, Any] = Depen
     allowed_types = {"accurate", "noise", "helpful", "unhelpful", "flag"}
     if clean_type not in allowed_types:
         raise HTTPException(status_code=400, detail=f"Invalid feedback type '{clean_type}'.")
-    orchestrator.state_store.record_feedback(
+    await asyncio.to_thread(
+        orchestrator.state_store.record_feedback,
         target_id=req.target_id.strip()[:100],
         feedback_type=clean_type,
         user_notes=clean_notes
@@ -1025,7 +1080,7 @@ class ChatMessageRequest(BaseModel):
 @app.post("/api/chat")
 async def api_chat(req: ChatMessageRequest, user: Dict[str, Any] = Depends(require_user)):
     user_id = user["id"]
-    user_key = orchestrator.resolve_user_api_key(user_id)
+    user_key = await asyncio.to_thread(orchestrator.resolve_user_api_key, user_id)
 
     if user and user.get("role") != "admin" and not user_key:
         return {
@@ -1033,10 +1088,14 @@ async def api_chat(req: ChatMessageRequest, user: Dict[str, Any] = Depends(requi
             "status": "key_required"
         }
 
-    portfolio = orchestrator.get_active_portfolio(user_id=user_id)
-    stress = orchestrator.quant_engine.analyze_portfolio(portfolio)
-    recent_briefings = orchestrator.state_store.get_recent_briefings(limit=1)
-    briefing_payload = recent_briefings[0].get("payload", {}) if recent_briefings else {}
+    def _prepare_chat_context(uid):
+        p = orchestrator.get_active_portfolio(user_id=uid)
+        s = orchestrator.quant_engine.analyze_portfolio(p)
+        rb = orchestrator.state_store.get_recent_briefings(limit=1)
+        bp = rb[0].get("payload", {}) if rb else {}
+        return p, s, bp
+
+    portfolio, stress, briefing_payload = await asyncio.to_thread(_prepare_chat_context, user_id)
 
     holdings_summary = []
     for h in portfolio.holdings:
@@ -1113,8 +1172,8 @@ class DiscoverOpportunitiesRequest(BaseModel):
 @app.post("/api/opportunities/discover")
 async def api_discover_opportunities(req: DiscoverOpportunitiesRequest, user: Dict[str, Any] = Depends(require_user)):
     user_id = user["id"]
-    user_key = orchestrator.resolve_user_api_key(user_id)
-    portfolio = orchestrator.get_active_portfolio(user_id=user_id)
+    user_key = await asyncio.to_thread(orchestrator.resolve_user_api_key, user_id)
+    portfolio = await asyncio.to_thread(orchestrator.get_active_portfolio, user_id=user_id)
     opps = await asyncio.to_thread(
         orchestrator.opportunity_agent.discover_more_opportunities,
         portfolio=portfolio,
@@ -1122,7 +1181,9 @@ async def api_discover_opportunities(req: DiscoverOpportunitiesRequest, user: Di
         count=req.count or 4,
         api_key=user_key
     )
-    critic_reviews = [orchestrator.critic_agent.review_opportunity(o) for o in opps]
+    critic_reviews = await asyncio.to_thread(
+        lambda: [orchestrator.critic_agent.review_opportunity(o) for o in opps]
+    )
     return {
         "status": "success",
         "theme": req.theme,
@@ -1134,15 +1195,17 @@ async def api_discover_opportunities(req: DiscoverOpportunitiesRequest, user: Di
 @app.post("/api/opportunities/moonshots")
 async def api_discover_moonshots(count: int = 4, user: Dict[str, Any] = Depends(require_user)):
     user_id = user["id"]
-    user_key = orchestrator.resolve_user_api_key(user_id)
-    portfolio = orchestrator.get_active_portfolio(user_id=user_id)
+    user_key = await asyncio.to_thread(orchestrator.resolve_user_api_key, user_id)
+    portfolio = await asyncio.to_thread(orchestrator.get_active_portfolio, user_id=user_id)
     moonshots = await asyncio.to_thread(
         orchestrator.opportunity_agent.discover_moonshot_opportunities,
         portfolio=portfolio,
         count=count,
         api_key=user_key
     )
-    critic_reviews = [orchestrator.critic_agent.review_opportunity(o) for o in moonshots]
+    critic_reviews = await asyncio.to_thread(
+        lambda: [orchestrator.critic_agent.review_opportunity(o) for o in moonshots]
+    )
     return {
         "status": "success",
         "moonshots": [o.model_dump(mode="json") for o in moonshots],
@@ -1254,7 +1317,8 @@ async def api_get_market_briefings(slot: Optional[str] = None, limit: int = 20, 
     user_id = user["id"]
     is_admin = bool(user.get("role") == "admin")
     # Non-admin users strictly only see their own briefings
-    briefings = briefing_service.list_briefings(
+    briefings = await asyncio.to_thread(
+        briefing_service.list_briefings,
         user_id=user_id if not is_admin else None,
         slot=slot,
         limit=min(limit, 100)
@@ -1278,7 +1342,7 @@ async def api_get_market_briefings(slot: Optional[str] = None, limit: int = 20, 
 
 @app.get("/api/briefings/{report_id}")
 async def api_get_market_briefing_detail(report_id: str, user: Dict[str, Any] = Depends(require_user)):
-    b = briefing_service.get_briefing(report_id)
+    b = await asyncio.to_thread(briefing_service.get_briefing, report_id)
     if not b:
         raise HTTPException(status_code=404, detail="Briefing report not found.")
 
@@ -1341,7 +1405,7 @@ async def api_generate_market_briefing(payload: GenerateBriefingPayload, user: D
 
 @app.post("/api/briefings/{report_id}/dispatch")
 async def api_dispatch_market_briefing(report_id: str, user: Dict[str, Any] = Depends(require_user)):
-    b = briefing_service.get_briefing(report_id)
+    b = await asyncio.to_thread(briefing_service.get_briefing, report_id)
     if not b:
         raise HTTPException(status_code=404, detail="Briefing report not found.")
 
@@ -1364,7 +1428,7 @@ async def api_dispatch_market_briefing(report_id: str, user: Dict[str, Any] = De
 
     msg = b.get("message_html") or b.get("executive_summary")
     try:
-        telegram_bot.send_message(msg, chat_id=target_chat)
+        await asyncio.to_thread(telegram_bot.send_message, msg, chat_id=target_chat)
         return {"status": "success", "message": f"Dispatched {b.get('slot')} briefing to Telegram."}
     except Exception as ex:
         raise HTTPException(status_code=500, detail=f"Failed to send to Telegram: {str(ex)}")
@@ -1372,7 +1436,7 @@ async def api_dispatch_market_briefing(report_id: str, user: Dict[str, Any] = De
 
 @app.post("/api/briefings/prune")
 async def api_prune_market_briefings(retention_days: int = 30, user: Dict[str, Any] = Depends(require_admin)):
-    pruned_count = briefing_service.prune_briefings(retention_days=retention_days)
+    pruned_count = await asyncio.to_thread(briefing_service.prune_briefings, retention_days=retention_days)
     return {
         "status": "success",
         "message": f"Successfully pruned {pruned_count} duplicate and expired briefing entries.",
@@ -1436,11 +1500,14 @@ async def api_cache_stats(user: Dict[str, Any] = Depends(require_admin)):
 @app.get("/api/health")
 async def healthz():
     """Healthcheck endpoint for Cloud Run and monitoring probes."""
-    db_ok = False
-    try:
+    def _probe_db():
         with orchestrator.state_store._get_connection() as conn:
             conn.execute("SELECT 1;").fetchone()
-        db_ok = True
+        return True
+
+    db_ok = False
+    try:
+        db_ok = await asyncio.to_thread(_probe_db)
     except Exception as e:
         logger.error(f"Healthcheck database probe failed: {e}")
 

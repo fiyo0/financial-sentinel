@@ -174,7 +174,8 @@ class BaseAgent:
                     continue
                 elif resp.status_code == 404:
                     continue
-            except Exception:
+            except (httpx.HTTPError, json.JSONDecodeError, KeyError, ValueError) as e:
+                logger.error("Error querying model %s for JSON: %s", model_to_try, e)
                 continue
 
         return None

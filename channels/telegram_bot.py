@@ -8,6 +8,7 @@ import time
 import threading
 import logging
 import re
+import asyncio
 from typing import Optional, Dict, Any, List
 import httpx
 from config import config
@@ -190,7 +191,8 @@ class FinancialSentinelTelegramBot:
                 try:
                     plain = re.sub(r"<[^>]+>", "", chunk)
                     httpx.post(url, json={"chat_id": target_chat, "text": plain}, timeout=10.0)
-                except Exception:
+                except (httpx.HTTPError, asyncio.CancelledError) as err:
+                    logger.error("Telegram fallback post failed: %s", err)
                     success = False
 
         return success
@@ -335,7 +337,8 @@ class FinancialSentinelTelegramBot:
                     time.sleep(30)
                 else:
                     time.sleep(3)
-            except Exception:
+            except (httpx.HTTPError, asyncio.CancelledError) as e:
+                logger.error("Error in Telegram long poll loop: %s", e)
                 time.sleep(5)
 
     def _execute_ticker_analysis(self, target_ticker: str, chat_id: str, user_id: str, user_gemini_key: Optional[str]):
@@ -580,7 +583,8 @@ class FinancialSentinelTelegramBot:
                     lines.append(f"  <b>Catalyst:</b> {opp.catalyst_description}")
                     lines.append(f"  <b>Portfolio Synergy:</b> {opp.portfolio_synergy}\n")
 
-                first_tick = opps[0].ticker if opps else "VRT"
+                fallback_tick = portfolio.holdings[0].ticker if (portfolio and portfolio.holdings) else "SPY"
+                first_tick = opps[0].ticker if opps else fallback_tick
                 lines.append(f"💡 <i>Type <code>/{first_tick}</code> or <code>/analysis {first_tick}</code> for a comprehensive deep dive, fundamental catalysts, and buy recommendation.</i>")
                 self.send_message("\n".join(lines), chat_id)
             except Exception as e:

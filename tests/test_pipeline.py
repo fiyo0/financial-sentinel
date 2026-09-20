@@ -83,10 +83,37 @@ def test_full_pipeline_execution(temp_orchestrator, sample_portfolio_obj, sample
     })
     monkeypatch.setattr(temp_orchestrator.notification_agent, "query_llm_text", lambda *args, **kwargs: "Executive Summary: NVDA faces regulatory headwinds while CEG offers secular nuclear energy alpha.")
 
+    def make_mock_ingest(orch, fixtures):
+        def _ingest(*args, **kwargs):
+            from models import NewsItem
+            from datetime import datetime
+            items = []
+            for raw in fixtures:
+                raw_hash = orch.state_store.compute_hash(raw["title"], raw["source"])
+                if not orch.state_store.is_news_processed(raw_hash):
+                    item = NewsItem(
+                        id=raw.get("id", f"news_{raw_hash[:12]}"),
+                        title=raw["title"],
+                        source=raw["source"],
+                        url=raw.get("url", "https://news.example.com"),
+                        published_at=datetime.utcnow(),
+                        summary=raw.get("summary", ""),
+                        category=orch.news_agent.infer_category(raw["title"], raw.get("summary", ""), raw.get("category", "BREAKING")),
+                        source_reliability_score=0.9,
+                        related_tickers=raw.get("related_tickers", []),
+                        related_sectors=raw.get("related_sectors", []),
+                        raw_hash=raw_hash
+                    )
+                    orch.state_store.save_news_item(item)
+                    items.append(item)
+            return items
+        return _ingest
+
+    monkeypatch.setattr(temp_orchestrator.news_agent, "ingest_all_feeds", make_mock_ingest(temp_orchestrator, sample_news_fixtures))
+
     briefing = temp_orchestrator.run_monitoring_cycle(
         portfolio=sample_portfolio_obj,
         live=False,
-        mock_news=sample_news_fixtures,
         api_key="test_mock_key"
     )
 
@@ -125,15 +152,43 @@ def test_deduplication_store(temp_orchestrator, sample_portfolio_obj, sample_new
     monkeypatch.setattr(temp_orchestrator.opportunity_agent, "query_llm_json", lambda *args, **kwargs: {"opportunities": []})
     monkeypatch.setattr(temp_orchestrator.critic_agent, "query_llm_json", lambda *args, **kwargs: {"reviews": []})
 
+    def make_mock_ingest(orch, fixtures):
+        def _ingest(*args, **kwargs):
+            from models import NewsItem
+            from datetime import datetime
+            items = []
+            for raw in fixtures:
+                raw_hash = orch.state_store.compute_hash(raw["title"], raw["source"])
+                if not orch.state_store.is_news_processed(raw_hash):
+                    item = NewsItem(
+                        id=raw.get("id", f"news_{raw_hash[:12]}"),
+                        title=raw["title"],
+                        source=raw["source"],
+                        url=raw.get("url", "https://news.example.com"),
+                        published_at=datetime.utcnow(),
+                        summary=raw.get("summary", ""),
+                        category=orch.news_agent.infer_category(raw["title"], raw.get("summary", ""), raw.get("category", "BREAKING")),
+                        source_reliability_score=0.9,
+                        related_tickers=raw.get("related_tickers", []),
+                        related_sectors=raw.get("related_sectors", []),
+                        raw_hash=raw_hash
+                    )
+                    orch.state_store.save_news_item(item)
+                    items.append(item)
+            return items
+        return _ingest
+
+    monkeypatch.setattr(temp_orchestrator.news_agent, "ingest_all_feeds", make_mock_ingest(temp_orchestrator, sample_news_fixtures))
+
     # First Run: ingests all news
     briefing1 = temp_orchestrator.run_monitoring_cycle(
-        portfolio=sample_portfolio_obj, live=False, mock_news=sample_news_fixtures, api_key="test_key"
+        portfolio=sample_portfolio_obj, live=False, api_key="test_key"
     )
     assert briefing1.raw_news_count == len(sample_news_fixtures)
 
     # Second Run: should detect that all items are already processed
     briefing2 = temp_orchestrator.run_monitoring_cycle(
-        portfolio=sample_portfolio_obj, live=False, mock_news=sample_news_fixtures, api_key="test_key"
+        portfolio=sample_portfolio_obj, live=False, api_key="test_key"
     )
     assert briefing2.raw_news_count == 0
 

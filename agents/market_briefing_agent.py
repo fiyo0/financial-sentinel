@@ -6,9 +6,12 @@ and portfolio correlation into executive Telegram briefings.
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from typing import Dict, Any, List, Optional
+import logging
 from agents.base_agent import BaseAgent
 from models import Portfolio, NewsItem, NewsCategory
 from analytics.economic_calendar import get_economic_calendar_context, format_economic_calendar_for_prompt
+
+logger = logging.getLogger(__name__)
 
 
 BRIEFING_COMMUNICATION_RULES = """
@@ -67,10 +70,10 @@ class MarketBriefingAgent(BaseAgent):
             sec = h.sector or "Unclassified"
             beta = 1.0
             try:
-                from analytics.quant_risk import SECTOR_MACRO_SENSITIVITIES
-                beta = SECTOR_MACRO_SENSITIVITIES.get(sec, {}).get("growth_beta", 1.0)
-            except Exception:
-                pass
+                from analytics.quant_risk import QuantRiskEngine
+                beta = QuantRiskEngine.compute_single_ticker_beta(h.ticker, fallback_sector=sec)
+            except Exception as e:
+                logger.debug("Empirical beta lookup failed for %s: %s", h.ticker, e)
             adaptive_thresh = round(max(0.75, min(2.50, threshold_pct * beta)), 2)
             has_price_move = abs(chg) >= adaptive_thresh
             has_news = h.ticker.upper() in news_tickers

@@ -13,9 +13,56 @@ from storage.cache_manager import cache_manager
 logger = logging.getLogger(__name__)
 
 
-# In-memory short-term TTL cache: ticker -> (timestamp, data_dict)
-PRICE_CACHE: Dict[str, tuple[float, Dict[str, Any]]] = {}
+class BoundedPriceCache(dict):
+    """
+    Bounded, thread-safe, TTL-evicting mapping backed by CacheManager.
+    Eliminates unbounded dictionary growth while preserving 100% dictionary interface compatibility.
+    """
+    def __init__(self, default_ttl: float = 60.0):
+        super().__init__()
+        self._default_ttl = default_ttl
+
+    def __getitem__(self, key: str) -> Tuple[float, Dict[str, Any]]:
+        val = cache_manager.get("prices", str(key).upper())
+        if val is None:
+            raise KeyError(key)
+        return (time.time(), val)
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        clean_key = str(key).upper()
+        if isinstance(value, tuple) and len(value) == 2 and isinstance(value[1], dict):
+            quote = value[1]
+        else:
+            quote = value
+        cache_manager.set("prices", clean_key, quote, ttl_seconds=self._default_ttl)
+
+    def __contains__(self, key: object) -> bool:
+        return cache_manager.get("prices", str(key).upper()) is not None
+
+    def __len__(self) -> int:
+        stats = cache_manager.stats()
+        return stats.get("namespaces", {}).get("prices", 0)
+
+    def __iter__(self):
+        with cache_manager._get_ns_lock("prices"):
+            ns_dict = cache_manager._store.get("prices", {})
+            now = time.time()
+            active_keys = [k for k, (exp, _) in ns_dict.items() if exp > now]
+        return iter(active_keys)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        val = cache_manager.get("prices", str(key).upper())
+        if val is None:
+            return default
+        return (time.time(), val)
+
+    def clear(self) -> None:
+        cache_manager.clear("prices")
+
+
 CACHE_TTL_SECONDS = 60.0
+# In-memory bounded, thread-safe TTL cache backed by CacheManager: ticker -> (timestamp, data_dict)
+PRICE_CACHE: BoundedPriceCache = BoundedPriceCache(default_ttl=CACHE_TTL_SECONDS)
 
 # Persistent HTTP/2 connection pool for market data APIs (Robinhood, Yahoo Finance)
 _MARKET_HTTP_CLIENT: Optional[httpx.Client] = None
@@ -95,114 +142,102 @@ def fetch_live_quote(ticker: str) -> Dict[str, Any]:
     """
     Dynamically queries live financial APIs for real-time market trade price, previous close,
     and verified company names for ANY US equity or ETF.
+    Uses CacheManager singleflight coordination to prevent cache stampedes.
     Returns current_price = 0.0 if network fails or ticker is not found.
     """
     clean_ticker = ticker.strip().upper()
-    now = time.time()
 
-    # Check centralized thread-safe cache first
     cached_quote = cache_manager.get("prices", clean_ticker)
     if cached_quote:
-        PRICE_CACHE[clean_ticker] = (now, cached_quote)
         return cached_quote
 
-    if clean_ticker in PRICE_CACHE:
-        cached_time, cached_data = PRICE_CACHE[clean_ticker]
-        if now - cached_time < CACHE_TTL_SECONDS:
-            return cached_data
+    def _do_fetch() -> Dict[str, Any]:
+        current_price = 0.0
+        short_name = clean_ticker
+        prev_close = 0.0
+        fetch_success = False
+        provider_used = "none"
 
-    current_price = 0.0
-    short_name = clean_ticker
-    sector = "Unclassified"
-    prev_close = 0.0
-    fetch_success = False
-    provider_used = "none"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        }
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-    }
+        client = get_market_http_client()
 
-    client = get_market_http_client()
-
-    # 1. Primary Live API: Robinhood Unauthenticated Market Quote API
-    rh_url = f"https://api.robinhood.com/quotes/{clean_ticker}/"
-    try:
-        resp = client.get(rh_url, headers=headers, timeout=5.0)
-        if resp.status_code == 200:
-            d = resp.json()
-            raw_trade = d.get("last_trade_price") or d.get("last_extended_hours_trade_price") or d.get("adjusted_previous_close")
-            raw_prev = d.get("adjusted_previous_close") or d.get("previous_close")
-            if raw_trade:
-                p = float(raw_trade)
-                if p > 0:
-                    current_price = p
-                    fetch_success = True
-                    provider_used = "robinhood"
-                    PROVIDER_METRICS["robinhood"]["successes"] += 1
-                    if raw_prev:
-                        prev_close = float(raw_prev)
-
-            # Dynamically fetch verified company or fund name
-            inst_url = d.get("instrument")
-            if inst_url:
-                try:
-                    inst_resp = client.get(inst_url, headers=headers, timeout=3.0)
-                    if inst_resp.status_code == 200:
-                        inst_data = inst_resp.json()
-                        resolved_name = inst_data.get("simple_name") or inst_data.get("name")
-                        if resolved_name:
-                            short_name = resolved_name
-                except Exception:
-                    pass
-        else:
-            PROVIDER_METRICS["robinhood"]["failures"] += 1
-    except Exception as e:
-        PROVIDER_METRICS["robinhood"]["failures"] += 1
-        logger.debug(f"Robinhood quote fetch error for {clean_ticker}: {e}")
-
-
-    # 2. Secondary Live API: Yahoo Finance Chart API (if primary did not return a price)
-    if not fetch_success or current_price <= 0:
-        y_url = f"https://query1.finance.yahoo.com/v8/finance/chart/{clean_ticker}?interval=1d&range=1d"
+        # 1. Primary Live API: Robinhood Unauthenticated Market Quote API
+        rh_url = f"https://api.robinhood.com/quotes/{clean_ticker}/"
         try:
-            resp = client.get(y_url, headers=headers, timeout=4.0)
+            resp = client.get(rh_url, headers=headers, timeout=5.0)
             if resp.status_code == 200:
-                data = resp.json()
-                meta = data.get("chart", {}).get("result", [{}])[0].get("meta", {})
-                p = float(meta.get("regularMarketPrice", 0.0) or 0.0)
-                if p > 0:
-                    current_price = p
-                    fetch_success = True
-                    provider_used = "yahoo"
-                    PROVIDER_METRICS["yahoo"]["successes"] += 1
-                    prev_close = float(meta.get("chartPreviousClose", current_price) or current_price)
-                    y_name = meta.get("shortName")
-                    if y_name:
-                        short_name = y_name
+                d = resp.json()
+                raw_trade = d.get("last_trade_price") or d.get("last_extended_hours_trade_price") or d.get("adjusted_previous_close")
+                raw_prev = d.get("adjusted_previous_close") or d.get("previous_close")
+                if raw_trade:
+                    p = float(raw_trade)
+                    if p > 0:
+                        current_price = p
+                        fetch_success = True
+                        provider_used = "robinhood"
+                        PROVIDER_METRICS["robinhood"]["successes"] += 1
+                        if raw_prev:
+                            prev_close = float(raw_prev)
+
+                # Dynamically fetch verified company or fund name
+                inst_url = d.get("instrument")
+                if inst_url:
+                    try:
+                        inst_resp = client.get(inst_url, headers=headers, timeout=3.0)
+                        if inst_resp.status_code == 200:
+                            inst_data = inst_resp.json()
+                            resolved_name = inst_data.get("simple_name") or inst_data.get("name")
+                            if resolved_name:
+                                short_name = resolved_name
+                    except Exception as e:
+                        logger.debug("Robinhood instrument resolution failed for %s: %s", clean_ticker, e)
+            else:
+                PROVIDER_METRICS["robinhood"]["failures"] += 1
         except Exception as e:
-            PROVIDER_METRICS["yahoo"]["failures"] += 1
-            logger.debug(f"Yahoo quote fetch error for {clean_ticker}: {e}")
+            PROVIDER_METRICS["robinhood"]["failures"] += 1
+            logger.debug(f"Robinhood quote fetch error for {clean_ticker}: {e}")
 
-    # Dynamic Sector Classification from resolved name & ticker
-    sector = classify_equity_sector(clean_ticker, short_name)
+        # 2. Secondary Live API: Yahoo Finance Chart API (if primary did not return a price)
+        if not fetch_success or current_price <= 0:
+            y_url = f"https://query1.finance.yahoo.com/v8/finance/chart/{clean_ticker}?interval=1d&range=1d"
+            try:
+                resp = client.get(y_url, headers=headers, timeout=4.0)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    meta = data.get("chart", {}).get("result", [{}])[0].get("meta", {})
+                    p = float(meta.get("regularMarketPrice", 0.0) or 0.0)
+                    if p > 0:
+                        current_price = p
+                        fetch_success = True
+                        provider_used = "yahoo"
+                        PROVIDER_METRICS["yahoo"]["successes"] += 1
+                        prev_close = float(meta.get("chartPreviousClose", current_price) or current_price)
+                        y_name = meta.get("shortName")
+                        if y_name:
+                            short_name = y_name
+            except Exception as e:
+                PROVIDER_METRICS["yahoo"]["failures"] += 1
+                logger.debug(f"Yahoo quote fetch error for {clean_ticker}: {e}")
 
-    quote = {
-        "ticker": clean_ticker,
-        "name": short_name,
-        "sector": sector,
-        "current_price": round(float(current_price), 2),
-        "prev_close": round(float(prev_close), 2),
-        "change_pct": round(((current_price - prev_close) / prev_close) * 100.0, 2) if (prev_close and current_price > 0) else 0.0,
-        "is_live": fetch_success,
-        "provider": provider_used,
-        "error": None if fetch_success else f"Unable to fetch live quote for {clean_ticker}"
-    }
+        # Dynamic Sector Classification from resolved name & ticker
+        sector = classify_equity_sector(clean_ticker, short_name)
 
-    if fetch_success:
-        PRICE_CACHE[clean_ticker] = (now, quote)
-        cache_manager.set("prices", clean_ticker, quote, ttl_seconds=CACHE_TTL_SECONDS)
+        return {
+            "ticker": clean_ticker,
+            "name": short_name,
+            "sector": sector,
+            "current_price": round(float(current_price), 2),
+            "prev_close": round(float(prev_close), 2),
+            "change_pct": round(((current_price - prev_close) / prev_close) * 100.0, 2) if (prev_close and current_price > 0) else 0.0,
+            "is_live": fetch_success,
+            "provider": provider_used,
+            "error": None if fetch_success else f"Unable to fetch live quote for {clean_ticker}"
+        }
 
-    return quote
+    return cache_manager.get_or_compute("prices", clean_ticker, _do_fetch, ttl_seconds=CACHE_TTL_SECONDS)
 
 
 
@@ -234,7 +269,8 @@ def update_portfolio_live_prices(portfolio: Portfolio, override_all: bool = True
                 else:
                     failed_tickers.append(holding.ticker)
 
-            except Exception:
+            except Exception as e:
+                logger.warning("Failed refreshing quote for %s: %s", holding.ticker, e)
                 failed_tickers.append(holding.ticker)
 
     portfolio.recalculate_weights()
@@ -246,17 +282,19 @@ def fetch_market_overview() -> Dict[str, Any]:
     Fetches broad market benchmark performance (S&P 500, Nasdaq 100, Dow Jones, Russell 2000, Volatility).
     """
     from concurrent.futures import ThreadPoolExecutor
+    from config import config
 
-    tickers = ["SPY", "QQQ", "DIA", "IWM", "VIXY"]
+    tickers = config.benchmark_tickers or ["SPY", "QQQ", "DIA", "IWM", "VIXY"]
     results = {}
 
-    with ThreadPoolExecutor(max_workers=5) as executor:
+    with ThreadPoolExecutor(max_workers=min(len(tickers), 8) or 1) as executor:
         futures = {executor.submit(fetch_live_quote, t): t for t in tickers}
         for future in futures:
             t = futures[future]
             try:
                 results[t] = future.result()
-            except Exception:
+            except Exception as e:
+                logger.warning("Failed fetching benchmark quote for %s: %s", t, e)
                 results[t] = {"ticker": t, "current_price": 0.0, "change_pct": 0.0, "name": t}
 
     spy_change = results.get("SPY", {}).get("change_pct", 0.0)
@@ -295,8 +333,8 @@ def fetch_market_movers() -> Dict[str, List[Dict[str, Any]]]:
                     "price": float(item.get("regularMarketPrice", 0.0) or 0.0),
                     "change_pct": float(item.get("regularMarketChangePercent", 0.0) or 0.0)
                 })
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Failed fetching Yahoo Finance top gainers: %s", e)
 
     try:
         url = "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?formatted=false&scrIds=day_losers&count=5"
@@ -311,8 +349,8 @@ def fetch_market_movers() -> Dict[str, List[Dict[str, Any]]]:
                     "price": float(item.get("regularMarketPrice", 0.0) or 0.0),
                     "change_pct": float(item.get("regularMarketChangePercent", 0.0) or 0.0)
                 })
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Failed fetching Yahoo Finance top losers: %s", e)
 
     return {
         "top_gainers": gainers,

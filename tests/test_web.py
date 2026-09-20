@@ -458,7 +458,16 @@ def test_api_analyze_ticker(client, monkeypatch):
     monkeypatch.setattr("analytics.market_data.fetch_live_quote", lambda t: {"ticker": "AAPL", "current_price": 220.0, "price": 220.0, "change_pct": 1.2})
     monkeypatch.setattr("analytics.technical_indicators.compute_technical_snapshot", lambda t: fake_tech)
     monkeypatch.setattr("analytics.sentiment_stream.fetch_social_sentiment_snapshot", lambda t, **kw: fake_sent)
-    monkeypatch.setattr(orchestrator.analysis_agent, "analyze_single_ticker", lambda **kw: "Mocked Analysis for AAPL")
+    from models import SingleTickerAnalysis
+    fake_analysis = SingleTickerAnalysis(
+        ticker="AAPL",
+        company_name="Apple Inc.",
+        verdict="BULLISH",
+        conviction_score=85.0,
+        thesis="Mocked Analysis for AAPL",
+        telegram_html="Mocked Analysis for AAPL"
+    )
+    monkeypatch.setattr(orchestrator.analysis_agent, "analyze_single_ticker_structured", lambda **kw: fake_analysis)
 
     headers, cookies = get_auth_context()
 

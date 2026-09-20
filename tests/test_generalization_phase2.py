@@ -188,11 +188,15 @@ def test_fomc_schedule_perpetual_projection_2027_beyond():
 # Area 4: Volatility & Beta-Adaptive Mover Thresholds
 # ==============================================================================
 
-def test_market_briefing_beta_adaptive_mover_sensitivity():
+def test_market_briefing_beta_adaptive_mover_sensitivity(monkeypatch):
     """
     Verifies that low-volatility defensive holdings trigger on smaller moves (0.75%),
     while high-beta holdings filter out sub-2.0% routine market drift.
     """
+    from analytics.quant_risk import QuantRiskEngine
+    betas = {"DUK": 0.4, "PG": 0.5, "NVDA": 1.5, "TSLA": 1.3}
+    monkeypatch.setattr(QuantRiskEngine, "compute_single_ticker_beta", lambda ticker, **kwargs: betas.get(ticker.upper(), 1.0))
+
     agent = MarketBriefingAgent()
     p = Portfolio(
         name="Adaptive Volatility Portfolio",

@@ -32,8 +32,8 @@ class TelegramChannel:
                         self.chat_id = cid
                         config.telegram_chat_id = cid
                         return cid
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed reading telegram_chat_id.txt: %s", e)
 
         try:
             from storage.state_store import StateStore
@@ -55,8 +55,8 @@ class TelegramChannel:
                 self.chat_id = cid
                 config.telegram_chat_id = cid
                 return cid
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed resolving telegram chat ID from state store: %s", e)
 
         return None
 
@@ -71,13 +71,13 @@ class TelegramChannel:
         try:
             with open(chat_file, "w") as f:
                 f.write(self.chat_id)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed persisting chat_id to file: %s", e)
         try:
             from storage.state_store import StateStore
             StateStore().set_kv("last_known_telegram_chat_id", self.chat_id)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed persisting chat_id to StateStore KV: %s", e)
 
 
     def is_configured(self) -> bool:
@@ -140,7 +140,8 @@ class TelegramChannel:
                 try:
                     plain_text = re.sub(r'<[^>]+>', '', chunk)
                     httpx.post(url, json={"chat_id": cid, "text": plain_text}, timeout=10.0)
-                except Exception:
+                except httpx.HTTPError as err:
+                    logger.error("Telegram emergency plain-text retry failed: %s", err)
                     success = False
 
         return success

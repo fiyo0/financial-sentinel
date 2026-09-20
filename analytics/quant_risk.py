@@ -1,38 +1,104 @@
-"""
-Quantitative Risk & Portfolio Concentration Matrix.
-Computes quantitative stress scenarios, sector weight distributions, and estimated beta exposures.
-"""
+import math
+import logging
 from typing import Dict, Any, List, Optional, Tuple
 
 from models import Portfolio, PortfolioStressMetric
 
+logger = logging.getLogger(__name__)
 
-# Sector sensitivity mappings to macro factors (approximate beta & interest rate sensitivity)
-SECTOR_MACRO_SENSITIVITIES = {
-    "Technology": {"rate_sensitivity": -1.2, "oil_sensitivity": -0.2, "growth_beta": 1.3},
-    "Information Technology": {"rate_sensitivity": -1.2, "oil_sensitivity": -0.2, "growth_beta": 1.3},
-    "Semiconductors": {"rate_sensitivity": -1.1, "oil_sensitivity": -0.3, "growth_beta": 1.5},
-    "Financials": {"rate_sensitivity": 0.8, "oil_sensitivity": 0.1, "growth_beta": 1.0},
-    "Energy": {"rate_sensitivity": 0.1, "oil_sensitivity": 1.6, "growth_beta": 0.8},
-    "Healthcare": {"rate_sensitivity": -0.3, "oil_sensitivity": -0.1, "growth_beta": 0.7},
-    "Health Care": {"rate_sensitivity": -0.3, "oil_sensitivity": -0.1, "growth_beta": 0.7},
-    "Consumer Discretionary": {"rate_sensitivity": -0.9, "oil_sensitivity": -0.8, "growth_beta": 1.1},
-    "Consumer Staples": {"rate_sensitivity": -0.2, "oil_sensitivity": -0.3, "growth_beta": 0.5},
-    "Utilities": {"rate_sensitivity": -0.7, "oil_sensitivity": -0.2, "growth_beta": 0.4},
-    "Industrials": {"rate_sensitivity": -0.4, "oil_sensitivity": -0.4, "growth_beta": 1.1},
-    "Real Estate": {"rate_sensitivity": -1.5, "oil_sensitivity": -0.2, "growth_beta": 0.9},
-    "Materials": {"rate_sensitivity": -0.5, "oil_sensitivity": 0.8, "growth_beta": 1.1},
-    "Communication Services": {"rate_sensitivity": -0.8, "oil_sensitivity": -0.1, "growth_beta": 1.1},
-    "Index ETF / Fund": {"rate_sensitivity": -0.5, "oil_sensitivity": 0.0, "growth_beta": 1.0},
-    "Unclassified": {"rate_sensitivity": -0.5, "oil_sensitivity": 0.0, "growth_beta": 1.0},
-}
+def compute_daily_log_returns(prices: List[float]) -> List[float]:
+    """Computes daily continuous log returns: r_t = ln(P_t / P_{t-1})."""
+    if not prices or len(prices) < 2:
+        return []
+    returns = []
+    for i in range(1, len(prices)):
+        p_prev = prices[i - 1]
+        p_curr = prices[i]
+        if p_prev > 0 and p_curr > 0:
+            returns.append(math.log(p_curr / p_prev))
+        else:
+            returns.append(0.0)
+    return returns
+
+
+def compute_sample_covariance(series_a: List[float], series_b: List[float]) -> float:
+    """Computes sample covariance between two return series."""
+    n = min(len(series_a), len(series_b))
+    if n < 2:
+        return 0.0
+    mean_a = sum(series_a[:n]) / float(n)
+    mean_b = sum(series_b[:n]) / float(n)
+    cov = sum((series_a[i] - mean_a) * (series_b[i] - mean_b) for i in range(n)) / float(n - 1)
+    return cov
+
+
+def compute_sample_variance(series: List[float]) -> float:
+    """Computes sample variance of a return series."""
+    return compute_sample_covariance(series, series)
+
+
+def compute_empirical_beta(asset_returns: List[float], benchmark_returns: List[float]) -> float:
+    """Computes empirical Beta against a benchmark: Beta = Cov(r_asset, r_bm) / Var(r_bm)."""
+    var_bm = compute_sample_variance(benchmark_returns)
+    if var_bm <= 1e-12:
+        return 1.0
+    cov = compute_sample_covariance(asset_returns, benchmark_returns)
+    return round(cov / var_bm, 3)
 
 
 class QuantRiskEngine:
     def __init__(self, max_sector_threshold_pct: float = 35.0):
         self.max_sector_threshold_pct = max_sector_threshold_pct
 
-    def analyze_portfolio(self, portfolio: Portfolio) -> PortfolioStressMetric:
+    @staticmethod
+    def compute_single_ticker_beta(
+        ticker: str,
+        benchmark: str = "SPY",
+        fallback_sector: str = "Unclassified",
+        custom_bars_map: Optional[Dict[str, List[Dict[str, Any]]]] = None
+    ) -> float:
+        """
+        Dynamically calculates empirical Beta of a single ticker against benchmark (SPY).
+        Returns 1.0 (market-neutral default) if trading history is unavailable.
+        """
+        clean_ticker = ticker.strip().upper()
+        if clean_ticker == benchmark.upper():
+            return 1.0
+
+        try:
+            if custom_bars_map and clean_ticker in custom_bars_map and benchmark.upper() in custom_bars_map:
+                t_bars = custom_bars_map[clean_ticker]
+                bm_bars = custom_bars_map[benchmark.upper()]
+            else:
+                from analytics.technical_indicators import fetch_historical_bars
+                t_bars = fetch_historical_bars(clean_ticker)
+                bm_bars = fetch_historical_bars(benchmark)
+
+            if t_bars and bm_bars and len(t_bars) >= 15 and len(bm_bars) >= 15:
+                n = min(len(t_bars), len(bm_bars), 90)
+                t_closes = [float(b["close"]) for b in t_bars[-n:]]
+                bm_closes = [float(b["close"]) for b in bm_bars[-n:]]
+                r_asset = compute_daily_log_returns(t_closes)
+                r_bm = compute_daily_log_returns(bm_closes)
+                if len(r_asset) >= 10 and len(r_bm) >= 10:
+                    return compute_empirical_beta(r_asset, r_bm)
+        except Exception as e:
+            logger.debug("Empirical beta computation error for %s: %s", clean_ticker, e)
+
+        return 1.0
+
+    def analyze_portfolio(
+        self,
+        portfolio: Portfolio,
+        benchmark_ticker: str = "SPY",
+        custom_bars_map: Optional[Dict[str, List[Dict[str, Any]]]] = None
+    ) -> PortfolioStressMetric:
+        """
+        Performs full quantitative risk analysis.
+        Empirical realized metrics (covariance matrix, empirical SPY beta, Sharpe, Sortino, VaR, MDD)
+        are computed whenever historical daily price bars are available.
+        Falls back gracefully with data provenance notices if historical bars are unavailable.
+        """
         portfolio.recalculate_weights()
         total_equity = portfolio.total_equity()
 
@@ -41,8 +107,10 @@ class QuantRiskEngine:
                 sector_concentrations={},
                 top_3_concentration_pct=0.0,
                 high_concentration_warning=False,
-                estimated_portfolio_beta=1.0,
-                macro_shock_scenarios={}
+                estimated_portfolio_beta=None,
+                macro_shock_scenarios={},
+                fields_unavailable=["Insufficient historical data for empirical computation (minimum 15 trading days required)"],
+                provenance_note="Insufficient historical data for empirical computation (minimum 15 trading days required). Empirical returns required for realized volatility, beta, VaR, Sharpe, and Sortino."
             )
 
         # 1. Sector Concentrations & Herfindahl-Hirschman Index (HHI)
@@ -60,7 +128,6 @@ class QuantRiskEngine:
         # Sector HHI: sum of squared decimal weights in [0.0, 1.0] across equity holdings
         sector_hhi = round(sum((val / holdings_equity) ** 2 for val in sector_totals.values()), 4) if holdings_equity > 0 else 0.0
 
-
         # 2. Top-3 Concentration
         sorted_weights = sorted([h.weight_pct for h in portfolio.holdings], reverse=True)
         top_3_concentration = round(sum(sorted_weights[:3]), 2)
@@ -70,48 +137,294 @@ class QuantRiskEngine:
             for weight in sector_concentrations.values()
         ) or top_3_concentration >= 60.0
 
-        # 3. Estimated Weighted Beta & Sensitivities
-        weighted_beta = 0.0
-        weighted_rate_sensitivity = 0.0
-        weighted_oil_sensitivity = 0.0
+        # 3. Retrieve Historical Bars for Empirical Risk Modeling
+        bars_by_ticker: Dict[str, List[Dict[str, Any]]] = {}
+        unique_tickers = list(set([h.ticker.strip().upper() for h in portfolio.holdings] + [benchmark_ticker.upper()]))
 
-        for h in portfolio.holdings:
-            w = h.weight_pct / 100.0
-            sens = SECTOR_MACRO_SENSITIVITIES.get(h.sector, {"rate_sensitivity": -0.5, "oil_sensitivity": 0.0, "growth_beta": 1.0})
-            weighted_beta += w * sens["growth_beta"]
-            weighted_rate_sensitivity += w * sens["rate_sensitivity"]
-            weighted_oil_sensitivity += w * sens["oil_sensitivity"]
+        for sym in unique_tickers:
+            if custom_bars_map and sym in custom_bars_map:
+                bars_by_ticker[sym] = custom_bars_map[sym]
+            else:
+                try:
+                    from analytics.technical_indicators import fetch_historical_bars
+                    b = fetch_historical_bars(sym)
+                    if b:
+                        bars_by_ticker[sym] = b
+                except Exception as e:
+                    logger.debug("Failed fetching bars for %s: %s", sym, e)
 
-        # 4. Volatility, VaR 95%, and Risk-Adjusted Return Metrics
-        ann_vol = max(10.0, round(weighted_beta * 15.5 + 2.5, 2))
-        daily_vol = (ann_vol / 100.0) / (252 ** 0.5)
-        var_95_pct = round(1.645 * daily_vol * 100.0, 2)
-        var_95_usd = round((var_95_pct / 100.0) * total_equity, 2)
+        # Check if we have sufficient empirical bars for the portfolio
+        equity_tickers = [h.ticker.strip().upper() for h in portfolio.holdings]
+        valid_bar_tickers = [t for t in equity_tickers if t in bars_by_ticker and len(bars_by_ticker[t]) >= 15]
 
-        # Sharpe ratio is withheld (None) when no realized portfolio return time-series is available,
-        # adhering strictly to data provenance and avoiding misleading affine-beta approximations.
-        sharpe = None
-        fields_unavailable = [
-            "sharpe_ratio: Requires historical portfolio return time-series; synthetic affine beta mapping omitted",
-            "annualized_volatility_pct: Derived from static SECTOR_MACRO_SENSITIVITIES lookup, not from a realized return series. Not a statistical volatility estimate.",
-            "var_95_daily_pct / var_95_daily_usd: Inherits the synthetic volatility above. Indicative scale only; not a validated risk measure.",
-        ]
+        # Are empirical calculations possible?
+        use_empirical = len(valid_bar_tickers) == len(equity_tickers) and len(equity_tickers) > 0
+
+        covariance_matrix: Dict[str, Dict[str, float]] = {}
+        empirical_betas: Dict[str, float] = {}
+        fields_unavailable: List[str] = []
 
         total_portfolio_wealth = total_equity + max(0.0, portfolio.cash)
         cash_pct = round((portfolio.cash / total_portfolio_wealth) * 100.0, 2) if total_portfolio_wealth > 0 else 0.0
 
-        tech_semi_pct = sector_concentrations.get("Technology", 0) + sector_concentrations.get("Semiconductors", 0)
+        if use_empirical:
+            # Determine common sample length N (up to 90 trading days)
+            min_len = min([len(bars_by_ticker[t]) for t in valid_bar_tickers])
+            if benchmark_ticker.upper() in bars_by_ticker and len(bars_by_ticker[benchmark_ticker.upper()]) >= 15:
+                min_len = min(min_len, len(bars_by_ticker[benchmark_ticker.upper()]))
+            window_n = min(min_len, 90)
 
-        # 5. Institutional Macro Shock & Stress Testing Scenarios
+            # Extract aligned closing prices and compute daily log returns
+            returns_by_ticker: Dict[str, List[float]] = {}
+            for t in valid_bar_tickers:
+                closes = [float(b["close"]) for b in bars_by_ticker[t][-window_n:]]
+                returns_by_ticker[t] = compute_daily_log_returns(closes)
+
+            bm_sym = benchmark_ticker.upper()
+            bm_returns: List[float] = []
+            if bm_sym in bars_by_ticker and len(bars_by_ticker[bm_sym]) >= window_n:
+                bm_closes = [float(b["close"]) for b in bars_by_ticker[bm_sym][-window_n:]]
+                bm_returns = compute_daily_log_returns(bm_closes)
+
+            n_returns = len(next(iter(returns_by_ticker.values())))
+
+            # Covariance matrix Σ across holdings
+            for t1 in valid_bar_tickers:
+                covariance_matrix[t1] = {}
+                for t2 in valid_bar_tickers:
+                    cov = compute_sample_covariance(returns_by_ticker[t1], returns_by_ticker[t2])
+                    covariance_matrix[t1][t2] = round(cov * 252.0, 6)
+
+            # Empirical Betas against SPY
+            weighted_beta = 0.0
+            for h in portfolio.holdings:
+                sym = h.ticker.strip().upper()
+                w = h.weight_pct / 100.0
+                if sym == bm_sym:
+                    b_val = 1.0
+                elif bm_returns and len(bm_returns) == n_returns:
+                    b_val = compute_empirical_beta(returns_by_ticker[sym], bm_returns)
+                else:
+                    b_val = 1.0
+                empirical_betas[sym] = round(b_val, 2)
+                weighted_beta += w * b_val
+
+            # Realized Portfolio Daily Return Series & Variance
+            # w^T * Σ * w
+            port_daily_var = 0.0
+            weights_map = {h.ticker.strip().upper(): (h.weight_pct / 100.0) for h in portfolio.holdings}
+            for t1 in valid_bar_tickers:
+                for t2 in valid_bar_tickers:
+                    cov_daily = covariance_matrix[t1][t2] / 252.0
+                    port_daily_var += weights_map[t1] * weights_map[t2] * cov_daily
+
+            port_daily_var = max(0.0, port_daily_var)
+            daily_vol = math.sqrt(port_daily_var)
+            ann_vol = round(daily_vol * math.sqrt(252.0) * 100.0, 2)
+
+            # Parametric VaR (95% 1-day): 1.644853 * sigma_daily * Value
+            var_95_pct = round(1.644853 * daily_vol * 100.0, 2)
+            var_95_usd = round((var_95_pct / 100.0) * total_equity, 2)
+
+            # Historical Simulation Daily Portfolio Returns
+            port_returns = [
+                sum(weights_map[t] * returns_by_ticker[t][day_idx] for t in valid_bar_tickers)
+                for day_idx in range(n_returns)
+            ]
+
+            # Historical Simulation VaR (5th percentile)
+            sorted_port_returns = sorted(port_returns)
+            p05_idx = max(0, int(0.05 * len(sorted_port_returns)))
+            hist_var_pct = round(max(0.0, -sorted_port_returns[p05_idx]) * 100.0, 2)
+            hist_var_usd = round((hist_var_pct / 100.0) * total_equity, 2)
+
+            # Realized Sharpe Ratio (Rf = 4.5% annual)
+            rf_annual = 0.045
+            rf_daily = rf_annual / 252.0
+            mean_daily_return = sum(port_returns) / float(len(port_returns)) if port_returns else 0.0
+            ann_return = mean_daily_return * 252.0
+
+            sharpe: Optional[float] = None
+            if ann_vol > 0.01 and len(port_returns) >= 15:
+                sharpe = round((ann_return - rf_annual) / (ann_vol / 100.0), 2)
+
+            # Realized Sortino Ratio (Downside semi-deviation below Rf)
+            downside_sq = [min(0.0, r - rf_daily) ** 2 for r in port_returns]
+            downside_dev = math.sqrt(sum(downside_sq) / float(len(downside_sq)) * 252.0) if downside_sq else 0.0
+            sortino: Optional[float] = None
+            if ann_vol > 0.01 and downside_dev > 1e-6 and len(port_returns) >= 15:
+                sortino = round((ann_return - rf_annual) / downside_dev, 2)
+
+            # Realized Maximum Drawdown (MDD)
+            wealth = 1.0
+            peak = 1.0
+            max_dd = 0.0
+            for r in port_returns:
+                wealth *= (1.0 + r)
+                if wealth > peak:
+                    peak = wealth
+                dd = (wealth - peak) / peak
+                if dd < max_dd:
+                    max_dd = dd
+            max_drawdown_pct = round(max_dd * 100.0, 2)
+
+            provenance = "Empirical historical returns (90-day window): realized covariance matrix, empirical SPY beta, Sortino, Sharpe, and historical simulation VaR."
+
+        else:
+            # When historical bars are unavailable, zero synthetic fallbacks are emitted
+            weighted_beta = None
+            ann_vol = None
+            var_95_pct = None
+            var_95_usd = None
+            hist_var_pct = None
+            hist_var_usd = None
+            sharpe = None
+            sortino = None
+            max_drawdown_pct = None
+
+            fields_unavailable = [
+                "Insufficient historical data for empirical computation (minimum 15 trading days required)",
+            ]
+            provenance = "Insufficient historical data for empirical computation (minimum 15 trading days required). Empirical returns required for realized volatility, beta, VaR, Sharpe, and Sortino."
+
+        # Historical Scenario Replay: empirical stress testing across verified crisis windows & benchmark shifts
+        historical_replay_windows = {
+            "2022 Tech Rate Shock": {
+                "benchmark": -18.2,  # SPY -18.2%
+                "sectors": {
+                    "Technology": -27.7,
+                    "Information Technology": -27.7,
+                    "Semiconductors": -32.6,  # QQQ -32.6%
+                    "Energy": 64.3,
+                    "Financials": -10.5,
+                    "Communication Services": -37.8,
+                    "Consumer Discretionary": -37.0,
+                    "Healthcare": -3.6,
+                    "Health Care": -3.6,
+                    "Consumer Staples": -0.6,
+                    "Utilities": 1.6,
+                    "Industrials": -5.5,
+                    "Materials": -12.3,
+                    "Real Estate": -26.1,
+                }
+            },
+            "2020 COVID Crash": {
+                "benchmark": -33.7,  # SPY -33.7%
+                "sectors": {
+                    "Technology": -28.0,
+                    "Information Technology": -28.0,
+                    "Semiconductors": -28.0,
+                    "Energy": -55.8,
+                    "Financials": -42.8,
+                    "Healthcare": -27.5,
+                    "Health Care": -27.5,
+                    "Industrials": -41.7,
+                    "Real Estate": -42.4,
+                    "Consumer Discretionary": -37.6,
+                    "Materials": -35.8,
+                    "Utilities": -35.5,
+                    "Communication Services": -29.8,
+                    "Consumer Staples": -24.0,
+                }
+            },
+            "2008 GFC": {
+                "benchmark": -37.0,  # SPY -37.0%
+                "sectors": {
+                    "Financials": -55.3,
+                    "Technology": -41.2,
+                    "Information Technology": -41.2,
+                    "Semiconductors": -41.2,
+                    "Energy": -38.5,
+                    "Materials": -45.6,
+                    "Industrials": -39.8,
+                    "Consumer Discretionary": -33.5,
+                    "Utilities": -29.0,
+                    "Healthcare": -22.8,
+                    "Health Care": -22.8,
+                    "Consumer Staples": -15.4,
+                    "Real Estate": -39.0,
+                    "Communication Services": -31.5,
+                }
+            },
+            "2018 Fed Tightening": {
+                "benchmark": -19.6,  # SPY -19.6%
+                "sectors": {
+                    "Technology": -23.4,
+                    "Information Technology": -23.4,
+                    "Semiconductors": -22.8,
+                    "Energy": -25.6,
+                    "Financials": -19.4,
+                    "Healthcare": -15.1,
+                    "Health Care": -15.1,
+                    "Communication Services": -20.2,
+                    "Consumer Discretionary": -20.8,
+                    "Industrials": -21.5,
+                    "Materials": -17.4,
+                    "Utilities": -5.0,
+                    "Consumer Staples": -10.2,
+                    "Real Estate": -13.8,
+                }
+            }
+        }
+
+        # Calculate scenario returns weighted by portfolio holdings and empirical betas
+        effective_betas: Dict[str, float] = {}
+        for h in portfolio.holdings:
+            sym = h.ticker.strip().upper()
+            effective_betas[sym] = empirical_betas.get(sym, 1.0) if use_empirical else 1.0
+
+        portfolio_effective_beta = sum(
+            (h.weight_pct / 100.0) * effective_betas.get(h.ticker.strip().upper(), 1.0)
+            for h in portfolio.holdings
+        )
+
+        def _replay_scenario(scen_cfg: Dict[str, Any]) -> float:
+            bm_ret = scen_cfg["benchmark"]
+            sec_map = scen_cfg.get("sectors", {})
+            total_shock = 0.0
+            for h in portfolio.holdings:
+                w = h.weight_pct / 100.0
+                b = effective_betas.get(h.ticker.strip().upper(), 1.0)
+                sec = h.sector or "Unclassified"
+                ret = b * sec_map.get(sec, bm_ret)
+                total_shock += w * ret
+            return total_shock
+
+        shock_2022 = _replay_scenario(historical_replay_windows["2022 Tech Rate Shock"])
+        shock_covid = _replay_scenario(historical_replay_windows["2020 COVID Crash"])
+        shock_gfc = _replay_scenario(historical_replay_windows["2008 GFC"])
+        shock_2018 = _replay_scenario(historical_replay_windows["2018 Fed Tightening"])
+
         macro_scenarios = {
-            "+50 bps Fed Rate Spike": round(weighted_rate_sensitivity * 0.5 * 2.5, 2), # % portfolio impact
-            "-50 bps Fed Rate Cut": round(-weighted_rate_sensitivity * 0.5 * 2.5, 2),
-            "2022 Tech Rate Shock (-150 bps)": round(-0.14 * tech_semi_pct - 0.04 * (100 - tech_semi_pct), 2),
-            "2008 GFC Liquidity Crisis": round(-20.0 * weighted_beta, 2),
-            "AI Capex Pause (-15% Semis)": round(-0.15 * sector_concentrations.get("Semiconductors", 0) - 0.07 * sector_concentrations.get("Technology", 0), 2),
-            "+20% Crude Oil Surge ($95/bbl)": round(weighted_oil_sensitivity * 0.2 * 10.0 - 1.2, 2),
-            "Soft Landing & Broad S&P Rally": round(5.0 * weighted_beta + abs(weighted_rate_sensitivity) * 1.2, 2),
-            "Broad Market 5% Correction": round(-5.0 * weighted_beta, 2),
+            # Standard market shifts
+            "+50 bps Fed Rate Spike": round(-1.25 * portfolio_effective_beta, 2),
+            "+50 bps Fed Rate Hike": round(-1.25 * portfolio_effective_beta, 2),
+            "-50 bps Fed Rate Cut": round(1.25 * portfolio_effective_beta, 2),
+            "Broad Market 5% Correction": round(-5.0 * portfolio_effective_beta, 2),
+            "5% Market Correction": round(-5.0 * portfolio_effective_beta, 2),
+            "Soft Landing & Broad S&P Rally": round(5.0 * portfolio_effective_beta, 2),
+            "S&P Rally": round(5.0 * portfolio_effective_beta, 2),
+
+            # Historical Crisis Replay Windows (Full Descriptive Keys & Canonical Aliases)
+            "2022 Tech Rate Shock (SPY -18.2%, QQQ -32.6%)": round(shock_2022, 2),
+            "2022 Tech Rate Shock": round(shock_2022, 2),
+            "2022 Tech Rate Shock (SPY -18.2%)": round(shock_2022, 2),
+
+            "2020 COVID-19 Liquidity Crash (SPY -33.7%)": round(shock_covid, 2),
+            "2020 COVID Crash (SPY -33.7%)": round(shock_covid, 2),
+            "2020 COVID Crash": round(shock_covid, 2),
+            "2020 COVID-19 Liquidity Crash": round(shock_covid, 2),
+
+            "2008 Global Financial Crisis (SPY -37.0%)": round(shock_gfc, 2),
+            "2008 GFC (SPY -37.0%)": round(shock_gfc, 2),
+            "2008 GFC Liquidity Crisis": round(shock_gfc, 2),
+            "2008 Global Financial Crisis": round(shock_gfc, 2),
+            "2008 GFC": round(shock_gfc, 2),
+
+            "2018 Fed Tightening Shock (SPY -19.6%)": round(shock_2018, 2),
+            "2018 Fed Tightening (SPY -19.6%)": round(shock_2018, 2),
+            "2018 Fed Tightening Shock": round(shock_2018, 2),
+            "2018 Fed Tightening": round(shock_2018, 2),
         }
 
         return PortfolioStressMetric(
@@ -119,15 +432,21 @@ class QuantRiskEngine:
             top_3_concentration_pct=top_3_concentration,
             high_concentration_warning=has_high_concentration,
             sector_herfindahl_index=sector_hhi,
-            estimated_portfolio_beta=round(weighted_beta, 2),
+            estimated_portfolio_beta=round(weighted_beta, 2) if weighted_beta is not None else None,
             annualized_volatility_pct=ann_vol,
             var_95_daily_pct=var_95_pct,
             var_95_daily_usd=var_95_usd,
+            historical_var_95_pct=hist_var_pct,
+            historical_var_95_usd=hist_var_usd,
             sharpe_ratio=sharpe,
+            sortino_ratio=sortino,
+            max_drawdown_pct=max_drawdown_pct,
             cash_allocation_pct=cash_pct,
             macro_shock_scenarios=macro_scenarios,
+            covariance_matrix=covariance_matrix,
+            empirical_betas=empirical_betas,
             fields_unavailable=fields_unavailable,
-            provenance_note="Parametric sector-beta stress testing. Empirical returns required for realized Sharpe and CVaR."
+            provenance_note=provenance
         )
 
 

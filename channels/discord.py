@@ -2,9 +2,12 @@
 Discord Notification Channel Adapter.
 Sends rich embed cards with visual status colors to Discord channels.
 """
+import logging
 import httpx
 from typing import Optional, Dict, Any, List
 from config import config
+
+logger = logging.getLogger(__name__)
 
 
 class DiscordChannel:
@@ -37,5 +40,6 @@ class DiscordChannel:
         try:
             resp = httpx.post(self.webhook_url, json=payload, timeout=8.0)
             return resp.status_code in (200, 204)
-        except Exception:
+        except httpx.HTTPError as e:
+            logger.error("Failed sending Discord embed: %s", e)
             return False

@@ -2,11 +2,14 @@
 Email Notification Channel Adapter.
 Generates responsive HTML email digests and dispatches via SMTP or records to output sink.
 """
+import logging
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Optional
 from config import config
+
+logger = logging.getLogger(__name__)
 
 
 class EmailChannel:
@@ -39,5 +42,6 @@ class EmailChannel:
                 server.starttls()
                 server.sendmail(msg["From"], [self.recipient], msg.as_string())
             return True
-        except Exception:
+        except (smtplib.SMTPException, OSError) as e:
+            logger.error("Failed sending email notification to %s: %s", self.recipient, e)
             return False

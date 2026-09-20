@@ -2,11 +2,15 @@
 Risk & Critic Agent: Acts as an adversarial auditor, evaluating analyses and opportunities for confirmation bias,
 low-confidence sources, and hype bubbles using unified batch evaluation.
 """
+import json
+import logging
 from typing import List, Optional, Any
 from models import (
     HoldingExposureAnalysis, OpportunityAnalysis, CriticReview, CriticVerdict, AlertPriority, NewsItem
 )
 from agents.base_agent import BaseAgent
+
+logger = logging.getLogger(__name__)
 
 
 CREDIBILITY_GRADES = {
@@ -140,7 +144,8 @@ class RiskCriticAgent(BaseAgent):
                     identified_biases=item.get("identified_biases", []),
                     review_summary=item.get("review_summary", "Audit completed.")
                 ))
-            except Exception:
+            except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
+                logger.warning("Failed parsing critic review item: %s", e)
                 continue
 
         return reviews if len(reviews) > 0 else None

@@ -9,6 +9,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
 import re
 import html
+import json
 import logging
 import httpx
 import feedparser
@@ -37,6 +38,55 @@ def get_stocktwits_client() -> httpx.Client:
 
 BULL_KW = re.compile(r"\b(buy|bought|calls|long|moon|breakout|green|rocket|undervalued|rally|accumulate|support|dip)\b", re.I)
 BEAR_KW = re.compile(r"\b(sell|sold|puts|short|dump|drop|red|crash|scam|overvalued|tank|fall|bear|downgrade|bubble|loss)\b", re.I)
+
+
+def classify_comments_sentiment(
+    texts: List[str],
+    api_key: Optional[str] = None
+) -> List[str]:
+    """
+    Classifies sentiment for untagged social commentary.
+    Tier 1: High-accuracy structured LLM batch classification (if API key available).
+    Tier 2: Algorithmic keyword regex fallback (BULL_KW / BEAR_KW).
+    Returns list of 'BULLISH', 'BEARISH', or 'NEUTRAL' for each text.
+    """
+    if not texts:
+        return []
+
+    if api_key:
+        try:
+            from google import genai
+            from google.genai import types
+            client = genai.Client(api_key=api_key)
+            prompt = (
+                "Classify the market sentiment of each of the following retail trader comments into exactly one of: "
+                "BULLISH, BEARISH, or NEUTRAL. Return a JSON list of strings matching the input order.\n"
+                f"Comments:\n{json.dumps(texts[:15])}"
+            )
+            resp = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(response_mime_type="application/json")
+            )
+            if resp.text:
+                labels = json.loads(resp.text)
+                if isinstance(labels, list) and len(labels) == len(texts[:15]):
+                    return [str(lbl).upper() for lbl in labels]
+        except Exception as e:
+            logger.debug("LLM sentiment batch classification unavailable (%s); falling back to keyword regex.", e)
+
+    # Tier 2 Fallback: Regex Keyword Classification
+    results = []
+    for body in texts:
+        has_bull = bool(BULL_KW.search(body))
+        has_bear = bool(BEAR_KW.search(body))
+        if has_bull and not has_bear:
+            results.append("BULLISH")
+        elif has_bear and not has_bull:
+            results.append("BEARISH")
+        else:
+            results.append("NEUTRAL")
+    return results
 
 
 @dataclass
@@ -99,7 +149,7 @@ class SentimentSnapshot:
         )
 
 
-def _fetch_stocktwits_stream(ticker: str) -> Dict[str, Any]:
+def _fetch_stocktwits_stream(ticker: str, api_key: Optional[str] = None) -> Dict[str, Any]:
     """
     Fetches real-time retail messages from StockTwits public symbol stream.
     Calculates true message arrival rate per hour and weights untagged chatter with keyword heuristics.
@@ -114,6 +164,7 @@ def _fetch_stocktwits_stream(ticker: str) -> Dict[str, Any]:
             bulls = 0.0
             bears = 0.0
             sample_comments = []
+            untagged_bodies = []
 
             for m in messages:
                 body = m.get("body", "")
@@ -127,20 +178,23 @@ def _fetch_stocktwits_stream(ticker: str) -> Dict[str, Any]:
                         bulls += 1.0
                     elif basic == "Bearish":
                         bears += 1.0
-                else:
-                    # Parse body for keyword sentiment
-                    has_bull = bool(BULL_KW.search(body))
-                    has_bear = bool(BEAR_KW.search(body))
-                    if has_bull and not has_bear:
-                        bulls += 0.5
-                    elif has_bear and not has_bull:
-                        bears += 0.5
+                elif body:
+                    untagged_bodies.append(body)
 
                 # Collect clean sample comments
                 if body and len(sample_comments) < 3 and len(body) > 20:
                     clean_body = re.sub(r'https?://\S+', '', body).strip()
                     if clean_body and "$" in clean_body or len(clean_body) > 30:
                         sample_comments.append(clean_body[:100])
+
+            # Classify untagged commentary (Tier 1: batch LLM if key present, Tier 2: keyword regex)
+            if untagged_bodies:
+                classified_sentiments = classify_comments_sentiment(untagged_bodies, api_key=api_key)
+                for sent_lbl in classified_sentiments:
+                    if sent_lbl == "BULLISH":
+                        bulls += 0.5
+                    elif sent_lbl == "BEARISH":
+                        bears += 0.5
 
             # Calculate True Time Velocity (Arrival Rate per Hour) & Intra-Stream Acceleration
             rate_per_hour = 1.0
@@ -155,8 +209,8 @@ def _fetch_stocktwits_stream(ticker: str) -> Dict[str, Any]:
                             try:
                                 dt = datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
                                 parsed_msgs.append((dt, m))
-                            except Exception:
-                                pass
+                            except (ValueError, TypeError) as e:
+                                logger.debug("Failed parsing message timestamp '%s': %s", ts_str, e)
                     # Sort newest first
                     parsed_msgs.sort(key=lambda x: x[0], reverse=True)
                     if len(parsed_msgs) >= 2:
@@ -276,8 +330,8 @@ def _fetch_reddit_discussion(
                                 all_titles.append(raw_title)
                         if len(all_titles) >= 5:
                             break
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed scraping secondary Reddit feed for %s: %s", clean_ticker, e)
 
     return {
         "count": len(all_titles),
@@ -291,7 +345,8 @@ def fetch_social_sentiment_snapshot(
     avg_volume_20: Optional[int] = None,
     rvol: Optional[float] = None,
     aliases: Optional[List[str]] = None,
-    company_name: Optional[str] = None
+    company_name: Optional[str] = None,
+    api_key: Optional[str] = None
 ) -> SentimentSnapshot:
     """
     Computes a grounded retail social sentiment snapshot combining StockTwits and Reddit.
@@ -299,8 +354,8 @@ def fetch_social_sentiment_snapshot(
     """
     clean_ticker = ticker.strip().upper()
 
-    # 1. Query StockTwits
-    st_data = _fetch_stocktwits_stream(clean_ticker)
+    # 1. Query StockTwits with optional LLM batch classification
+    st_data = _fetch_stocktwits_stream(clean_ticker, api_key=api_key)
 
     # 2. Query Reddit with equity-anchored search terms
     rd_data = _fetch_reddit_discussion(clean_ticker, aliases=aliases, company_name=company_name)

@@ -44,10 +44,8 @@ def test_quant_risk_concentration_detection():
 
     assert stress.high_concentration_warning is True
     assert stress.sector_concentrations.get("Technology", 0) > 35.0 or stress.top_3_concentration_pct >= 60.0
-    assert stress.estimated_portfolio_beta > 1.0
+    assert stress.estimated_portfolio_beta is None
     assert "+50 bps Fed Rate Spike" in stress.macro_shock_scenarios
-    assert stress.macro_shock_scenarios["+50 bps Fed Rate Spike"] < 0  # High tech is negative rate sensitivity
-
 
 def test_quant_risk_institutional_metrics():
     engine = QuantRiskEngine()
@@ -67,15 +65,14 @@ def test_quant_risk_institutional_metrics():
     )
 
     stress = engine.analyze_portfolio(portfolio)
-    assert stress.annualized_volatility_pct > 0.0
-    assert stress.var_95_daily_pct > 0.0
-    assert stress.var_95_daily_usd > 0.0
+    assert stress.annualized_volatility_pct is None
+    assert stress.var_95_daily_pct is None
+    assert stress.var_95_daily_usd is None
     assert stress.sector_herfindahl_index == 1.0  # 100% in Technology
     assert stress.sharpe_ratio is None  # Circular Sharpe removed; requires empirical return series
-    assert any("sharpe_ratio" in field for field in stress.fields_unavailable)
+    assert any("Insufficient historical data" in field for field in stress.fields_unavailable)
     assert stress.cash_allocation_pct > 0.0
     assert "2008 GFC Liquidity Crisis" in stress.macro_shock_scenarios
-    assert "AI Capex Pause (-15% Semis)" in stress.macro_shock_scenarios
 
     # Multi-sector HHI test: equal weights across 2 sectors -> 0.5^2 + 0.5^2 = 0.5
     portfolio.holdings.append(
@@ -125,4 +122,102 @@ def test_adv_liquidity_constraints():
     )
     assert illiquid["days_to_liquidate"] == 5.0
     assert illiquid["exceeds_exit_horizon_gate"]
+
+
+def test_empirical_quant_risk_engine_realized_metrics():
+    """
+    Verifies that the empirical risk engine computes realized covariance,
+    empirical SPY beta, Sortino, Sharpe, and historical simulation VaR
+    directly from time-series price bars with zero reliance on synthetic heuristics.
+    """
+    engine = QuantRiskEngine()
+
+    portfolio = Portfolio(
+        name="Empirical Two-Asset Portfolio",
+        cash=2000.0,
+        holdings=[
+            PortfolioHolding(
+                ticker="AAPL",
+                name="Apple",
+                shares=10,
+                avg_price=150.0,
+                current_price=200.0,
+                sector="Technology"
+            ),
+            PortfolioHolding(
+                ticker="MSFT",
+                name="Microsoft",
+                shares=5,
+                avg_price=300.0,
+                current_price=400.0,
+                sector="Technology"
+            )
+        ]
+    )
+
+    # Generate 30 days of realistic daily price bars
+    import math
+    base_spy = 450.0
+    base_aapl = 180.0
+    base_msft = 360.0
+
+    spy_bars = []
+    aapl_bars = []
+    msft_bars = []
+
+    for i in range(30):
+        # Oscillating wave with both up and down sessions
+        p_spy = base_spy * (1.0 + 0.02 * math.sin(i * 1.2))
+        p_aapl = base_aapl * (1.0 + 0.035 * math.sin(i * 1.2 + 0.1))
+        p_msft = base_msft * (1.0 + 0.028 * math.sin(i * 1.2 - 0.1))
+
+        spy_bars.append({"date": f"2024-01-{i+1:02d}", "close": round(p_spy, 2), "high": round(p_spy * 1.01, 2), "low": round(p_spy * 0.99, 2), "open": round(p_spy, 2), "volume": 1000000})
+        aapl_bars.append({"date": f"2024-01-{i+1:02d}", "close": round(p_aapl, 2), "high": round(p_aapl * 1.01, 2), "low": round(p_aapl * 0.99, 2), "open": round(p_aapl, 2), "volume": 800000})
+        msft_bars.append({"date": f"2024-01-{i+1:02d}", "close": round(p_msft, 2), "high": round(p_msft * 1.01, 2), "low": round(p_msft * 0.99, 2), "open": round(p_msft, 2), "volume": 600000})
+
+    custom_bars = {
+        "SPY": spy_bars,
+        "AAPL": aapl_bars,
+        "MSFT": msft_bars
+    }
+
+    stress = engine.analyze_portfolio(portfolio, benchmark_ticker="SPY", custom_bars_map=custom_bars)
+
+    # 1. Covariance matrix
+    assert "AAPL" in stress.covariance_matrix
+    assert "MSFT" in stress.covariance_matrix
+    assert stress.covariance_matrix["AAPL"]["AAPL"] > 0
+    assert stress.covariance_matrix["MSFT"]["MSFT"] > 0
+    assert stress.covariance_matrix["AAPL"]["MSFT"] == stress.covariance_matrix["MSFT"]["AAPL"]
+
+    # 2. Empirical Betas against SPY
+    assert "AAPL" in stress.empirical_betas
+    assert "MSFT" in stress.empirical_betas
+    assert stress.empirical_betas["AAPL"] > 0.5
+    assert stress.empirical_betas["MSFT"] > 0.5
+    assert stress.estimated_portfolio_beta > 0.5
+
+    # 3. Realized Volatility & VaR
+    assert stress.annualized_volatility_pct > 0.0
+    assert stress.var_95_daily_pct > 0.0
+    assert stress.var_95_daily_usd > 0.0
+
+    # 4. Historical Simulation VaR
+    assert stress.historical_var_95_pct is not None
+    assert stress.historical_var_95_pct > 0.0
+    assert stress.historical_var_95_usd is not None
+
+    # 5. Realized Sharpe & Sortino & Max Drawdown
+    assert stress.sharpe_ratio is not None
+    assert stress.sortino_ratio is not None
+    assert stress.max_drawdown_pct is not None
+    assert stress.max_drawdown_pct <= 0.0  # Max drawdown is zero or negative
+
+    # 6. Provenance note indicates empirical methodology
+    assert "Empirical" in stress.provenance_note
+
+    # 7. Single ticker empirical beta helper
+    aapl_beta = QuantRiskEngine.compute_single_ticker_beta("AAPL", benchmark="SPY", custom_bars_map=custom_bars)
+    assert aapl_beta > 0.5
+
 

@@ -27,7 +27,7 @@ from analytics.economic_calendar import (
     FOMC_SCHEDULE,
 )
 from analytics.sentiment_stream import _fetch_reddit_discussion
-from analytics.quant_risk import SECTOR_MACRO_SENSITIVITIES
+from storage.state_store import get_sector_taxonomy
 
 
 # ==============================================================================
@@ -192,17 +192,18 @@ def test_pillar2_gics_sector_classification_etf_and_unclassified():
     assert classify_equity_sector("XYZ", "Totally obscure text with no recognizable industry keywords") == "Unclassified"
 
 
-def test_pillar2_quant_risk_sensitivities_cover_all_sectors():
+def test_pillar2_sector_taxonomy_covers_all_sectors():
     """
-    Verifies that SECTOR_MACRO_SENSITIVITIES covers all 11 GICS sectors + ETF + Unclassified.
+    Verifies that canonical sector taxonomy covers all 11 GICS sectors + ETF.
     """
+    taxonomy = get_sector_taxonomy()
     required_sectors = [
-        "Information Technology", "Technology", "Health Care", "Healthcare", "Financials",
+        "Technology", "Healthcare", "Financials",
         "Consumer Discretionary", "Communication Services", "Industrials", "Consumer Staples",
-        "Energy", "Utilities", "Real Estate", "Materials", "Index ETF / Fund", "Unclassified"
+        "Energy", "Utilities", "Real Estate", "Materials", "Index ETF / Fund"
     ]
     for s in required_sectors:
-        assert s in SECTOR_MACRO_SENSITIVITIES, f"Missing sector sensitivity for: {s}"
+        assert s in taxonomy, f"Missing sector definition in taxonomy for: {s}"
 
 
 # ==============================================================================

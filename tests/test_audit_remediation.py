@@ -495,10 +495,9 @@ def test_r4_quant_risk_disclosures_and_quality_ceiling():
     engine = QuantRiskEngine()
     stress = engine.analyze_portfolio(p)
 
-    # 1. Honest disclosure of synthetic sector proxies
+    # 1. Honest disclosure of missing empirical data
     unavail = " ".join(stress.fields_unavailable)
-    assert "annualized_volatility_pct" in unavail
-    assert "var_95_daily_pct" in unavail
+    assert "Insufficient historical data" in unavail
 
     # 2. Data quality ceiling when technical indicators missing
     capped_conv, reasons = apply_data_quality_ceiling(

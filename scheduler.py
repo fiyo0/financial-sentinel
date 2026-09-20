@@ -66,8 +66,8 @@ class DailyMarketScheduler:
         self._executed_slots.add(slot_key)
         try:
             self.orchestrator.state_store.set_kv("executed_schedule_slots", list(self._executed_slots))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed persisting executed schedule slots: %s", e)
 
     def execute_briefing(
         self,
@@ -291,8 +291,8 @@ class DailyMarketScheduler:
                     self._executed_slots = {s for s in self._executed_slots if date_str in s}
                     try:
                         self.orchestrator.state_store.set_kv("executed_schedule_slots", list(self._executed_slots))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("Failed updating pruned schedule slots: %s", e)
 
             except Exception as e:
                 logger.error(f"Error in DailyMarketScheduler loop: {e}")

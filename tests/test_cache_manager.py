@@ -90,3 +90,64 @@ def test_web_cache_endpoints():
     assert clear_data["status"] == "success"
     assert clear_data["cleared"]["price_cache_entries"] >= 1
     assert clear_data["cleared"]["bars_cache_entries"] >= 1
+
+
+def test_cache_manager_singleflight_stampede():
+    """Verify singleflight coordinates concurrent threads: compute function runs exactly once."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    cm = CacheManager(default_ttl_seconds=10.0)
+    compute_count = 0
+    lock = threading.Lock()
+
+    def expensive_computation():
+        nonlocal compute_count
+        with lock:
+            compute_count += 1
+        time.sleep(0.05)  # Simulate network latency
+        return {"data": 999}
+
+    barrier = threading.Barrier(10)
+
+    def worker():
+        barrier.wait()
+        return cm.get_or_compute("sf_ns", "shared_key", expensive_computation)
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [executor.submit(worker) for _ in range(10)]
+        results = [f.result() for f in futures]
+
+    assert len(results) == 10
+    for r in results:
+        assert r == {"data": 999}
+    assert compute_count == 1, f"Expected compute_fn to execute once, but ran {compute_count} times"
+
+
+def test_cache_manager_capacity_bounded_eviction():
+    """Verify namespace honors max_entries_per_namespace and evicts earliest expiring keys."""
+    cm = CacheManager(default_ttl_seconds=100.0, max_entries_per_namespace=5)
+    for i in range(10):
+        cm.set("bounded_ns", f"key_{i}", f"val_{i}")
+
+    stats = cm.stats()
+    assert stats["namespaces"]["bounded_ns"] <= 5
+    # The latest items should be preserved
+    assert cm.get("bounded_ns", "key_9") == "val_9"
+    assert cm.get("bounded_ns", "key_8") == "val_8"
+
+
+def test_price_cache_bounded_proxy():
+    """Verify BoundedPriceCache maintains dict interface and bounds."""
+    from analytics.market_data import PRICE_CACHE
+    PRICE_CACHE.clear()
+
+    PRICE_CACHE["NVDA"] = (time.time(), {"price": 130.0, "name": "NVIDIA"})
+    assert "NVDA" in PRICE_CACHE
+    assert PRICE_CACHE["NVDA"][1]["price"] == 130.0
+    assert len(PRICE_CACHE) == 1
+
+    PRICE_CACHE.clear()
+    assert len(PRICE_CACHE) == 0
+    assert "NVDA" not in PRICE_CACHE
+

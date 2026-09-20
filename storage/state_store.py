@@ -78,17 +78,42 @@ def get_sector_taxonomy() -> Dict[str, Any]:
     return {}
 
 
+_SOURCES_REGISTRY_CACHE: Optional[Dict[str, Any]] = None
+
+
+def get_sources_registry() -> Dict[str, Any]:
+    """
+    Retrieves externalized source reliability scores and pattern categories.
+    Cached in-memory as a singleton to eliminate redundant disk I/O.
+    """
+    global _SOURCES_REGISTRY_CACHE
+    if _SOURCES_REGISTRY_CACHE is not None:
+        return _SOURCES_REGISTRY_CACHE
+
+    try:
+        reg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sources_registry.json")
+        if os.path.exists(reg_path):
+            with open(reg_path, "r", encoding="utf-8") as f:
+                _SOURCES_REGISTRY_CACHE = json.load(f)
+                return _SOURCES_REGISTRY_CACHE
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning(f"Failed to load sources_registry.json: {e}")
+
+    return {}
+
+
 class StateStore:
 
     def __init__(self, db_path: str = "storage/state.db"):
         self.db_path = db_path
+        self._local = threading.local()
         os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
         if not _GCS_RESTORED:
             self.restore_from_gcs()
         self._init_db()
 
     def restore_from_gcs(self, force: bool = False) -> bool:
-        """Restores state.db from Google Cloud Storage on Cloud Run startup."""
+        """Restores state.db from Google Cloud Storage on Cloud Run startup with timestamp safety check."""
         global _GCS_RESTORED
         if _GCS_RESTORED and not force:
             return True
@@ -110,6 +135,24 @@ class StateStore:
                 bucket = client.bucket(bucket_name)
                 blob = bucket.blob("state.db")
                 if blob.exists():
+                    # Timestamp check: avoid overwriting newer local state with older GCS snapshot
+                    if os.path.exists(self.db_path) and not force:
+                        try:
+                            blob.reload()
+                            gcs_updated = blob.updated
+                            if gcs_updated:
+                                local_mtime = os.path.getmtime(self.db_path)
+                                if local_mtime >= gcs_updated.timestamp():
+                                    logger.info(
+                                        "Local state.db is newer than or equal to GCS snapshot (local: %s, gcs: %s). Skipping restore.",
+                                        local_mtime, gcs_updated.timestamp()
+                                    )
+                                    _GCS_RESTORED = True
+                                    return True
+                        except Exception as time_err:
+                            logger.debug("Could not verify GCS blob timestamp: %s", time_err)
+
+                    self.close_connection()
                     os.makedirs(os.path.dirname(os.path.abspath(self.db_path)), exist_ok=True)
                     # Purge stale WAL/SHM files to prevent corruption or replay
                     for suffix in ("-wal", "-shm"):
@@ -117,8 +160,8 @@ class StateStore:
                         if os.path.exists(stale_file):
                             try:
                                 os.remove(stale_file)
-                            except Exception:
-                                pass
+                            except OSError as e:
+                                logger.debug("Could not remove stale WAL file %s: %s", stale_file, e)
                     blob.download_to_filename(self.db_path)
                     logger.info("Successfully restored state.db from GCS. Running integrity check & migrations...")
                     try:
@@ -133,8 +176,8 @@ class StateStore:
                     try:
                         with self._get_connection() as conn:
                             conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
-                    except Exception:
-                        pass
+                    except sqlite3.Error as e:
+                        logger.warning("Post-restore WAL checkpoint warning: %s", e)
                     _GCS_RESTORED = True
                     self._init_db()
                     return True
@@ -187,8 +230,8 @@ class StateStore:
                         if os.path.exists(tmp_path):
                             try:
                                 os.remove(tmp_path)
-                            except Exception:
-                                pass
+                            except OSError as e:
+                                logger.debug("Failed to remove tmp snapshot %s: %s", tmp_path, e)
 
                     # If another mutation arrived while this upload was in flight, coalesce and run once more
                     if not _GCS_BACKUP_PENDING:
@@ -208,15 +251,40 @@ class StateStore:
 
 
     def _get_connection(self) -> sqlite3.Connection:
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            try:
+                conn.execute("SELECT 1;")
+                return conn
+            except sqlite3.Error as e:
+                logger.debug("Cached DB connection failed healthcheck: %s", e)
+                try:
+                    conn.close()
+                except sqlite3.Error as close_err:
+                    logger.error("Failed closing stale DB connection: %s", close_err)
+                self._local.conn = None
+
         conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
         try:
             conn.execute("PRAGMA journal_mode=WAL;")
             conn.execute("PRAGMA synchronous=NORMAL;")
             conn.execute("PRAGMA foreign_keys=ON;")
-        except Exception:
-            pass
+            conn.execute("PRAGMA busy_timeout=30000;")
+        except sqlite3.Error as e:
+            logger.debug("PRAGMA configuration note on connection: %s", e)
+        self._local.conn = conn
         return conn
+
+    def close_connection(self):
+        """Closes the current thread's connection pool entry if open."""
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            try:
+                conn.close()
+            except sqlite3.Error as e:
+                logger.warning("Failed closing DB connection: %s", e)
+            self._local.conn = None
 
 
     def _init_db(self):
@@ -428,21 +496,18 @@ class StateStore:
                 )
             """)
 
-            # Schema migrations
-            try:
+            # Deterministic schema migrations without silent exception suppression
+            cursor.execute("PRAGMA table_info(users);")
+            user_cols = {row[1] for row in cursor.fetchall()}
+            if "token_epoch" not in user_cols:
                 cursor.execute("ALTER TABLE users ADD COLUMN token_epoch INTEGER DEFAULT 1;")
-            except Exception:  # noqa: S110
-                pass
 
-            try:
+            cursor.execute("PRAGMA table_info(token_usage);")
+            token_cols = {row[1] for row in cursor.fetchall()}
+            if "user_id" not in token_cols:
                 cursor.execute("ALTER TABLE token_usage ADD COLUMN user_id TEXT;")
-            except Exception:  # noqa: S110
-                pass
-
-            try:
+            if "cached_tokens" not in token_cols:
                 cursor.execute("ALTER TABLE token_usage ADD COLUMN cached_tokens INTEGER DEFAULT 0;")
-            except Exception:  # noqa: S110
-                pass
 
             # High-performance indexes for historical scalability
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_briefings_user_slot ON briefing_history(user_id, slot, generated_at DESC);")
@@ -568,15 +633,15 @@ class StateStore:
             for row in cursor.fetchall():
                 try:
                     pub_dt = datetime.fromisoformat(row[5])
-                except Exception:
+                except (ValueError, TypeError):
                     pub_dt = datetime.utcnow()
                 try:
                     cat = NewsCategory(row[6])
-                except Exception:
+                except (ValueError, KeyError):
                     cat = NewsCategory.BREAKING
                 try:
                     tickers = json.loads(row[8]) if row[8] else []
-                except Exception:
+                except (json.JSONDecodeError, TypeError):
                     tickers = []
 
                 items.append(NewsItem(
@@ -650,15 +715,15 @@ class StateStore:
             for row in cursor.fetchall():
                 try:
                     pub_dt = datetime.fromisoformat(row[5])
-                except Exception:
+                except (ValueError, TypeError):
                     pub_dt = datetime.utcnow()
                 try:
                     cat = NewsCategory(row[6])
-                except Exception:
+                except (ValueError, KeyError):
                     cat = NewsCategory.SEC_FILING
                 try:
                     tickers = json.loads(row[8]) if row[8] else []
-                except Exception:
+                except (json.JSONDecodeError, TypeError):
                     tickers = []
 
                 items.append(NewsItem(
@@ -712,8 +777,8 @@ class StateStore:
                 row = cursor.fetchone()
                 if row and row[0]:
                     return row[0]
-        except Exception:
-            pass
+        except sqlite3.Error as e:
+            logger.debug("Failed to query ticker sector for %s: %s", clean_ticker, e)
 
         # Fallback to in-memory cached reference dataset check
         equities = get_reference_equities()
@@ -734,8 +799,8 @@ class StateStore:
                 row = cursor.fetchone()
                 if row and row[0]:
                     return json.loads(row[0])
-        except Exception:
-            pass
+        except (sqlite3.Error, json.JSONDecodeError) as e:
+            logger.debug("Failed to get aliases for %s: %s", clean_ticker, e)
         return None
 
     def get_all_ticker_aliases(self) -> Dict[str, List[str]]:
@@ -751,10 +816,10 @@ class StateStore:
                     if row[0] and row[1]:
                         try:
                             res[row[0]] = json.loads(row[1])
-                        except Exception:
-                            pass
-        except Exception:
-            pass
+                        except (json.JSONDecodeError, TypeError) as e:
+                            logger.debug("Malformed alias JSON for %s: %s", row[0], e)
+        except sqlite3.Error as e:
+            logger.debug("Failed to get all ticker aliases: %s", e)
         return res
 
     def get_sector_taxonomy(self) -> Dict[str, Any]:
@@ -788,16 +853,16 @@ class StateStore:
         try:
             kv_key = f"latest_scan_briefing:{target_user}" if target_user else "latest_scan_briefing"
             self.set_kv(kv_key, briefing.model_dump(mode="json"))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to cache latest scan briefing in KV store: %s", e)
 
     def get_latest_scan_briefing(self) -> Optional[BriefingReport]:
         cached = self.get_kv("latest_scan_briefing")
         if cached and isinstance(cached, dict) and "report_id" in cached:
             try:
                 return BriefingReport(**cached)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Malformed cached briefing in KV store: %s", e)
 
         # Fallback: scan recent briefing history for a BriefingReport
         with self._get_connection() as conn:
@@ -815,7 +880,8 @@ class StateStore:
                             report = BriefingReport(**d)
                             self.set_kv("latest_scan_briefing", d)
                             return report
-                    except Exception:
+                    except (json.JSONDecodeError, TypeError, ValueError) as e:
+                        logger.debug("Failed parsing historical briefing payload: %s", e)
                         continue
         return None
 
@@ -910,13 +976,15 @@ class StateStore:
                 if r["payload_json"]:
                     try:
                         p = json.loads(r["payload_json"])
-                    except Exception:
+                    except (json.JSONDecodeError, TypeError) as e:
+                        logger.debug("Malformed payload_json for briefing %s: %s", r.get("report_id"), e)
                         p = {}
                 dispatched = []
                 if r["dispatched_channels"]:
                     try:
                         dispatched = json.loads(r["dispatched_channels"])
-                    except Exception:
+                    except (json.JSONDecodeError, TypeError) as e:
+                        logger.debug("Malformed dispatched_channels for briefing %s: %s", r.get("report_id"), e)
                         dispatched = []
 
                 slot_val = r["slot"] or p.get("slot", "general")
@@ -989,13 +1057,15 @@ class StateStore:
             if r["payload_json"]:
                 try:
                     p = json.loads(r["payload_json"])
-                except Exception:
+                except (json.JSONDecodeError, TypeError) as e:
+                    logger.debug("Malformed payload_json for briefing %s: %s", report_id, e)
                     p = {}
             dispatched = []
             if r["dispatched_channels"]:
                 try:
                     dispatched = json.loads(r["dispatched_channels"])
-                except Exception:
+                except (json.JSONDecodeError, TypeError) as e:
+                    logger.debug("Malformed dispatched_channels for briefing %s: %s", report_id, e)
                     dispatched = []
             return {
                 "report_id": r["report_id"],
@@ -1483,8 +1553,8 @@ class StateStore:
             if user_scans and isinstance(user_scans[0], dict):
                 try:
                     return BriefingReport(**user_scans[0])
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Failed deserializing latest user scan: %s", e)
         return self.get_latest_scan_briefing()
 
 
@@ -1604,17 +1674,20 @@ class StateStore:
             if res.get("payload_json"):
                 try:
                     res["payload"] = json.loads(res["payload_json"])
-                except Exception:
+                except (json.JSONDecodeError, TypeError) as e:
+                    logger.debug("Malformed payload_json for deepdive %s: %s", deepdive_id, e)
                     res["payload"] = None
             if res.get("technicals_json"):
                 try:
                     res["technicals"] = json.loads(res["technicals_json"])
-                except Exception:
+                except (json.JSONDecodeError, TypeError) as e:
+                    logger.debug("Malformed technicals_json for deepdive %s: %s", deepdive_id, e)
                     res["technicals"] = None
             if res.get("sentiment_json"):
                 try:
                     res["sentiment"] = json.loads(res["sentiment_json"])
-                except Exception:
+                except (json.JSONDecodeError, TypeError) as e:
+                    logger.debug("Malformed sentiment_json for deepdive %s: %s", deepdive_id, e)
                     res["sentiment"] = None
             return res
 

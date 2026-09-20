@@ -4,11 +4,14 @@ to surface high-conviction asymmetric alpha plays outside current portfolio hold
 Zero static catalogs.
 """
 
+import logging
 from typing import List, Optional, Any
 from models import (
     Portfolio, NewsItem, OpportunityAnalysis, OpportunityHorizon, AlertPriority
 )
 from agents.base_agent import BaseAgent
+
+logger = logging.getLogger(__name__)
 
 
 class OpportunityDiscoveryAgent(BaseAgent):
@@ -126,7 +129,8 @@ class OpportunityDiscoveryAgent(BaseAgent):
 
                     priority=AlertPriority.P2_WATCHLIST
                 ))
-            except Exception:
+            except (ValueError, KeyError, TypeError) as e:
+                logger.warning("Failed parsing opportunity item: %s", e)
                 continue
 
         return opportunities
@@ -217,7 +221,8 @@ class OpportunityDiscoveryAgent(BaseAgent):
 
                     priority=AlertPriority.P2_WATCHLIST
                 ))
-            except Exception:
+            except (ValueError, KeyError, TypeError) as e:
+                logger.warning("Failed parsing on-demand opportunity item: %s", e)
                 continue
 
         return opportunities if len(opportunities) > 0 else []
@@ -309,7 +314,8 @@ class OpportunityDiscoveryAgent(BaseAgent):
 
                     priority=AlertPriority.P2_WATCHLIST
                 ))
-            except Exception:
+            except (ValueError, KeyError, TypeError) as e:
+                logger.warning("Failed parsing moonshot opportunity item: %s", e)
                 continue
 
         return opportunities if len(opportunities) > 0 else []

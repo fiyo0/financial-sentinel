@@ -26,6 +26,41 @@ _macro_cache = CacheManager(default_ttl_seconds=900.0)
 FED_MONETARY_FEED_URL = "https://www.federalreserve.gov/feeds/press_monetary.xml"
 FED_ALL_PRESS_URL = "https://www.federalreserve.gov/feeds/press_all.xml"
 
+
+def fetch_fred_releases(api_key: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    Dynamically queries the official St. Louis Fed FRED API for real-time macroeconomic
+    release dates when FRED_API_KEY is configured.
+    Falls back gracefully to the statutory projection engine when unconfigured.
+    """
+    import os
+    fred_key = api_key or os.getenv("FRED_API_KEY")
+    if not fred_key:
+        logger.debug("FRED_API_KEY not set; using deterministic statutory schedule projection engine.")
+        return []
+
+    cache_key = "fred_macro_releases"
+    cached = _macro_cache.get("fred", cache_key)
+    if cached is not None:
+        return cached
+
+    url = f"https://api.stlouisfed.org/fred/releases/dates?api_key={fred_key}&file_type=json"
+    try:
+        with httpx.Client(timeout=6.0) as client:
+            resp = client.get(url)
+            if resp.status_code == 200:
+                data = resp.json()
+                release_dates = data.get("release_dates", [])
+                _macro_cache.set("fred", cache_key, release_dates, ttl_seconds=3600.0)
+                logger.info("Successfully fetched %d scheduled release dates from official FRED API.", len(release_dates))
+                return release_dates
+            else:
+                logger.warning("FRED API returned non-200 status (%d). Falling back to statutory projection.", resp.status_code)
+    except Exception as e:
+        logger.warning("Failed querying FRED API (%s). Falling back to statutory projection.", e)
+
+    return []
+
 # Official Federal Reserve FOMC Calendar (2025 - 2027)
 # Announcement: 2:00 PM Eastern Time (14:00), Press Conference: 2:30 PM Eastern Time (14:30)
 FOMC_SCHEDULE = [

@@ -3,16 +3,20 @@ News Ingestion Agent: Scrapes, parses, normalizes, and scores incoming financial
 using dynamic entity and sector reasoning.
 """
 import json
+import logging
 import re
+import sqlite3
 import time
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Optional
 import feedparser
 import httpx
 from models import NewsItem, NewsCategory
 from config import config
 from storage.state_store import StateStore
 from agents.base_agent import BaseAgent
+
+logger = logging.getLogger(__name__)
 
 # In-memory news cache: cache_key -> (timestamp, List[NewsItem])
 NEWS_FEED_CACHE: Dict[str, tuple[float, List[NewsItem]]] = {}
@@ -28,51 +32,31 @@ _DYNAMIC_TICKER_CACHE: Dict[str, List[str]] = {}
 
 def evaluate_source_reliability(source_url_or_name: str) -> float:
     """
-    Universally assesses evidentiary source reliability using TLD governance,
-    central bank/regulatory status, and tiered wire authority heuristics.
+    Universally assesses evidentiary source reliability using externalized sources registry
+    (storage/sources_registry.json), TLD governance, central bank/regulatory status,
+    and tiered wire authority heuristics.
     """
     if not source_url_or_name:
         return 0.75
 
     s = source_url_or_name.lower().strip()
 
-    # 1. Statutory Government & Central Bank Authorities (.gov, .mil, official regulators)
-    if (
-        ".gov" in s or
-        ".mil" in s or
-        ".fed.us" in s or
-        ("sec" in s and "commission" in s) or
-        "federal reserve" in s or
-        "european central bank" in s or
-        "bank of england" in s
-    ):
-        return 0.99
+    from storage.state_store import get_sources_registry
+    registry = get_sources_registry()
 
-    # 2. Premier Financial Investigative Wires & Primary Exchanges
-    if any(k in s for k in [
-        "reuters", "bloomberg", "wsj.com", "wall street journal",
-        "ft.com", "financial times", "apnews", "associated press",
-        "barrons.com", "barron's", "nasdaq.com", "nyse.com", "dow jones"
-    ]):
-        return 0.92
+    if not registry:
+        logger.warning("Sources registry unavailable; using default reliability score")
+        return 0.75
 
-    # 3. Mainstream Financial Media & Regulated Aggregators
-    if any(k in s for k in [
-        "cnbc", "marketwatch", "finance.yahoo", "yahoo finance",
-        "news.google", "google news", "forbes", "fortune", "economist",
-        "investors.com", "investor's business daily", "ibd"
-    ]):
-        return 0.85
+    tier_keys = ["statutory_authorities", "premier_wires", "mainstream_financial_media", "crowdsourced_opinion"]
+    for tier in tier_keys:
+        tier_cfg = registry.get(tier, {})
+        score = tier_cfg.get("score")
+        patterns = tier_cfg.get("patterns", [])
+        if score is not None and any(p.lower() in s for p in patterns):
+            return float(score)
 
-    # 4. Crowdsourced Retail Opinion & Content Platforms
-    if any(k in s for k in [
-        "seekingalpha", "seeking alpha", "benzinga", "motley fool",
-        "fool.com", "thestreet", "tipranks", "zacks"
-    ]):
-        return 0.65
-
-    # 5. General Web / Unverified Feed Baseline
-    return 0.75
+    return float(registry.get("default_score", 0.75))
 
 CORPORATE_SUFFIX_REGEX = re.compile(
     r'\b(?:Inc\.?|Corp\.?|Corporation|Holdings|Holding|Technologies|Technology|Platforms|Platform|Co\.?|Company|Ltd\.?|Limited|Plc|Class [A-Z]|Common Stock|S\.?A\.?|N\.?V\.?|A\.?G\.?)\b',
@@ -181,8 +165,8 @@ def resolve_ticker_aliases(
             q = fetch_live_quote(clean_ticker)
             if q and q.get("name") and q.get("name").upper() != clean_ticker:
                 resolved_name = q.get("name")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Market quote alias resolution failed for %s: %s", clean_ticker, e)
 
     if resolved_name:
         for s in extract_stem_aliases(clean_ticker, resolved_name):
@@ -289,8 +273,8 @@ class NewsIngestionAgent(BaseAgent):
             try:
                 db_aliases = self.state_store.get_all_ticker_aliases()
                 active_aliases.update(db_aliases)
-            except Exception:
-                pass
+            except sqlite3.Error as e:
+                logger.debug("Failed loading ticker aliases from DB: %s", e)
         active_aliases.update(_DYNAMIC_TICKER_CACHE)
 
         for sym, aliases in active_aliases.items():
@@ -306,16 +290,16 @@ class NewsIngestionAgent(BaseAgent):
             if self.state_store:
                 try:
                     sec = self.state_store.get_ticker_sector(sym)
-                except Exception:
-                    pass
+                except sqlite3.Error as e:
+                    logger.debug("Failed checking sector in DB for %s: %s", sym, e)
             if not sec:
                 try:
                     from storage.state_store import get_reference_equities
                     ref_data = get_reference_equities()
                     if sym in ref_data:
                         sec = ref_data[sym].get("sector")
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Reference equities sector lookup failed for %s: %s", sym, e)
             if sec and sec != "Unclassified":
                 found_sectors.add(sec)
 
@@ -340,8 +324,8 @@ class NewsIngestionAgent(BaseAgent):
                         from security.encryption import get_encryption_manager
                         enc_mgr = get_encryption_manager()
                         effective_key = enc_mgr.decrypt(user_record["encrypted_gemini_key"])
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Failed decrypting user Gemini key for entity extraction: %s", e)
             if not effective_key:
                 effective_key = config.gemini_api_key
 
@@ -361,8 +345,8 @@ class NewsIngestionAgent(BaseAgent):
                         conf = float(llm_res.get("confidence", 0.0))
                         if detected in valid_sectors and conf >= 0.5:
                             found_sectors.add(detected)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("LLM semantic sector classification failed: %s", e)
 
         return {
             "tickers": sorted(list(found_tickers)),
@@ -446,8 +430,8 @@ class NewsIngestionAgent(BaseAgent):
                 if hasattr(entry, "published_parsed") and entry.published_parsed:
                     try:
                         pub_time = datetime(*entry.published_parsed[:6])
-                    except Exception:
-                        pass
+                    except (TypeError, ValueError) as e:
+                        logger.debug("Could not parse published_parsed timestamp for %s: %s", title, e)
 
                 item = NewsItem(
                     id=f"news_{raw_hash[:12]}",
@@ -463,8 +447,8 @@ class NewsIngestionAgent(BaseAgent):
                     raw_hash=raw_hash
                 )
                 items.append(item)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed parsing feed content for '%s': %s", name, e)
         return items
 
     def enrich_items_with_gemini(self, items: List[NewsItem], api_key: Optional[str] = None) -> List[NewsItem]:
@@ -516,23 +500,22 @@ class NewsIngestionAgent(BaseAgent):
                         if enr.get("category"):
                             try:
                                 item.category = NewsCategory[enr["category"].upper()]
-                            except Exception:
-                                pass
-        except Exception:
-            pass
+                            except (KeyError, ValueError, AttributeError) as e:
+                                logger.debug("Unknown or invalid category '%s' from LLM enrichment: %s", enr.get("category"), e)
+        except Exception as e:
+            logger.warning("Gemini news enrichment failed: %s", e)
 
         return items
 
     def ingest_all_feeds(
         self,
         live: bool = True,
-        custom_items: Optional[List[Dict[str, Any]]] = None,
         force_fresh: bool = False,
         portfolio_tickers: Optional[List[str]] = None,
         api_key: Optional[str] = None
     ) -> List[NewsItem]:
         # Check in-memory TTL cache for live feeds
-        if live and not force_fresh and not custom_items:
+        if live and not force_fresh:
             cache_key = ",".join(sorted([t.upper() for t in (portfolio_tickers or [])]))
             now = time.time()
             if cache_key in NEWS_FEED_CACHE:
@@ -542,34 +525,7 @@ class NewsIngestionAgent(BaseAgent):
 
         new_items: List[NewsItem] = []
 
-        # 1. If custom / fixture items are passed
-        if custom_items:
-            for raw in custom_items:
-                raw_hash = self.state_store.compute_hash(raw["title"], raw["source"])
-                entities = self.extract_entities(f"{raw['title']} {raw.get('summary', '')}")
-                cat = self.infer_category(raw["title"], raw.get("summary", ""), raw.get("category", "BREAKING"))
-                rel = self.get_source_reliability(raw.get("url", raw["source"]))
-
-                item = NewsItem(
-                    id=raw.get("id", f"news_{raw_hash[:12]}"),
-                    title=raw["title"],
-                    source=raw["source"],
-                    url=raw.get("url", "https://news.example.com"),
-                    published_at=datetime.utcnow(),
-                    summary=raw.get("summary", ""),
-                    category=cat,
-                    source_reliability_score=raw.get("reliability", rel),
-                    related_tickers=raw.get("related_tickers", entities["tickers"]),
-                    related_sectors=raw.get("related_sectors", entities["sectors"]),
-                    raw_hash=raw_hash
-                )
-                if force_fresh or not self.state_store.is_news_processed(raw_hash):
-                    if not self.state_store.is_news_processed(raw_hash):
-                        self.state_store.save_news_item(item)
-                    new_items.append(item)
-            return new_items
-
-        # 2. Live RSS feeds fetch (Global macro + Targeted ticker feeds in parallel)
+        # 1. Live RSS feeds fetch (Global macro + Targeted ticker feeds in parallel)
         if live:
             from concurrent.futures import ThreadPoolExecutor, as_completed
             import urllib.parse
@@ -626,8 +582,9 @@ class NewsIngestionAgent(BaseAgent):
                                 if not self.state_store.is_news_processed(item.raw_hash):
                                     self.state_store.save_news_item(item)
                                 new_items.append(item)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        feed_name = cfg.get("name", "unknown")
+                        logger.warning("Error processing feed '%s': %s", feed_name, e)
 
         # 3. Apply Gemini semantic intelligence to enrich extracted tickers and categories
         # NOTE: Skip during live scans to eliminate 12-15s redundant latency, as AnalysisAgent
@@ -639,7 +596,7 @@ class NewsIngestionAgent(BaseAgent):
         new_items.sort(key=lambda x: x.published_at, reverse=True)
 
         # Update in-memory TTL cache for live feeds
-        if live and new_items and not custom_items:
+        if live and new_items:
             cache_key = ",".join(sorted([t.upper() for t in (portfolio_tickers or [])]))
             NEWS_FEED_CACHE[cache_key] = (time.time(), new_items)
 
@@ -677,7 +634,7 @@ class NewsIngestionAgent(BaseAgent):
                 if self.state_store:
                     self.state_store.save_ticker_aliases(clean_ticker, company_name, combined)
                 return combined
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to resolve brand aliases via Gemini for %s: %s", clean_ticker, e)
         return resolve_ticker_aliases(clean_ticker, company_name, state_store=self.state_store)
 

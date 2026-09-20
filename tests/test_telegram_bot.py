@@ -5,6 +5,7 @@ specifically testing the /<ticker> shorthand feature and auto-archiving.
 import os
 import pytest
 from unittest.mock import patch
+from models import SingleTickerAnalysis
 from orchestrator import FinancialSentinelOrchestrator
 from channels.telegram_bot import FinancialSentinelTelegramBot, RESERVED_COMMANDS
 
@@ -43,18 +44,25 @@ def test_reserved_commands_coverage():
         "start", "help", "menu", "schedule", "portfolio", "scan",
         "cash", "status", "analysis", "deepdive", "add", "rm"
     }
-    for cmd in expected:
-        assert cmd in RESERVED_COMMANDS
+    assert expected.issubset(RESERVED_COMMANDS)
 
 
 def test_ticker_shorthand_execution(telegram_test_setup):
     """Test that sending /NVDA, /aapl, and $TSLA triggers single ticker deep dive and auto-archives."""
     bot, orch, admin, sent, edited = telegram_test_setup
 
-    mock_analysis = "🔬 <b>STOCK ANALYSIS: NVDA</b>\n<b>Verdict:</b> 🟢 <b>BUY (ACCUMULATE)</b>"
+    mock_analysis_text = "🔬 <b>STOCK ANALYSIS: NVDA</b>\n<b>Verdict:</b> 🟢 <b>BUY (ACCUMULATE)</b>"
+    mock_analysis = SingleTickerAnalysis(
+        ticker="NVDA",
+        company_name="NVIDIA Corporation",
+        verdict="BULLISH",
+        conviction_score=85.0,
+        thesis="NVIDIA Corporation thesis",
+        telegram_html=mock_analysis_text
+    )
 
     with patch("analytics.market_data.fetch_live_quote", return_value={"name": "NVIDIA Corporation", "current_price": 130.0, "sector": "Technology"}), \
-         patch.object(orch.analysis_agent, "analyze_single_ticker", return_value=mock_analysis) as mock_agent_call:
+         patch.object(orch.analysis_agent, "analyze_single_ticker_structured", return_value=mock_analysis) as mock_agent_call:
 
         # Test uppercase /NVDA
         bot._handle_incoming_message("/NVDA", "test_chat", "Investor")
@@ -75,17 +83,32 @@ def test_ticker_shorthand_lowercase_and_cashtag(telegram_test_setup):
     """Test lowercase /aapl and cashtag $tsla."""
     bot, orch, admin, sent, edited = telegram_test_setup
 
-    mock_analysis = "🔬 <b>STOCK ANALYSIS: AAPL</b>\n<b>Verdict:</b> 🟡 <b>HOLD</b>"
+    mock_analysis_text = "🔬 <b>STOCK ANALYSIS: AAPL</b>\n<b>Verdict:</b> 🟡 <b>HOLD</b>"
+    mock_analysis = SingleTickerAnalysis(
+        ticker="AAPL",
+        company_name="Apple Inc.",
+        verdict="HOLD",
+        conviction_score=50.0,
+        thesis="Apple thesis",
+        telegram_html=mock_analysis_text
+    )
 
     with patch("analytics.market_data.fetch_live_quote", return_value={"name": "Apple Inc.", "current_price": 230.0, "sector": "Technology"}), \
-         patch.object(orch.analysis_agent, "analyze_single_ticker", return_value=mock_analysis) as mock_agent_call:
+         patch.object(orch.analysis_agent, "analyze_single_ticker_structured", return_value=mock_analysis) as mock_agent_call:
 
         # Lowercase /aapl
         bot._handle_incoming_message("/aapl", "test_chat", "Investor")
         assert mock_agent_call.call_args[1]["ticker"] == "AAPL"
 
         # Cashtag $TSLA
-        mock_agent_call.return_value = "🔬 <b>STOCK ANALYSIS: TSLA</b>\n<b>Verdict:</b> 🔴 <b>PASS</b>"
+        mock_agent_call.return_value = SingleTickerAnalysis(
+            ticker="TSLA",
+            company_name="Tesla Inc.",
+            verdict="BEARISH",
+            conviction_score=30.0,
+            thesis="Tesla thesis",
+            telegram_html="🔬 <b>STOCK ANALYSIS: TSLA</b>\n<b>Verdict:</b> 🔴 <b>PASS</b>"
+        )
         bot._handle_incoming_message("$TSLA", "test_chat", "Investor")
         assert mock_agent_call.call_args[1]["ticker"] == "TSLA"
 
@@ -94,10 +117,18 @@ def test_analysis_command_aliases(telegram_test_setup):
     """Test /analysis MSFT and /deepdive MSFT."""
     bot, orch, admin, sent, edited = telegram_test_setup
 
-    mock_analysis = "🔬 <b>STOCK ANALYSIS: MSFT</b>\n<b>Verdict:</b> 🟢 <b>BUY</b>"
+    mock_analysis_text = "🔬 <b>STOCK ANALYSIS: MSFT</b>\n<b>Verdict:</b> 🟢 <b>BUY</b>"
+    mock_analysis = SingleTickerAnalysis(
+        ticker="MSFT",
+        company_name="Microsoft",
+        verdict="BULLISH",
+        conviction_score=85.0,
+        thesis="MSFT thesis",
+        telegram_html=mock_analysis_text
+    )
 
     with patch("analytics.market_data.fetch_live_quote", return_value={"name": "Microsoft", "current_price": 420.0, "sector": "Technology"}), \
-         patch.object(orch.analysis_agent, "analyze_single_ticker", return_value=mock_analysis) as mock_agent_call:
+         patch.object(orch.analysis_agent, "analyze_single_ticker_structured", return_value=mock_analysis) as mock_agent_call:
 
         bot._handle_incoming_message("/analysis MSFT", "test_chat", "Investor")
         assert mock_agent_call.call_args[1]["ticker"] == "MSFT"
@@ -169,7 +200,7 @@ def test_greetings_routing(telegram_test_setup):
     """Test that /hello, /hi, /hey route to welcome/help menu instead of ticker analysis."""
     bot, orch, admin, sent, edited = telegram_test_setup
 
-    with patch.object(orch.analysis_agent, "analyze_single_ticker") as mock_analysis:
+    with patch.object(orch.analysis_agent, "analyze_single_ticker_structured") as mock_analysis:
         bot._handle_incoming_message("/hello", "test_chat", "Investor")
         assert not mock_analysis.called
         assert any("Welcome to Financial Sentinel" in m["text"] for m in sent)
@@ -183,7 +214,7 @@ def test_unrecognized_ticker_aborts_without_llm(telegram_test_setup):
     bot, orch, admin, sent, edited = telegram_test_setup
 
     with patch("analytics.market_data.fetch_live_quote", return_value={"name": "FOOBAR", "current_price": 0.0}), \
-         patch.object(orch.analysis_agent, "analyze_single_ticker") as mock_analysis:
+         patch.object(orch.analysis_agent, "analyze_single_ticker_structured") as mock_analysis:
 
         bot._handle_incoming_message("/foobar", "test_chat", "Investor")
         assert not mock_analysis.called

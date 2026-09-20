@@ -9,8 +9,10 @@ Implements:
 import os
 import json
 import base64
+import binascii
 import hashlib
 import secrets
+import sqlite3
 import logging
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
@@ -59,7 +61,8 @@ def _get_legacy_fernet() -> Optional[Fernet]:
         secret = _get_app_secret()
         digest = hashlib.sha256(secret.encode("utf-8")).digest()
         return Fernet(base64.urlsafe_b64encode(digest))
-    except Exception:
+    except (ValueError, TypeError, binascii.Error) as e:
+        logger.warning("Failed deriving legacy Fernet: %s", e)
         return None
 
 
@@ -147,7 +150,7 @@ def verify_password(password: str, stored_hash: str) -> bool:
         expected_kdf = bytes.fromhex(parts[2])
         actual_kdf = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 120000)
         return secrets.compare_digest(expected_kdf, actual_kdf)
-    except Exception as e:
+    except (ValueError, binascii.Error) as e:
         logger.error(f"Password verification error: {e}")
         return False
 
@@ -165,7 +168,8 @@ def create_session_token(user_id: str, username: str, role: str = "user", epoch:
             u = store.get_user_by_id(user_id)
             if u:
                 epoch = int(u.get("token_epoch") or 1)
-        except Exception:
+        except (sqlite3.Error, KeyError, ValueError) as e:
+            logger.warning("Failed fetching token_epoch for user %s: %s", user_id, e)
             epoch = 1
     if epoch is None:
         epoch = 1

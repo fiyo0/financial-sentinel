@@ -211,11 +211,17 @@ class PortfolioStressMetric(BaseModel):
     var_95_daily_pct: Optional[float] = None
     var_95_daily_usd: Optional[float] = None
     sharpe_ratio: Optional[float] = None
+    sortino_ratio: Optional[float] = None
+    max_drawdown_pct: Optional[float] = None
+    historical_var_95_pct: Optional[float] = None
+    historical_var_95_usd: Optional[float] = None
     cash_allocation_pct: float = 0.0
     macro_shock_scenarios: Dict[str, float] = Field(
         default_factory=dict,
         description="Scenario name -> Estimated portfolio drawdown/gain %"
     )
+    covariance_matrix: Dict[str, Dict[str, float]] = Field(default_factory=dict)
+    empirical_betas: Dict[str, float] = Field(default_factory=dict)
     fields_unavailable: List[str] = Field(default_factory=list)
     provenance_note: Optional[str] = None
 

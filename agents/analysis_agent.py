@@ -20,7 +20,9 @@ from agents.news_ingestion import (
 logger = logging.getLogger(__name__)
 
 
-REGULATORY_NLP_STOPWORDS = {
+from config import config
+
+REGULATORY_NLP_STOPWORDS = set(config.regulatory_nlp_stopwords) if hasattr(config, "regulatory_nlp_stopwords") else {
     "the", "and", "for", "with", "from", "that", "this", "remarks",
     "speech", "statement", "roundtable", "meeting", "about", "preparations",
     "clock", "around", "towards", "annual", "official", "sec", "federal",
@@ -222,7 +224,8 @@ class PortfolioAnalysisAgent(BaseAgent):
                     citations=[f"Gemini AI Dynamic Synthesis: {ticker_sym}"],
                     news_item_id=f"llm_{ticker_sym}"
                 ))
-            except Exception:
+            except Exception as e:
+                logger.warning("Failed parsing LLM synthesis item: %s", e)
                 continue
 
         return analyses
@@ -232,8 +235,28 @@ class PortfolioAnalysisAgent(BaseAgent):
         cur_price = holding.current_price if holding.current_price > 0 else holding.avg_price
         pnl_pct = holding.unrealized_pnl_pct
         weight_pct = holding.weight_pct
-        stop_price = round(cur_price * 0.92, 2)
-        target_price = round(cur_price * 1.15, 2)
+
+        # Dynamic ATR-14 volatility scaled stop-loss and price target
+        atr_14 = None
+        try:
+            from analytics.technical_indicators import compute_technical_snapshot
+            snap = compute_technical_snapshot(holding.ticker)
+            if snap and snap.atr_14 and snap.atr_14 > 0:
+                atr_14 = snap.atr_14
+        except Exception as e:
+            logger.debug("Failed computing ATR-14 for %s: %s", holding.ticker, e)
+
+        if atr_14 and atr_14 > 0:
+            stop_distance = max(cur_price * 0.04, min(cur_price * 0.15, 2.0 * atr_14))
+            stop_price = round(cur_price - stop_distance, 2)
+            target_distance = max(cur_price * 0.08, min(cur_price * 0.35, 3.5 * atr_14))
+            target_price = round(cur_price + target_distance, 2)
+            buffer_pct = round((stop_distance / cur_price) * 100.0, 1)
+        else:
+            stop_distance = cur_price * 0.08
+            stop_price = round(cur_price - stop_distance, 2)
+            target_price = round(cur_price * 1.15, 2)
+            buffer_pct = 8.0
 
         if pnl_pct >= 15.0:
             impact = DirectionalImpact.BULLISH
@@ -252,7 +275,7 @@ class PortfolioAnalysisAgent(BaseAgent):
             action = f"Maintain core allocation ({weight_pct:.1f}% weight). Objective: ${target_price:.2f}."
 
         key_risks = [
-            f"Key support floor: ${stop_price:.2f} (-8.0% buffer)",
+            f"Volatility trailing stop floor: ${stop_price:.2f} (-{buffer_pct}% buffer)",
             f"Sector volatility in {holding.sector}"
         ]
         if weight_pct >= 25.0:
@@ -299,49 +322,13 @@ class PortfolioAnalysisAgent(BaseAgent):
         canonical_sec = self.state_store.get_ticker_sector(sym) if self.state_store else None
         sector = quote.get("sector") or canonical_sec or "Unclassified"
 
-
-
-
-
-        # Backwards compatibility check: If analyze_single_ticker is mocked or overridden
-        orig_fn = getattr(PortfolioAnalysisAgent.analyze_single_ticker, "__func__", PortfolioAnalysisAgent.analyze_single_ticker)
-        curr_fn = getattr(self.analyze_single_ticker, "__func__", self.analyze_single_ticker)
-        if curr_fn is not orig_fn or hasattr(self.analyze_single_ticker, "mock") or hasattr(self.analyze_single_ticker, "call_args"):
-            res = self.analyze_single_ticker(
-                ticker=ticker,
-                portfolio=portfolio,
-                news_items=news_items,
-                quote_data=quote_data,
-                technical_snapshot=technical_snapshot,
-                sentiment_snapshot=sentiment_snapshot,
-                api_key=api_key
-            )
-            if isinstance(res, SingleTickerAnalysis):
-                return res
-            res_str = str(res)
-            upper_res = res_str.upper()
-            verdict = "NEUTRAL"
-            if "BUY" in upper_res or "BULLISH" in upper_res:
-                verdict = "BULLISH"
-            elif "PASS" in upper_res or "BEARISH" in upper_res or "AVOID" in upper_res:
-                verdict = "BEARISH"
-            elif "HOLD" in upper_res or "NEUTRAL" in upper_res:
-                verdict = "HOLD"
-            return SingleTickerAnalysis(
-                ticker=sym,
-                company_name=company_name,
-                verdict=verdict,
-                conviction_score=85.0 if verdict == "BULLISH" else 50.0,
-                thesis=res_str,
-                telegram_html=res_str
-            )
-
         # 1. Compute deterministic technical snapshot if not provided
         if technical_snapshot is None:
             try:
                 from analytics.technical_indicators import compute_technical_snapshot
                 technical_snapshot = compute_technical_snapshot(sym)
-            except Exception:
+            except Exception as e:
+                logger.warning("Failed computing technical snapshot for %s: %s", sym, e)
                 technical_snapshot = None
 
         # 2. Fetch retail social sentiment if not provided
@@ -350,7 +337,8 @@ class PortfolioAnalysisAgent(BaseAgent):
                 from analytics.sentiment_stream import fetch_social_sentiment_snapshot
                 rvol_val = technical_snapshot.rvol if technical_snapshot and technical_snapshot.is_live else None
                 sentiment_snapshot = fetch_social_sentiment_snapshot(sym, rvol=rvol_val)
-            except Exception:
+            except Exception as e:
+                logger.warning("Failed fetching social sentiment for %s: %s", sym, e)
                 sentiment_snapshot = None
 
         # Ensure price is populated from technical snapshot if missing
@@ -472,8 +460,8 @@ class PortfolioAnalysisAgent(BaseAgent):
                 try:
                     if self.state_store.get_ticker_sector(holding.ticker) == "Index ETF / Fund":
                         return True
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Database error checking sector for %s: %s", holding.ticker, e)
             return False
 
         found_etfs = [

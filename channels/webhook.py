@@ -2,9 +2,12 @@
 Generic Webhook Notification Channel Adapter.
 Dispatches structured JSON payloads to automation tools like Zapier, n8n, Make.com, or custom microservices.
 """
+import logging
 import httpx
 from typing import Optional, Dict, Any
 from config import config
+
+logger = logging.getLogger(__name__)
 
 
 class GenericWebhookChannel:
@@ -25,5 +28,6 @@ class GenericWebhookChannel:
         try:
             resp = httpx.post(self.webhook_url, json=data, timeout=8.0)
             return resp.status_code in (200, 201, 202, 204)
-        except Exception:
+        except httpx.HTTPError as e:
+            logger.error("Failed sending generic webhook payload: %s", e)
             return False

@@ -5,7 +5,7 @@ import os
 import json
 import csv
 import logging
-from typing import Optional, List, Dict, Any
+from typing import Optional, Dict, Any
 from models import Portfolio, PortfolioHolding, BriefingReport
 from storage.state_store import StateStore
 from analytics.quant_risk import QuantRiskEngine
@@ -69,7 +69,8 @@ class FinancialSentinelOrchestrator:
                         try:
                             s = str(val).replace("$", "").replace(",", "").replace("%", "").strip()
                             return float(s)
-                        except Exception:
+                        except (ValueError, TypeError) as e:
+                            logger.debug("Failed parsing numeric value '%s': %s", val, e)
                             return default
 
                     shares = _parse_num(clean_row.get("shares") or clean_row.get("quantity") or clean_row.get("qty") or clean_row.get("units"))
@@ -91,8 +92,8 @@ class FinancialSentinelOrchestrator:
                     if hasattr(self, "state_store") and self.state_store:
                         try:
                             canonical_sec = self.state_store.get_ticker_sector(ticker_upper)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug("Failed getting sector for %s: %s", ticker_upper, e)
 
                     raw_sec = clean_row.get("sector") or clean_row.get("industry") or clean_row.get("assetclass")
                     sector = raw_sec.strip() if raw_sec else (canonical_sec or "Unclassified")
@@ -130,8 +131,8 @@ class FinancialSentinelOrchestrator:
                     p = Portfolio.model_validate(user_p)
                     p.deduplicate_and_aggregate()
                     return p
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Failed parsing user portfolio for %s: %s", user_id, e)
 
             # Check if this user is admin
             user_obj = self.state_store.get_user_by_id(user_id)
@@ -146,8 +147,8 @@ class FinancialSentinelOrchestrator:
                         p.deduplicate_and_aggregate()
                         self.persist_active_portfolio(p, user_id=user_id)
                         return p
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("Failed parsing active_portfolio KV: %s", e)
 
                 data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
                 active_json = os.path.join(data_dir, "active_portfolio.json")
@@ -157,8 +158,8 @@ class FinancialSentinelOrchestrator:
                         p.deduplicate_and_aggregate()
                         self.persist_active_portfolio(p, user_id=user_id)
                         return p
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("Failed loading %s: %s", active_json, e)
 
                 my_csv = os.path.join(data_dir, "my_portfolio.csv")
                 if os.path.exists(my_csv):
@@ -167,8 +168,8 @@ class FinancialSentinelOrchestrator:
                         p.deduplicate_and_aggregate()
                         self.persist_active_portfolio(p, user_id=user_id)
                         return p
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("Failed loading %s: %s", my_csv, e)
 
 
                 sample_json = os.path.join(data_dir, "sample_portfolio.json")
@@ -178,8 +179,8 @@ class FinancialSentinelOrchestrator:
                         p.deduplicate_and_aggregate()
                         self.persist_active_portfolio(p, user_id=user_id)
                         return p
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("Failed loading %s: %s", sample_json, e)
 
             # Fresh empty user portfolio (starts off with nothing for non-admin tenants)
             p = Portfolio(name="User Portfolio", cash=0.0, holdings=[])
@@ -194,8 +195,8 @@ class FinancialSentinelOrchestrator:
                     p = Portfolio.model_validate(user_p)
                     p.deduplicate_and_aggregate()
                     return p
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Failed parsing default admin user portfolio: %s", e)
 
         saved = self.state_store.get_kv("active_portfolio")
         if saved and isinstance(saved, dict) and saved.get("holdings"):
@@ -203,8 +204,8 @@ class FinancialSentinelOrchestrator:
                 p = Portfolio.model_validate(saved)
                 p.deduplicate_and_aggregate()
                 return p
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Failed parsing active_portfolio fallback: %s", e)
 
         data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
         sample_json = os.path.join(data_dir, "sample_portfolio.json")
@@ -213,8 +214,8 @@ class FinancialSentinelOrchestrator:
                 p = self.load_portfolio_from_file(sample_json)
                 p.deduplicate_and_aggregate()
                 return p
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Failed loading sample_portfolio.json fallback: %s", e)
 
         p = Portfolio(name="Default Portfolio", cash=10000.0, holdings=[])
         p.deduplicate_and_aggregate()
@@ -238,8 +239,8 @@ class FinancialSentinelOrchestrator:
             from agents.news_ingestion import resolve_ticker_aliases
             for h in portfolio.holdings:
                 resolve_ticker_aliases(h.ticker, h.name, state_store=self.state_store)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed resolving ticker aliases for portfolio holdings: %s", e)
 
         # Global sync ONLY for admin / default user for cold start backups
         if target_uid == admin_id or not user_id:
@@ -254,8 +255,8 @@ class FinancialSentinelOrchestrator:
                 try:
                     with open(active_json, "w") as f:
                         json.dump(dumped, f, indent=2)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Failed writing active_portfolio.json backup: %s", e)
         return dumped
 
 
@@ -307,7 +308,6 @@ class FinancialSentinelOrchestrator:
         self,
         portfolio: Portfolio,
         live: bool = True,
-        mock_news: Optional[List[Dict[str, Any]]] = None,
         force_fresh: bool = False,
         user_id: Optional[str] = None,
         api_key: Optional[str] = None,
@@ -327,8 +327,8 @@ class FinancialSentinelOrchestrator:
                         on_progress(msg, percent)
                     else:
                         on_progress(msg)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Error invoking on_progress callback: %s", e)
 
         # Resolve active BYOK Gemini key
         active_key = api_key if api_key is not None else self.resolve_user_api_key(user_id)
@@ -366,7 +366,6 @@ class FinancialSentinelOrchestrator:
             fut_news = pre_executor.submit(
                 self.news_agent.ingest_all_feeds,
                 live=live,
-                custom_items=mock_news,
                 force_fresh=force_fresh,
                 portfolio_tickers=portfolio_tickers,
                 api_key=active_key
