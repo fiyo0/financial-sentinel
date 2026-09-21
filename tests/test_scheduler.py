@@ -132,7 +132,7 @@ def test_daily_market_scheduler_execution(sample_portfolio):
     msg = scheduler.execute_briefing("premarket")
     assert msg is not None
     assert len(msg) > 50
-    assert scheduler.tz == ZoneInfo("America/Los_Angeles")
+    assert scheduler.tz == ZoneInfo("America/New_York")
 
 
 def test_daily_market_scheduler_user_on_demand_persistence(sample_portfolio, monkeypatch):

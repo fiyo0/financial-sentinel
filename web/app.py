@@ -142,13 +142,42 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("Error stopping daily_scheduler: %s", e)
     try:
-        telegram_bot.stop_polling()
+        if hasattr(telegram_bot, "stop"):
+            telegram_bot.stop()
+        elif hasattr(telegram_bot, "stop_polling"):
+            telegram_bot.stop_polling()
     except Exception as e:
         logger.warning("Error stopping telegram_bot: %s", e)
     try:
         sentinel_executor.shutdown(wait=False)
     except Exception as e:
         logger.warning("Error shutting down sentinel_executor: %s", e)
+
+    # Cloud Run SIGTERM State Persistence: Checkpoint WAL, Sync GCS, Close DB
+    try:
+        if hasattr(orchestrator, "state_store") and orchestrator.state_store:
+            if hasattr(orchestrator.state_store, "wal_checkpoint"):
+                orchestrator.state_store.wal_checkpoint("TRUNCATE")
+            else:
+                with orchestrator.state_store._get_connection() as conn:
+                    conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+            logger.info("Successfully executed SQLite WAL checkpoint (TRUNCATE) during container teardown.")
+    except Exception as e:
+        logger.warning("Error executing SQLite WAL checkpoint on shutdown: %s", e)
+
+    try:
+        if hasattr(orchestrator, "state_store") and orchestrator.state_store:
+            orchestrator.state_store.backup_to_gcs(blocking=True)
+            logger.info("Successfully completed synchronous GCS backup during container teardown.")
+    except Exception as e:
+        logger.warning("Error executing synchronous GCS backup on shutdown: %s", e)
+
+    try:
+        if hasattr(orchestrator, "state_store") and orchestrator.state_store:
+            orchestrator.state_store.close_connection()
+            logger.info("Successfully closed state_store database connection.")
+    except Exception as e:
+        logger.warning("Error closing database connection on shutdown: %s", e)
 
 
 from fastapi.middleware.gzip import GZipMiddleware
@@ -230,7 +259,7 @@ async def security_and_auth_middleware(request: Request, call_next):
         cron_hdr = request.headers.get("X-Cron-Secret", "")
         has_valid_cron = bool(config.cron_secret and cron_hdr and secrets.compare_digest(cron_hdr, config.cron_secret))
         if path.startswith("/api/") and path not in exempt_paths and not has_valid_cron:
-            user = get_current_user(request)
+            user = await get_current_user(request)
             if not user:
                 return JSONResponse(status_code=401, content={"detail": "Unauthorized: Session expired or login required"})
 
@@ -263,7 +292,7 @@ async def security_and_auth_middleware(request: Request, call_next):
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_view(request: Request):
-    user = get_current_user(request)
+    user = await get_current_user(request)
     if user:
         return RedirectResponse(url="/")
     return templates.TemplateResponse(request=request, name="login.html", context={"config": config})
@@ -473,7 +502,7 @@ async def api_verify_gemini_key(payload: VerifyKeyRequest, user: Dict[str, Any] 
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard_view(request: Request):
-    user = get_current_user(request)
+    user = await get_current_user(request)
     if not user:
         return RedirectResponse(url="/login")
 

@@ -154,7 +154,7 @@ def test_sec_fair_access_user_agent_headers(tmp_path):
         </rss>"""
         return mock_resp
 
-    with patch("httpx.get", side_effect=mock_get):
+    with patch("httpx.Client.get", side_effect=mock_get):
         items = agent.fetch_live_feed(sec_feed)
 
     assert "FinancialSentinel/2.4" in captured_headers.get("User-Agent", "")

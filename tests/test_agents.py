@@ -272,6 +272,7 @@ def test_opportunity_agent_sanitizes_untrusted_headlines(mock_portfolio, monkeyp
 
     # Verify delimiters and sanitization
     assert "<<<UNTRUSTED_HEADLINE source=" in prompt
+    assert "<<</UNTRUSTED_HEADLINE>>>" in prompt
     assert "<script>" not in prompt
     assert "<evil_source>" not in prompt
     assert "<img src=x onerror=alert(1)>" not in prompt
@@ -279,6 +280,7 @@ def test_opportunity_agent_sanitizes_untrusted_headlines(mock_portfolio, monkeyp
     # Verify anti-injection directive in system instruction
     assert "UNTRUSTED DATA HYGIENE" in sys_inst
     assert "<<<UNTRUSTED_HEADLINE>>>" in sys_inst
+    assert "<<</UNTRUSTED_HEADLINE>>>" in sys_inst
 
 
 def test_critic_agent_invokes_llm_on_single_review(mock_portfolio, monkeypatch):

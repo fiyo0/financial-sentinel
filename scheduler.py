@@ -24,17 +24,17 @@ logger = logging.getLogger("Scheduler")
 
 class DailyMarketScheduler:
     """
-    Automated PST Timezone-Aware Daily Market & Opportunity Briefing Scheduler.
-    - Weekdays (Mon-Fri): 06:30 PST (Pre-Market), 10:00 PST (Mid-Market), 15:00 PST (Post-Market Hot Movers)
-    - Weekends (Sat-Sun): 21:00 PST (Weekend Macro & Week-Ahead Preview)
-    100% dynamic holdings resolution on every execution.
+    Automated Eastern Timezone-Aware Daily Market & Opportunity Briefing Scheduler.
+    - Weekdays (Mon-Fri): 09:30 EST (Pre-Market), 13:00 EST (Mid-Market), 16:30 EST (Post-Market Hot Movers)
+    - Weekends (Sat-Sun): 21:00 EST (Weekend Macro & Week-Ahead Preview)
+    Anchored explicitly to America/New_York to eliminate Daylight Saving Time drift relative to the NYSE bell.
     """
 
     def __init__(
         self,
         orchestrator: Optional[FinancialSentinelOrchestrator] = None,
         portfolio_loader: Optional[Callable[[], Portfolio]] = None,
-        timezone_str: str = "America/Los_Angeles"
+        timezone_str: str = "America/New_York"
     ):
         self.orchestrator = orchestrator or FinancialSentinelOrchestrator(config.db_path)
         self.portfolio_loader = portfolio_loader
@@ -259,50 +259,50 @@ class DailyMarketScheduler:
     def _scheduler_loop(self):
         while self.is_running:
             try:
-                now_pst = datetime.now(self.tz)
-                hour = now_pst.hour
-                minute = now_pst.minute
-                weekday = now_pst.weekday()  # 0=Mon, 4=Fri, 5=Sat, 6=Sun
-                date_str = now_pst.strftime("%Y-%m-%d")
+                now_ny = datetime.now(ZoneInfo("America/New_York"))
+                hour = now_ny.hour
+                minute = now_ny.minute
+                weekday = now_ny.weekday()  # 0=Mon, 4=Fri, 5=Sat, 6=Sun
+                date_str = now_ny.strftime("%Y-%m-%d")
 
-                today_date = now_pst.date()
+                today_date = now_ny.date()
                 is_holiday = is_market_holiday(today_date)
                 is_weekend = weekday >= 5
 
                 # Active Trading Day Schedule (Mon-Fri and NOT an official market holiday)
                 if not is_weekend and not is_holiday:
-                    # 1. 06:30 AM PST: Pre-Market (30-min grace window: 06:30 - 07:15)
-                    if (hour == 6 and minute >= 30) or (hour == 7 and minute <= 15):
+                    # 1. 09:30 AM EST/EDT: Pre-Market Bell (45-min grace window: 09:30 - 10:15)
+                    if (hour == 9 and minute >= 30) or (hour == 10 and minute <= 15):
                         slot_key = f"{date_str}_premarket"
                         if slot_key not in self._executed_slots:
-                            logger.info("Triggering 6:30 AM PST Pre-Market Briefing...")
+                            logger.info("Triggering 9:30 AM EST Pre-Market Briefing...")
                             self.execute_briefing("premarket")
                             self._mark_slot_executed(slot_key)
 
-                    # 2. 10:00 AM PST: Mid-Market (45-min grace window: 10:00 - 10:45)
-                    elif hour == 10 and minute <= 45:
+                    # 2. 01:00 PM EST/EDT (13:00): Mid-Market (45-min grace window: 13:00 - 13:45)
+                    elif hour == 13 and minute <= 45:
                         slot_key = f"{date_str}_midmarket"
                         if slot_key not in self._executed_slots:
-                            logger.info("Triggering 10:00 AM PST Mid-Market Briefing...")
+                            logger.info("Triggering 1:00 PM EST Mid-Market Briefing...")
                             self.execute_briefing("midmarket")
                             self._mark_slot_executed(slot_key)
 
-                    # 3. 03:00 PM PST (15:00): Post-Market (45-min grace window: 15:00 - 15:45)
-                    elif hour == 15 and minute <= 45:
+                    # 3. 04:30 PM EST/EDT (16:30): Post-Market Wrap (45-min grace window: 16:30 - 17:15)
+                    elif (hour == 16 and minute >= 30) or (hour == 17 and minute <= 15):
                         slot_key = f"{date_str}_postmarket"
                         if slot_key not in self._executed_slots:
-                            logger.info("Triggering 3:00 PM PST Post-Market Briefing...")
+                            logger.info("Triggering 4:30 PM EST Post-Market Briefing...")
                             self.execute_briefing("postmarket")
                             self._mark_slot_executed(slot_key)
 
                 # Non-Trading Day Schedule (Weekend OR Market Holiday)
                 else:
-                    # 4. 09:00 PM PST (21:00): Weekend / Holiday EOD (45-min grace window: 21:00 - 21:45)
+                    # 4. 09:00 PM EST/EDT (21:00): Weekend / Holiday EOD (45-min grace window: 21:00 - 21:45)
                     if hour == 21 and minute <= 45:
                         slot_key = f"{date_str}_weekend"
                         if slot_key not in self._executed_slots:
                             slot_desc = "Holiday" if is_holiday else "Weekend"
-                            logger.info(f"Triggering 9:00 PM PST {slot_desc} Briefing...")
+                            logger.info(f"Triggering 9:00 PM EST {slot_desc} Briefing...")
                             self.execute_briefing("weekend")
                             self._mark_slot_executed(slot_key)
 

@@ -401,17 +401,30 @@ def fetch_market_overview() -> Dict[str, Any]:
                 results[t] = future.result()
             except Exception as e:
                 logger.warning("Failed fetching benchmark quote for %s: %s", t, e)
-                results[t] = {"ticker": t, "current_price": 0.0, "change_pct": 0.0, "name": t}
+                results[t] = {
+                    "ticker": t,
+                    "current_price": None,
+                    "change_pct": None,
+                    "name": t,
+                    "is_live": False,
+                    "error": f"Failed fetching benchmark quote: {e}"
+                }
 
-    spy_change = results.get("SPY", {}).get("change_pct", 0.0)
-    qqq_change = results.get("QQQ", {}).get("change_pct", 0.0)
-    market_tone = "Bullish" if spy_change > 0.3 else ("Bearish" if spy_change < -0.3 else "Mixed / Neutral")
+    spy_change = results.get("SPY", {}).get("change_pct")
+    qqq_change = results.get("QQQ", {}).get("change_pct")
+    if spy_change is not None:
+        market_tone = "Bullish" if spy_change > 0.3 else ("Bearish" if spy_change < -0.3 else "Mixed / Neutral")
+    else:
+        market_tone = "Unavailable"
+
+    fields_unavail = [t for t, d in results.items() if not d.get("is_live", True)]
 
     return {
         "indices": results,
         "market_tone": market_tone,
         "spy_change_pct": spy_change,
-        "qqq_change_pct": qqq_change
+        "qqq_change_pct": qqq_change,
+        "fields_unavailable": fields_unavail
     }
 
 

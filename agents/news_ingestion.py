@@ -10,7 +10,6 @@ import time
 from datetime import datetime, timezone
 from typing import List, Dict, Optional
 import feedparser
-import httpx
 from models import NewsItem, NewsCategory
 from config import config
 from storage.state_store import StateStore
@@ -441,7 +440,9 @@ class NewsIngestionAgent(BaseAgent):
             if "sec.gov" in url.lower():
                 headers["User-Agent"] = "FinancialSentinel/2.4 (admin@financialsentinel.io; Automated Research System)"
 
-            resp = httpx.get(url, headers=headers, timeout=8.0, follow_redirects=True)
+            from analytics.market_data import get_market_http_client
+            client = get_market_http_client()
+            resp = client.get(url, headers=headers, timeout=8.0, follow_redirects=True)
             if resp.status_code == 429:
                 retry_after = resp.headers.get("Retry-After") or "60"
                 self.degraded_feeds[name] = f"HTTP 429 Rate Limited (Retry-After: {retry_after}s)"

@@ -245,6 +245,8 @@ class StateStore:
                         upload_kwargs = {}
                         if _GCS_REMOTE_GENERATION is not None:
                             upload_kwargs["if_generation_match"] = _GCS_REMOTE_GENERATION
+                        else:
+                            upload_kwargs["if_generation_match"] = 0
                         blob.upload_from_filename(tmp_path, **upload_kwargs)
                         if blob.generation:
                             _GCS_REMOTE_GENERATION = blob.generation
@@ -319,6 +321,20 @@ class StateStore:
                 pass
             logger.error("Transaction rolled back due to error: %s", e)
             raise
+
+    def wal_checkpoint(self, mode: str = "TRUNCATE") -> bool:
+        """Executes a synchronous SQLite WAL checkpoint to flush WAL pages to the main database file."""
+        try:
+            with self._get_connection() as conn:
+                conn.execute(f"PRAGMA wal_checkpoint({mode});")
+            logger.info("Executed SQLite PRAGMA wal_checkpoint(%s).", mode)
+            return True
+        except sqlite3.Error as e:
+            logger.warning("SQLite WAL checkpoint (%s) failed: %s", mode, e)
+            return False
+        except Exception as e:
+            logger.warning("Unexpected error during SQLite WAL checkpoint (%s): %s", mode, e)
+            return False
 
     def close_connection(self):
         """Closes the current thread's connection pool entry if open."""

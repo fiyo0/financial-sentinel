@@ -151,6 +151,10 @@ class FinancialSentinelTelegramBot:
     def stop(self):
         self.is_running = False
 
+    def stop_polling(self):
+        """Alias for stop() supporting standard polling teardown semantics."""
+        self.stop()
+
     @staticmethod
     def _split_long_line(line: str, max_length: int = 4000) -> List[str]:
         if len(line) <= max_length:
