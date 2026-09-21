@@ -282,7 +282,7 @@ def test_stocktwits_high_velocity_cursor_pagination(mock_client_fn):
 
 
 def test_classify_comments_sentiment_caching():
-    """Verify that Gemini 2.5 Flash batch responses are cached with a 15-minute TTL."""
+    """Verify that Gemini batch responses are cached with a 15-minute TTL and track engine."""
     from analytics.sentiment_stream import classify_comments_sentiment
     from storage.cache_manager import cache_manager
 
@@ -300,13 +300,57 @@ def test_classify_comments_sentiment_caching():
     }
 
     with patch("httpx.Client.post", return_value=mock_resp) as mock_post:
-        # Call 1: should call Gemini 2.5 Flash
-        res1 = classify_comments_sentiment(test_comments, api_key="fake-key")
+        # Call 1: should call Gemini 3.1 Flash-Lite
+        res1, engine1 = classify_comments_sentiment(test_comments, api_key="fake-key", return_engine=True)
         assert res1 == ["BULLISH", "BEARISH"]
+        assert "GEMINI" in engine1
         assert mock_post.call_count == 1
 
         # Call 2: should hit in-memory cache without calling Gemini
-        res2 = classify_comments_sentiment(test_comments, api_key="fake-key")
+        res2, engine2 = classify_comments_sentiment(test_comments, api_key="fake-key", return_engine=True)
         assert res2 == ["BULLISH", "BEARISH"]
+        assert engine2 == engine1
         assert mock_post.call_count == 1  # Still 1!
+
+
+def test_classify_comments_sentiment_fallback_indication_when_gemini_fails():
+    """Verify that when Gemini API fails, it falls back to regex and indicates REGEX_FALLBACK."""
+    from analytics.sentiment_stream import classify_comments_sentiment
+    from storage.cache_manager import cache_manager
+
+    cache_manager.clear()
+    comments = ["calls printing to the moon", "dumping all shares crash incoming"]
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 404  # Model sunset/unavailable
+
+    with patch("httpx.Client.post", return_value=mock_resp):
+        res, engine = classify_comments_sentiment(comments, api_key="fake-key", return_engine=True)
+        assert res == ["BULLISH", "BEARISH"]
+        assert engine == "REGEX_FALLBACK"
+
+
+def test_sentiment_snapshot_indicates_regex_fallback():
+    """Verify that SentimentSnapshot renders explicit indications when in REGEX_FALLBACK mode."""
+    snap = SentimentSnapshot(
+        ticker="AMD",
+        retail_bull_pct=35.0,
+        retail_bear_pct=65.0,
+        total_messages_analyzed=25,
+        social_velocity="ELEVATED",
+        reddit_post_count=0,
+        messages_per_hour=12.0,
+        span_hours=2.0,
+        acceleration_factor=1.2,
+        sentiment_verdict="BEARISH_DISTRUST",
+        display_label="65% Bearish",
+        contrarian_signal="🛡️ WALL OF WORRY",
+        classifier_mode="REGEX_FALLBACK"
+    )
+    summary = snap.to_summary_line()
+    assert "[Regex Fallback]" in summary
+
+    tg_block = snap.to_telegram_block()
+    assert "Regex Fallback (LLM Unavailable)" in tg_block
+
 

@@ -479,6 +479,7 @@ class PortfolioAnalysisAgent(BaseAgent):
         • Retail Sentiment: {display_sent} ({sentiment_snapshot.sentiment_verdict}){contrarian_str}
         • Activity Velocity: {sentiment_snapshot.social_velocity}{rate_str}
         • Relative Volume (RVOL): {sentiment_snapshot.relative_volume:.2f}x
+        • Classification Engine: {sentiment_snapshot.classifier_mode}
         """
 
         stop_floor_text = f"${technical_snapshot.suggested_stop_loss:.2f}" if (technical_snapshot and technical_snapshot.suggested_stop_loss is not None and technical_snapshot.suggested_stop_loss > 0) else f"${price * 0.92:.2f}"

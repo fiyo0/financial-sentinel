@@ -5,7 +5,7 @@ and Reddit (r/wallstreetbets, r/stocks via Google News RSS index) with Relative 
 to compute mathematically and empirically grounded retail sentiment velocity.
 """
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union, Tuple
 from datetime import datetime, timezone
 from math import exp
 import hashlib
@@ -45,56 +45,79 @@ BEAR_KW = re.compile(r"\b(sell|sold|puts|put\s+option|shorting|overvalued|crash|
 
 def classify_comments_sentiment(
     texts: List[str],
-    api_key: Optional[str] = None
-) -> List[str]:
+    api_key: Optional[str] = None,
+    return_engine: bool = False
+) -> Union[List[str], Tuple[List[str], str]]:
     """
     Classifies sentiment for untagged social commentary.
-    Tier 1: High-accuracy structured Gemini 2.5 Flash batch classification with 15-minute caching.
+    Tier 1: High-accuracy structured Gemini batch classification (gemini-3.1-flash-lite) with 15-minute caching.
     Tier 2: Algorithmic keyword regex fallback (BULL_KW / BEAR_KW).
-    Returns list of 'BULLISH', 'BEARISH', or 'NEUTRAL' for each text.
+    Returns list of 'BULLISH', 'BEARISH', or 'NEUTRAL' for each text, and optionally the engine used.
     """
     if not texts:
-        return []
+        return ([], "EMPTY") if return_engine else []
 
     cache_hash = hashlib.sha256("||".join(texts).encode("utf-8")).hexdigest()[:16]
     cached = cache_manager.get("social_sentiment", f"batch:{cache_hash}")
-    if cached is not None and isinstance(cached, list) and len(cached) == len(texts):
-        return cached
+    if cached is not None:
+        if isinstance(cached, dict) and "labels" in cached and "engine" in cached:
+            if return_engine:
+                return cached["labels"], cached["engine"]
+            return cached["labels"]
+        elif isinstance(cached, list) and len(cached) == len(texts):
+            if return_engine:
+                return cached, "GEMINI_3_1_FLASH_LITE"
+            return cached
 
     if api_key:
-        try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-            prompt = (
-                "You are an institutional financial sentiment analyst. "
-                "Classify the sentiment of each of the following retail trader comments into exactly one of: "
-                "BULLISH, BEARISH, or NEUTRAL. Identify sarcasm, bagholder distress, or cynical humor accurately. "
-                "Return a JSON list of strings matching the input order.\n"
-                f"Comments:\n{json.dumps(texts[:30])}"
-            )
-            payload = {
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {
-                    "responseMimeType": "application/json",
-                    "temperature": 0.1
-                }
+        candidate_models = ["gemini-3.1-flash-lite", "gemini-3.8-flash", "gemini-flash-latest", "gemini-3.6-flash"]
+        prompt = (
+            "You are an institutional financial sentiment analyst. "
+            "Classify the sentiment of each of the following retail trader comments into exactly one of: "
+            "BULLISH, BEARISH, or NEUTRAL. Identify sarcasm, bagholder distress, or cynical humor accurately. "
+            "Return a JSON list of strings matching the input order.\n"
+            f"Comments:\n{json.dumps(texts[:30])}"
+        )
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                "temperature": 0.1
             }
-            with httpx.Client(timeout=6.0) as client:
-                resp = client.post(url, json=payload)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    candidates = data.get("candidates", [])
-                    if candidates:
-                        content = candidates[0].get("content", {})
-                        parts = content.get("parts", [])
-                        if parts:
-                            raw_text = parts[0].get("text", "")
-                            labels = json.loads(raw_text)
-                            if isinstance(labels, list) and len(labels) == len(texts[:30]):
-                                res = [str(lbl).upper() for lbl in labels]
-                                cache_manager.set("social_sentiment", f"batch:{cache_hash}", res, ttl_seconds=900.0)
-                                return res
-        except Exception as e:
-            logger.debug("Gemini 2.5 Flash sentiment batch classification unavailable (%s); falling back to keyword regex.", e)
+        }
+        with httpx.Client(timeout=6.0) as client:
+            for model_name in candidate_models:
+                try:
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+                    resp = client.post(url, json=payload)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        candidates = data.get("candidates", [])
+                        if candidates:
+                            content = candidates[0].get("content", {})
+                            parts = content.get("parts", [])
+                            if parts:
+                                raw_text = parts[0].get("text", "")
+                                labels = json.loads(raw_text)
+                                if isinstance(labels, list) and len(labels) == len(texts[:30]):
+                                    res = [str(lbl).upper() for lbl in labels]
+                                    clean_name = model_name.upper().replace("-", "_").replace(".", "_")
+                                    engine_name = clean_name if clean_name.startswith("GEMINI_") else f"GEMINI_{clean_name}"
+                                    cache_manager.set(
+                                        "social_sentiment",
+                                        f"batch:{cache_hash}",
+                                        {"labels": res, "engine": engine_name},
+                                        ttl_seconds=900.0
+                                    )
+                                    if return_engine:
+                                        return res, engine_name
+                                    return res
+                    elif resp.status_code in (400, 404):
+                        logger.debug("Gemini model %s returned status %d; trying next candidate.", model_name, resp.status_code)
+                        continue
+                except Exception as e:
+                    logger.debug("Gemini %s sentiment batch classification failed (%s); trying next candidate.", model_name, e)
+                    continue
 
     # Tier 2 Fallback: Regex Keyword Classification
     results = []
@@ -107,6 +130,16 @@ def classify_comments_sentiment(
             results.append("BEARISH")
         else:
             results.append("NEUTRAL")
+
+    fallback_engine = "REGEX_FALLBACK"
+    cache_manager.set(
+        "social_sentiment",
+        f"batch:{cache_hash}",
+        {"labels": results, "engine": fallback_engine},
+        ttl_seconds=300.0
+    )
+    if return_engine:
+        return results, fallback_engine
     return results
 
 
@@ -131,6 +164,7 @@ class SentimentSnapshot:
     is_sample_significant: bool = True
     display_label: str = ""
     contrarian_signal: str = ""
+    classifier_mode: str = "DIRECT_TAGS"
 
     def format_recency_window(self) -> str:
         if self.span_hours < 1.0:
@@ -150,8 +184,9 @@ class SentimentSnapshot:
         recency = self.format_recency_window()
         rate_str = f" ({self.messages_per_hour:.1f}/hr · {self.total_messages_analyzed} in {recency} · {self.acceleration_factor:.1f}x)" if (self.messages_per_hour > 0 or self.total_messages_analyzed > 0) else ""
         label_str = self.display_label or f"{self.retail_bull_pct:.0f}% Bullish"
+        fallback_str = " [Regex Fallback]" if self.classifier_mode == "REGEX_FALLBACK" else ""
         return (
-            f"Social: {label_str} ({self.sentiment_verdict.replace('_', ' ')}) | "
+            f"Social: {label_str}{fallback_str} ({self.sentiment_verdict.replace('_', ' ')}) | "
             f"Velocity: {self.social_velocity}{rate_str} | RVOL: {self.relative_volume:.2f}x"
         )
 
@@ -160,6 +195,12 @@ class SentimentSnapshot:
             return "💬 <i>Social sentiment stream currently unavailable.</i>"
 
         recency = self.format_recency_window()
+        engine_line = ""
+        if self.classifier_mode == "REGEX_FALLBACK":
+            engine_line = "\n• <b>Classification:</b> ⚠️ <code>Regex Fallback (LLM Unavailable)</code>"
+        elif self.classifier_mode and self.classifier_mode.startswith("GEMINI"):
+            engine_line = "\n• <b>Classification:</b> ⚡ <code>Gemini 3.1 Flash-Lite</code>"
+
         if not self.is_sample_significant or self.social_velocity == "DORMANT_APATHY":
             contrarian_line = f"\n• <b>Contrarian Signal:</b> 🏛️ <code>{self.contrarian_signal}</code>" if self.contrarian_signal else ""
             return (
@@ -168,6 +209,7 @@ class SentimentSnapshot:
                 f"• <b>Activity Velocity:</b> <code>DORMANT</code> ({self.total_messages_analyzed} posts in {recency} on StockTwits)\n"
                 f"• <b>Relative Trading Volume (RVOL):</b> <code>{self.relative_volume:.2f}x</code>"
                 f"{contrarian_line}"
+                f"{engine_line}"
             )
 
         emoji = "🟢" if self.retail_bull_pct >= 58.0 else ("🔴" if self.retail_bull_pct <= 45.0 else "⚪")
@@ -185,6 +227,7 @@ class SentimentSnapshot:
             f"({velocity_detail} on StockTwits{reddit_detail})\n"
             f"• <b>Relative Trading Volume (RVOL):</b> <code>{self.relative_volume:.2f}x</code>"
             f"{contrarian_line}"
+            f"{engine_line}"
         )
 
 
@@ -305,9 +348,13 @@ def _fetch_stocktwits_stream(
                     if clean_body and ("$" in clean_body or len(clean_body) > 30):
                         sample_comments.append(clean_body[:100])
 
+            classifier_mode = "DIRECT_TAGS"
             if untagged_items:
                 untagged_bodies = [item[0] for item in untagged_items]
-                classified_sentiments = classify_comments_sentiment(untagged_bodies, api_key=api_key)
+                classified_sentiments, engine_used = classify_comments_sentiment(
+                    untagged_bodies, api_key=api_key, return_engine=True
+                )
+                classifier_mode = engine_used
                 for i, sent_lbl in enumerate(classified_sentiments):
                     w = untagged_items[i][1]
                     if sent_lbl == "BULLISH":
@@ -333,7 +380,7 @@ def _fetch_stocktwits_stream(
                     rate_recent = k / span_recent
                     span_baseline = max(0.02, (t_k - t_oldest).total_seconds() / 3600.0)
                     rate_baseline = (len(timed_msgs) - k) / span_baseline
-                    acceleration_factor = round(rate_recent / max(0.05, rate_baseline), 2)
+                    acceleration_factor = round(max(0.1, min(10.0, rate_recent / max(0.01, rate_baseline))), 2)
 
             total_signals = bulls + bears
             if total_signals > 0:
@@ -351,7 +398,8 @@ def _fetch_stocktwits_stream(
                 "rate_per_hour": rate_per_hour,
                 "span_hours": round(span_hours, 2),
                 "acceleration_factor": acceleration_factor,
-                "sample_comments": sample_comments
+                "sample_comments": sample_comments,
+                "classifier_mode": classifier_mode,
             }
     except Exception as e:
         logger.debug(f"StockTwits fetch failed for {ticker}: {e}")
@@ -366,6 +414,7 @@ def _fetch_stocktwits_stream(
         "rate_per_hour": 0.0,
         "span_hours": 24.0,
         "acceleration_factor": 1.0,
+        "classifier_mode": "DIRECT_TAGS",
         "sample_comments": []
     }
 
@@ -611,5 +660,6 @@ def fetch_social_sentiment_snapshot(
         is_live=True,
         is_sample_significant=is_sample_significant,
         display_label=display_label,
-        contrarian_signal=contrarian_signal
+        contrarian_signal=contrarian_signal,
+        classifier_mode=st_data.get("classifier_mode", "DIRECT_TAGS")
     )

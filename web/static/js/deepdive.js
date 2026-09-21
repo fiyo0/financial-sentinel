@@ -238,9 +238,19 @@ function renderDeepDiveResult(data) {
             : (recencyStr ? `${s.total_messages_analyzed} in ${recencyStr} · ${accelVal}x accel` : `${s.social_velocity}`);
         const contrarianLine = s.contrarian_signal ? `<div class="text-[9px] text-cyan-400 font-medium truncate mt-0.5" title="${s.contrarian_signal}">${s.contrarian_signal}</div>` : '';
 
+        let engineBadge = '';
+        if (s.classifier_mode === 'REGEX_FALLBACK') {
+            engineBadge = `<span class="inline-flex items-center gap-1 text-[9px] font-semibold text-amber-400 bg-amber-950/60 border border-amber-800/60 px-1.5 py-0.5 rounded" title="Gemini API unavailable; fell back to algorithmic regex keywords">⚠️ Regex Fallback</span>`;
+        } else if (s.classifier_mode && s.classifier_mode.includes('GEMINI')) {
+            engineBadge = `<span class="inline-flex items-center gap-1 text-[9px] font-medium text-cyan-400/90 bg-cyan-950/40 border border-cyan-800/40 px-1.5 py-0.5 rounded" title="Classified by Gemini 3.1 Flash-Lite">⚡ Flash-Lite</span>`;
+        }
+
         indHtml += `
             <div class="p-3 bg-dark-950 border border-slate-800 rounded-xl space-y-1">
-                <div class="text-[10px] text-slate-400 uppercase font-semibold">Retail Sentiment</div>
+                <div class="flex items-center justify-between">
+                    <span class="text-[10px] text-slate-400 uppercase font-semibold">Retail Sentiment</span>
+                    ${engineBadge}
+                </div>
                 <div class="text-base font-bold ${sentColor}">${displayLabel}</div>
                 <div class="text-[10px] text-slate-400 truncate">${(s.sentiment_verdict || '').replace(/_/g, ' ')} · ${s.social_velocity || 'MODERATE'} ${rateVal}</div>
                 <div class="text-[9px] text-slate-500 truncate">(${metaLine})</div>
