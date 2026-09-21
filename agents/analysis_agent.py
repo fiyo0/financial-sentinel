@@ -374,7 +374,7 @@ class PortfolioAnalysisAgent(BaseAgent):
             try:
                 from analytics.sentiment_stream import fetch_social_sentiment_snapshot
                 rvol_val = technical_snapshot.rvol if technical_snapshot and technical_snapshot.is_live else None
-                sentiment_snapshot = fetch_social_sentiment_snapshot(sym, rvol=rvol_val)
+                sentiment_snapshot = fetch_social_sentiment_snapshot(sym, rvol=rvol_val, api_key=api_key)
             except Exception as e:
                 logger.warning("Failed fetching social sentiment for %s: %s", sym, e)
                 sentiment_snapshot = None
@@ -472,9 +472,11 @@ class PortfolioAnalysisAgent(BaseAgent):
         if sentiment_snapshot and sentiment_snapshot.is_live:
             recency = sentiment_snapshot.format_recency_window()
             rate_str = f" ({sentiment_snapshot.messages_per_hour:.1f} msgs/hr · {sentiment_snapshot.total_messages_analyzed} in {recency} · {sentiment_snapshot.acceleration_factor:.1f}x accel)" if sentiment_snapshot.messages_per_hour > 0 else ""
+            display_sent = sentiment_snapshot.display_label or f"{sentiment_snapshot.retail_bull_pct:.0f}% Bullish"
+            contrarian_str = f"\n        • Contrarian Interpretation: {sentiment_snapshot.contrarian_signal}" if sentiment_snapshot.contrarian_signal else ""
             sent_details = f"""
         RETAIL SOCIAL SENTIMENT & ACTIVITY VELOCITY:
-        • Retail Sentiment: {sentiment_snapshot.retail_bull_pct:.0f}% Bullish ({sentiment_snapshot.sentiment_verdict})
+        • Retail Sentiment: {display_sent} ({sentiment_snapshot.sentiment_verdict}){contrarian_str}
         • Activity Velocity: {sentiment_snapshot.social_velocity}{rate_str}
         • Relative Volume (RVOL): {sentiment_snapshot.relative_volume:.2f}x
         """

@@ -82,7 +82,8 @@ class AnalysisService:
             clean_sym,
             rvol=rvol_val,
             aliases=aliases,
-            company_name=resolved_company_name
+            company_name=resolved_company_name,
+            api_key=resolved_key
         )
 
         # Step 4: Ingest Live News Feeds & Merge Historical Database News

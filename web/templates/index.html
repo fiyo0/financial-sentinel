@@ -1597,11 +1597,11 @@
                     <div class="space-y-2.5 text-xs">
                         <div class="p-3 rounded-xl bg-dark-950 border border-slate-800/80 space-y-1">
                             <div class="flex items-center justify-between font-bold text-cyan-300">
-                                <span>📱 StockTwits Retail Bullish %</span>
-                                <span class="text-[10px] font-mono text-slate-400">Direct Retail Stance</span>
+                                <span>📱 Retail Sentiment & Temporal Normalization</span>
+                                <span class="text-[10px] font-mono text-slate-400">65% Empirical Baseline</span>
                             </div>
                             <p class="text-[11px] text-slate-300 leading-relaxed">
-                                Directly calculates the ratio of retail posts tagged as <em>Bullish</em> vs. <em>Bearish</em>. <strong class="text-emerald-400">&gt;80% (Extreme Euphoria):</strong> Retail optimism is crowded. Often indicates a near-term top if unaccompanied by confirming trading volume. <strong class="text-rose-400">&lt;25% (Extreme Capitulation):</strong> Retail panic selling; often marks short-term counter-trend reversal opportunities.
+                                Anchors to a 72-hour recency window with exponential time decay and cursor pagination for high-volume names. Uses dynamic polarity (displaying <em>% Bearish</em> when below 45%) and a dual-perspective contrarian matrix: <strong class="text-emerald-400">&gt;82% (Crowd Euphoria):</strong> Retail long-crowding; warns of exhaustion tops when unconfirmed by institutional volume. <strong class="text-slate-300">58%–70% (Neutral Baseline):</strong> Typical market median. <strong class="text-rose-400">&lt;45% (Extreme Pessimism / Capitulation):</strong> Retail panic selling; often marks counter-trend reversal opportunities. If fewer than 8 posts occur in 72h, flags <strong class="text-slate-400">Dormant / Apathy</strong> (Institutional Domain).
                             </p>
                         </div>
 

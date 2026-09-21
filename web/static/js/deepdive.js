@@ -204,8 +204,27 @@ function renderDeepDiveResult(data) {
 
     // Render Retail Social Sentiment Stream Cards
     if (s && s.is_live) {
-        const sentScore = s.composite_sentiment_score || s.retail_bull_pct || 50;
-        const sentColor = sentScore >= 65 ? 'text-emerald-400' : (sentScore <= 35 ? 'text-rose-400' : 'text-slate-200');
+        const isApathy = s.is_sample_significant === false || s.social_velocity === 'DORMANT_APATHY';
+        let displayLabel = s.display_label;
+        if (!displayLabel) {
+            if (isApathy) {
+                displayLabel = 'Dormant / Apathy';
+            } else if (s.retail_bull_pct >= 58) {
+                displayLabel = `${Math.round(s.retail_bull_pct)}% Bullish`;
+            } else if (s.retail_bull_pct <= 45) {
+                displayLabel = `${Math.round(100 - s.retail_bull_pct)}% Bearish`;
+            } else {
+                displayLabel = `${Math.round(s.retail_bull_pct)}% Neutral`;
+            }
+        }
+
+        let sentColor = 'text-slate-200';
+        if (!isApathy) {
+            if (s.retail_bull_pct >= 58) sentColor = 'text-emerald-400';
+            else if (s.retail_bull_pct <= 45) sentColor = 'text-rose-400';
+            else sentColor = 'text-slate-300';
+        }
+
         const rvolColor = s.relative_volume >= 1.2 ? 'text-emerald-400' : (s.relative_volume <= 0.85 ? 'text-amber-400' : 'text-slate-200');
         
         let recencyStr = '';
@@ -214,14 +233,18 @@ function renderDeepDiveResult(data) {
         }
         const accelVal = s.acceleration_factor ? Number(s.acceleration_factor).toFixed(1) : '1.0';
         const rateVal = s.messages_per_hour ? `${Number(s.messages_per_hour).toFixed(1)}/hr` : '';
-        const metaLine = recencyStr ? `${s.total_messages_analyzed} in ${recencyStr} · ${accelVal}x accel` : `${s.social_velocity}`;
+        const metaLine = isApathy 
+            ? `${s.total_messages_analyzed || 0} in ${recencyStr || '72h'} · Institutional Domain`
+            : (recencyStr ? `${s.total_messages_analyzed} in ${recencyStr} · ${accelVal}x accel` : `${s.social_velocity}`);
+        const contrarianLine = s.contrarian_signal ? `<div class="text-[9px] text-cyan-400 font-medium truncate mt-0.5" title="${s.contrarian_signal}">${s.contrarian_signal}</div>` : '';
 
         indHtml += `
             <div class="p-3 bg-dark-950 border border-slate-800 rounded-xl space-y-1">
                 <div class="text-[10px] text-slate-400 uppercase font-semibold">Retail Sentiment</div>
-                <div class="text-base font-bold ${sentColor}">${s.retail_bull_pct || 50}% Bullish</div>
+                <div class="text-base font-bold ${sentColor}">${displayLabel}</div>
                 <div class="text-[10px] text-slate-400 truncate">${(s.sentiment_verdict || '').replace(/_/g, ' ')} · ${s.social_velocity || 'MODERATE'} ${rateVal}</div>
                 <div class="text-[9px] text-slate-500 truncate">(${metaLine})</div>
+                ${contrarianLine}
             </div>
             <div class="p-3 bg-dark-950 border border-slate-800 rounded-xl space-y-1">
                 <div class="text-[10px] text-slate-400 uppercase font-semibold">Relative Volume (RVOL)</div>
