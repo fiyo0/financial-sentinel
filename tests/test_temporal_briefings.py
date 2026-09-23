@@ -2,7 +2,7 @@
 Unit tests for temporal grounding and timestamped briefings in MarketBriefingAgent and StateStore.
 """
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from models import Portfolio, PortfolioHolding, NewsItem, NewsCategory
 from agents.market_briefing_agent import MarketBriefingAgent
@@ -162,7 +162,7 @@ def test_state_store_get_recent_news(tmp_path):
     db_file = str(tmp_path / "test_state.db")
     store = StateStore(db_path=db_file)
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     item_new = NewsItem(
         id="item_new",
         title="Breaking: Tech Rally Continues",
@@ -249,3 +249,219 @@ def test_market_briefings_no_tier1_boilerplate(sample_portfolio, monkeypatch):
     assert "tier-1" not in weekend_prompt.lower()
     assert "PROSPECTIVE 3-MONTH CENTRAL BANK SCHEDULE" in weekend_prompt
     assert "Selective & Relevant Macro / Fed Coverage" in weekend_prompt
+
+
+def test_portfolio_holding_catalyst_extraction_without_price_gate():
+    """Verify holding product launches or filings are surfaced even if price movement is 0.0%."""
+    portfolio = Portfolio(
+        name="Tech Focus",
+        cash=10000.0,
+        holdings=[
+            PortfolioHolding(
+                ticker="AAPL",
+                name="Apple Inc.",
+                shares=50,
+                avg_price=220.0,
+                current_price=225.0,
+                daily_change_pct=0.0,  # Zero price movement
+                sector="Technology"
+            )
+        ]
+    )
+    news = [
+        NewsItem(
+            id="n_aapl",
+            title="Apple Unveils New M4 Ultra Chip and AI Server Architecture",
+            source="Bloomberg",
+            url="https://bloomberg.com/aapl",
+            published_at=datetime.now(timezone.utc),
+            summary="New M4 chip targets enterprise AI workloads.",
+            category=NewsCategory.BREAKING,
+            related_tickers=["AAPL"]
+        )
+    ]
+    agent = MarketBriefingAgent()
+    movers_ctx = agent._extract_significant_portfolio_movers(portfolio, news, threshold_pct=1.5)
+
+    # AAPL must be extracted despite 0.0% price move
+    assert "AAPL" in movers_ctx
+    assert "Apple Inc." in movers_ctx
+    assert "Apple Unveils New M4 Ultra Chip" in movers_ctx
+    assert "Core holdings calm" not in movers_ctx
+
+
+def test_cross_briefing_context_propagation(sample_portfolio):
+    """Verify morning gameplan summary is passed into midday prompt under cross-briefing continuity."""
+    agent = MarketBriefingAgent()
+    as_of_pst = datetime(2026, 9, 23, 10, 0, tzinfo=PST)
+
+    captured_prompts = []
+    mock_resp = "☀️ <b>MID-MARKET PULSE & MOMENTUM (10:00 AM PST)</b>\nIntraday Action: Broad indices advance on strong volume breadth."
+    agent.query_llm_text = lambda prompt, **kwargs: (captured_prompts.append(prompt), mock_resp)[1]
+
+    overview = {"indices": {"SPY": {"current_price": 550.0, "change_pct": 0.3}}}
+    prior_context = "Morning Gameplan: Monitor SPY 550 pivot ahead of 1:00 PM ET Treasury auction. Take partial profits if yields spike."
+
+    msg = agent.generate_midmarket_briefing(
+        portfolio=sample_portfolio,
+        market_overview=overview,
+        news_items=[],
+        api_key="test_key",
+        as_of=as_of_pst,
+        prior_briefing_context=prior_context
+    )
+
+    assert len(captured_prompts) == 1
+    prompt = captured_prompts[0]
+    assert "CROSS-BRIEFING NARRATIVE CONTINUITY" in prompt
+    assert "Monitor SPY 550 pivot ahead of 1:00 PM ET Treasury auction" in prompt
+    assert "MID-MARKET PULSE" in msg
+
+
+def test_midmarket_catalyst_followup(sample_portfolio):
+    """Verify midday briefing includes morning catalyst digestion audit and afternoon roadmap."""
+    agent = MarketBriefingAgent()
+    as_of_pst = datetime(2026, 9, 23, 10, 0, tzinfo=PST)
+
+    captured_prompts = []
+    mock_resp = "☀️ <b>MID-MARKET PULSE & MOMENTUM (10:00 AM PST)</b>\nIntraday Action: Broad indices advance on strong volume breadth."
+    agent.query_llm_text = lambda prompt, **kwargs: (captured_prompts.append(prompt), mock_resp)[1]
+
+    overview = {"indices": {"SPY": {"current_price": 550.0, "change_pct": 0.3}}}
+    news = [
+        NewsItem(
+            id="n_mid",
+            title="Treasury 10-Year Auction Demand Hits Record",
+            source="WSJ",
+            url="https://wsj.com/auction",
+            published_at=datetime.now(timezone.utc),
+            summary="Yields drop 4 bps following strong direct bidder participation.",
+            category=NewsCategory.MACRO
+        )
+    ]
+
+    agent.generate_midmarket_briefing(
+        portfolio=sample_portfolio,
+        market_overview=overview,
+        news_items=news,
+        api_key="test_key",
+        as_of=as_of_pst
+    )
+
+    assert len(captured_prompts) == 1
+    prompt = captured_prompts[0]
+    assert "Morning Catalyst Digestion:" in prompt
+    assert "Audit how the market digested morning economic prints" in prompt
+    assert "Afternoon Posture:" in prompt or "Afternoon Roadmap" in prompt
+
+
+def test_postmarket_amc_earnings_integration(sample_portfolio):
+    """Verify verified AMC earnings from earnings calendar are incorporated into post-market prompts."""
+    agent = MarketBriefingAgent()
+    as_of_pst = datetime(2026, 9, 23, 15, 0, tzinfo=PST)
+
+    captured_prompts = []
+    mock_resp = "🌙 <b>POST-MARKET WRAP & DAY-END RECAP (3:00 PM PST)</b>\nClosing Bell: S&P 500 finishes in green."
+    agent.query_llm_text = lambda prompt, **kwargs: (captured_prompts.append(prompt), mock_resp)[1]
+
+    overview = {"indices": {"SPY": {"current_price": 550.0, "change_pct": 0.5}}}
+    amc_earnings = [
+        {
+            "ticker": "NVDA",
+            "name": "NVIDIA Corporation",
+            "timing": "AMC (Post-Market)",
+            "market_cap": 3000000000000,
+            "market_cap_str": "$3.0T",
+            "eps_forecast": "$0.75",
+            "last_year_eps": "$0.40"
+        }
+    ]
+
+    agent.generate_postmarket_briefing(
+        portfolio=sample_portfolio,
+        market_overview=overview,
+        news_items=[],
+        market_movers={},
+        api_key="test_key",
+        as_of=as_of_pst,
+        earnings_calendar=amc_earnings
+    )
+
+    assert len(captured_prompts) == 1
+    prompt = captured_prompts[0]
+    assert "AFTER-MARKET-CLOSE (AMC) EARNINGS RELEASES" in prompt
+    assert "NVDA" in prompt
+    assert "NVIDIA Corporation" in prompt
+    assert "AMC (Post-Market)" in prompt
+    assert "Est. EPS: $0.75" in prompt
+
+
+def test_state_store_get_recent_news_for_portfolio(tmp_path):
+    """Verify get_recent_news_for_portfolio finds news by ticker, alias, and name."""
+    db_file = str(tmp_path / "portfolio_news_test.db")
+    store = StateStore(db_path=db_file)
+    now = datetime.now(timezone.utc)
+
+    item_ticker = NewsItem(
+        id="item_nvda",
+        title="NVIDIA Announces Quantum Computing Breakthrough",
+        source="TechCrunch",
+        url="https://tc.com/nvda",
+        published_at=now - timedelta(hours=2),
+        summary="NVDA shares react.",
+        category=NewsCategory.BREAKING,
+        related_tickers=["NVDA"]
+    )
+    item_alias = NewsItem(
+        id="item_apple",
+        title="Apple Expands Enterprise Data Centers in Texas",
+        source="Reuters",
+        url="https://reuters.com/aapl",
+        published_at=now - timedelta(hours=3),
+        summary="Expansion brings 2000 jobs.",
+        category=NewsCategory.BREAKING,
+        related_tickers=[]
+    )
+    item_other = NewsItem(
+        id="item_other",
+        title="Boeing Inspects 737 Fleet Maintenance",
+        source="WSJ",
+        url="https://wsj.com/ba",
+        published_at=now - timedelta(hours=4),
+        summary="Airlines inspect fleet.",
+        category=NewsCategory.MACRO,
+        related_tickers=["BA"]
+    )
+
+    store.save_news_item(item_ticker)
+    store.save_news_item(item_alias)
+    store.save_news_item(item_other)
+
+    portfolio = Portfolio(
+        name="My Portfolio",
+        cash=50000.0,
+        holdings=[
+            PortfolioHolding(
+                ticker="AAPL",
+                name="Apple Inc.",
+                shares=10,
+                avg_price=200.0,
+                current_price=220.0,
+                sector="Technology"
+            ),
+            PortfolioHolding(
+                ticker="NVDA",
+                name="NVIDIA Corp",
+                shares=15,
+                avg_price=100.0,
+                current_price=120.0,
+                sector="Semiconductors"
+            )
+        ]
+    )
+
+    holding_news = store.get_recent_news_for_portfolio(portfolio, hours=24)
+    found_ids = [n.id for n in holding_news]
+    assert "item_nvda" in found_ids
+    assert "item_apple" in found_ids
+    assert "item_other" not in found_ids

@@ -25,6 +25,7 @@ COMMUNICATION & RECOMMENDATION DISCIPLINE:
    - Do not recommend random or speculative tickers.
    - Any highlighted opportunity must possess genuine fundamental merit: a clear competitive moat, high forward growth potential, or recent credible positive changes in institutional analyst ratings.
    - If market conditions are overextended or lack high-conviction risk/reward setups, advise patience or preserving dry powder rather than forcing low-quality picks.
+   - Preserving tactical discipline, taking profits, raising cash, or hedging is welcome and encouraged whenever genuinely justified by market catalysts (e.g. impending FOMC rate decisions, broken technical support, elevated event risk, binary earnings). Avoid generic rote platitudes unless grounded in concrete catalyst or price level data.
 3. Strict Temporal Accuracy & Catalyst Timing:
    - Ground all commentary strictly in TODAY'S calendar date and the exact current session time.
    - Check the MACROECONOMIC & CENTRAL BANK CALENDAR GROUND TRUTH in the prompt.
@@ -65,33 +66,64 @@ class MarketBriefingAgent(BaseAgent):
         """
         Identifies holdings that had significant price movement (beta/volatility-adaptive threshold)
         or direct breaking news catalysts.
-        Returns a concise context string for the prompt.
+        Surfaces holding catalysts regardless of price movement (no price gating).
+        Returns a concise context string for the prompt pairing price changes with the why.
         """
-        if not portfolio.holdings:
+        import re
+        if not portfolio or not portfolio.holdings:
             return "No active holdings in portfolio."
 
-        news_tickers = set()
-        for item in news_items:
-            for t in item.related_tickers:
-                news_tickers.add(t.upper())
+        from storage.state_store import get_reference_equities
+        ref_equities = get_reference_equities()
 
         significant_movers = []
         for h in portfolio.holdings:
             chg = getattr(h, "daily_change_pct", 0.0) or 0.0
             sec = h.sector or "Unclassified"
+            clean_ticker = (h.ticker or "").strip().upper()
+            if not clean_ticker:
+                continue
+
             beta = 1.0
             try:
                 from analytics.quant_risk import QuantRiskEngine
-                b_res = QuantRiskEngine.compute_single_ticker_beta(h.ticker, fallback_sector=sec)
+                b_res = QuantRiskEngine.compute_single_ticker_beta(clean_ticker, fallback_sector=sec)
                 if b_res is not None:
                     beta = b_res
             except Exception as e:
-                logger.debug("Empirical beta lookup failed for %s: %s", h.ticker, e)
+                logger.debug("Empirical beta lookup failed for %s: %s", clean_ticker, e)
             adaptive_thresh = round(max(0.75, min(2.50, threshold_pct * beta)), 2)
             has_price_move = abs(chg) >= adaptive_thresh
-            has_news = h.ticker.upper() in news_tickers
-            if has_price_move or has_news:
-                significant_movers.append((h, chg, has_news, adaptive_thresh))
+
+            # Check for direct breaking news catalysts for this holding (no price gating)
+            holding_tokens = {clean_ticker.lower()} if len(clean_ticker) >= 3 else set()
+            ref = ref_equities.get(clean_ticker, {})
+            for a in ref.get("aliases", []):
+                ca = a.strip().lower()
+                if len(ca) >= 3:
+                    holding_tokens.add(ca)
+            for name_cand in [ref.get("name", ""), getattr(h, "name", "")]:
+                cn = (name_cand or "").strip().lower()
+                if len(cn) >= 3:
+                    holding_tokens.add(cn)
+                    stripped = re.sub(r'[\s,]+(inc\.?|corp\.?|corporation|llc|ltd\.?|co\.?)$', '', cn).strip()
+                    if len(stripped) >= 3:
+                        holding_tokens.add(stripped)
+
+            matched_catalysts: List[NewsItem] = []
+            for item in news_items:
+                item_tickers = [t.strip().upper() for t in (item.related_tickers or [])]
+                if clean_ticker in item_tickers:
+                    matched_catalysts.append(item)
+                    continue
+
+                text = f"{item.title or ''} {item.summary or ''}".lower()
+                if any(re.search(r'\b' + re.escape(tok) + r'\b', text) for tok in holding_tokens):
+                    matched_catalysts.append(item)
+
+            has_catalyst = len(matched_catalysts) > 0
+            if has_price_move or has_catalyst:
+                significant_movers.append((h, chg, matched_catalysts, adaptive_thresh))
 
         if not significant_movers:
             return (
@@ -100,30 +132,91 @@ class MarketBriefingAgent(BaseAgent):
             )
 
         lines = [
-            "PORTFOLIO HOLDINGS WITH SIGNIFICANT MOVEMENT / CATALYSTS (Beta-Adaptive Thresholds or Direct News):"
+            "PORTFOLIO HOLDINGS WITH SIGNIFICANT MOVEMENT / CATALYSTS (Beta-Adaptive Thresholds & Direct Holding Catalysts):"
         ]
-        for h, chg, has_news, adaptive_thresh in significant_movers:
+        for h, chg, catalysts, adaptive_thresh in significant_movers:
             sign = "+" if chg > 0 else ""
-            news_flag = " | ⚡ Active News Catalyst" if has_news else ""
-            lines.append(f"- {h.ticker} ({h.name}, {h.sector}): ${h.current_price:.2f} ({sign}{chg:.2f}% day change | Threshold: {adaptive_thresh}%){news_flag}")
-        lines.append("\nINSTRUCTION: ONLY mention and analyze the specific holdings listed above that had notable moves. Do NOT recite the rest of the static holdings.")
+            if catalysts:
+                cat_desc_lines = []
+                for c in catalysts[:2]:
+                    c_title = (c.title or "").replace("<", "").replace(">", "").strip()
+                    c_src = (c.source or "News").replace("<", "").replace(">", "").strip()
+                    cat_desc_lines.append(f"    • Catalyst [{c_src}]: {c_title}")
+                cat_text = "\n" + "\n".join(cat_desc_lines)
+                lines.append(f"- {h.ticker} ({h.name}, {h.sector}): ${h.current_price:.2f} ({sign}{chg:.2f}% day change | Adaptive Threshold: {adaptive_thresh}% | ⚡ Active News Catalyst){cat_text}")
+            else:
+                lines.append(f"- {h.ticker} ({h.name}, {h.sector}): ${h.current_price:.2f} ({sign}{chg:.2f}% day change | Threshold: {adaptive_thresh}%) [Technical / Beta Movement]")
 
+        lines.append("\nINSTRUCTION: ONLY mention and analyze the specific holdings listed above that had notable moves or direct catalysts. Pair the price action with the catalyst driver. Do NOT recite the rest of the static holdings.")
         return "\n".join(lines)
 
     def _format_indices_summary(self, market_overview: Dict[str, Any]) -> str:
         indices = market_overview.get("indices", {})
-        if not indices:
+        if not indices and not market_overview.get("cross_assets"):
             return "Market Indices: Awaiting real-time opening prints."
         lines = []
         for sym, d in indices.items():
             chg = d.get("change_pct", 0.0)
             sign = "+" if chg > 0 else ""
             p = d.get("current_price", 0.0)
-            price_str = f"${p:.2f}" if p > 0 else ""
+            price_str = f"${p:.2f}" if p and p > 0 else ""
             lines.append(f"• {sym} ({d.get('name', sym)}): {price_str} ({sign}{chg:.2f}%)")
+
+        cross_assets = market_overview.get("cross_assets", {})
+        if cross_assets:
+            lines.append("\nMACRO BENCHMARKS & COMMODITIES (YIELDS, CURRENCIES, COMMODITIES):")
+            for sym, d in cross_assets.items():
+                chg = d.get("change_pct", 0.0)
+                sign = "+" if chg > 0 else ""
+                p = d.get("current_price", 0.0)
+                price_str = f"${p:.2f}" if p and p > 0 else ""
+                lines.append(f"• {sym} ({d.get('name', sym)}): {price_str} ({sign}{chg:.2f}%)")
+
+        sector_spdrs = market_overview.get("sector_spdrs", {})
+        if sector_spdrs:
+            lines.append("\n11-GICS SECTOR SPDR PERFORMANCE:")
+            for sym, d in sector_spdrs.items():
+                chg = d.get("change_pct", 0.0)
+                sign = "+" if chg > 0 else ""
+                lines.append(f"• {sym} ({d.get('name', sym)}): {sign}{chg:.2f}%")
+
         return "\n".join(lines)
 
-    def _format_news_summary(self, news_items: List[NewsItem], as_of: Optional[datetime] = None) -> str:
+    def _format_technical_snapshots(self, technical_snapshots: Optional[Dict[str, Any]]) -> str:
+        if not technical_snapshots:
+            return ""
+        lines = ["KEY BENCHMARK TECHNICAL MOMENTUM & PIVOTS (SPY & QQQ):"]
+        for sym in ["SPY", "QQQ"]:
+            snap = technical_snapshots.get(sym)
+            if snap:
+                if hasattr(snap, "to_summary_line"):
+                    lines.append(f"• {sym}: {snap.to_summary_line()}")
+                elif isinstance(snap, dict):
+                    lines.append(f"• {sym}: {snap.get('summary', str(snap))}")
+                else:
+                    lines.append(f"• {sym}: {str(snap)}")
+        return "\n".join(lines) if len(lines) > 1 else ""
+
+    def _format_earnings_calendar(self, earnings: Optional[List[Dict[str, Any]]], title: str = "SCHEDULED EARNINGS RELEASES") -> str:
+        if not earnings:
+            return ""
+        lines = [f"{title}:"]
+        for e in earnings[:8]:
+            sym = e.get("ticker", "")
+            name = e.get("name", sym)
+            timing = e.get("timing", "Time TBD")
+            eps = e.get("eps_forecast", "")
+            eps_str = f" | Est. EPS: {eps}" if eps else ""
+            lines.append(f"• {sym} ({name}) — {timing}{eps_str}")
+        return "\n".join(lines)
+
+    def _format_news_summary(
+        self,
+        news_items: List[NewsItem],
+        as_of: Optional[datetime] = None,
+        portfolio: Optional[Portfolio] = None,
+        categorized: Optional[bool] = None
+    ) -> str:
         if not news_items:
             return "No major breaking macro alerts."
 
@@ -150,16 +243,10 @@ class MarketBriefingAgent(BaseAgent):
             rel = it.source_reliability_score or 0.75
             return cat_score + recency_score + (rel * 2.0)
 
-        sorted_items = sorted(news_items, key=_news_composite_score, reverse=True)
-
-        lines = []
-        for n in sorted_items[:15]:
+        def _format_single_item(n: NewsItem) -> str:
             pub = n.published_at
             if pub:
-                if pub.tzinfo is None:
-                    pub_aware = pub.replace(tzinfo=timezone.utc)
-                else:
-                    pub_aware = pub
+                pub_aware = pub if pub.tzinfo else pub.replace(tzinfo=timezone.utc)
                 pub_et = pub_aware.astimezone(ZoneInfo("America/New_York"))
                 age_h = max(0.0, (ref_et - pub_et).total_seconds() / 3600.0)
                 if pub_et.date() == ref_et.date():
@@ -168,7 +255,6 @@ class MarketBriefingAgent(BaseAgent):
                     time_tag = f"Yesterday {pub_et.strftime('%b %d, %I:%M %p %Z')} ({age_h:.1f}h ago)"
                 else:
                     time_tag = f"{pub_et.strftime('%b %d, %I:%M %p %Z')} ({age_h:.1f}h ago)"
-
             else:
                 time_tag = "Recent"
 
@@ -180,8 +266,94 @@ class MarketBriefingAgent(BaseAgent):
             is_fed = "federal reserve" in src_lower or "fed" in src_lower
             action_tag = "⚡ [SEC REGULATORY ACTION] " if is_sec else ("⚡ [FEDERAL RESERVE ACTION] " if is_fed else "")
 
-            lines.append(f"- {action_tag}[{clean_source} | {time_tag}] <<<UNTRUSTED_HEADLINE source=\"{clean_source}\">>>{clean_title}: {clean_summary}<<</UNTRUSTED_HEADLINE>>>")
-        return "\n".join(lines)
+            return f"- {action_tag}[{clean_source} | {time_tag}] <<<UNTRUSTED_HEADLINE source=\"{clean_source}\">>>{clean_title}: {clean_summary}<<</UNTRUSTED_HEADLINE>>>"
+
+        sorted_items = sorted(news_items, key=_news_composite_score, reverse=True)
+
+        use_categorized = categorized if categorized is not None else (portfolio is not None)
+        if not use_categorized:
+            lines = [_format_single_item(n) for n in sorted_items[:15]]
+            return "\n".join(lines)
+
+        # Categorized Catalyst Docket partitioning
+        import re
+        from storage.state_store import get_reference_equities
+        ref_equities = get_reference_equities()
+
+        portfolio_tickers = set()
+        portfolio_aliases = set()
+        if portfolio and portfolio.holdings:
+            for h in portfolio.holdings:
+                ct = (h.ticker or "").strip().upper()
+                if ct:
+                    portfolio_tickers.add(ct)
+                    if len(ct) >= 3:
+                        portfolio_aliases.add(ct.lower())
+                    ref = ref_equities.get(ct, {})
+                    for a in ref.get("aliases", []):
+                        if len(a.strip()) >= 3:
+                            portfolio_aliases.add(a.strip().lower())
+                    for name_cand in [ref.get("name", ""), getattr(h, "name", "")]:
+                        cn = (name_cand or "").strip().lower()
+                        if len(cn) >= 3:
+                            portfolio_aliases.add(cn)
+                            stripped = re.sub(r'[\s,]+(inc\.?|corp\.?|corporation|llc|ltd\.?|co\.?)$', '', cn).strip()
+                            if len(stripped) >= 3:
+                                portfolio_aliases.add(stripped)
+
+        macro_items = []
+        portfolio_items = []
+        sector_items = []
+
+        for it in sorted_items:
+            it_tickers = [t.strip().upper() for t in (it.related_tickers or [])]
+            text = f"{it.title or ''} {it.summary or ''}".lower()
+            is_holding = any(t in portfolio_tickers for t in it_tickers) or any(
+                re.search(r'\b' + re.escape(tok) + r'\b', text) for tok in portfolio_aliases
+            )
+            if is_holding:
+                portfolio_items.append(it)
+                continue
+
+            src_l = (it.source or "").lower()
+            is_macro_cat = it.category in (NewsCategory.MACRO, NewsCategory.SEC_FILING, NewsCategory.GEOPOLITICAL)
+            macro_keywords = (
+                "fed", "federal reserve", "treasury", "sec", "cpi", "ppi", "fomc",
+                "powell", "inflation", "central bank", "rate decision", "interest rate",
+                "yield", "regulatory", "gdp", "jobs report", "nonfarm"
+            )
+            is_macro_text = any(re.search(r'\b' + re.escape(kw) + r'\b', text) for kw in macro_keywords) or any(
+                kw in src_l for kw in ("fed", "federal reserve", "sec", "treasury")
+            )
+
+            if is_macro_cat or is_macro_text:
+                macro_items.append(it)
+            else:
+                sector_items.append(it)
+
+        sections = []
+        sections.append("⚡ [MACRO & REGULATORY CATALYSTS]")
+        if macro_items:
+            for it in macro_items[:8]:
+                sections.append(_format_single_item(it))
+        else:
+            sections.append("• No major breaking macro or regulatory announcements on docket.")
+
+        sections.append("\n🎯 [PORTFOLIO HOLDINGS CATALYSTS]")
+        if portfolio_items:
+            for it in portfolio_items[:8]:
+                sections.append(_format_single_item(it))
+        else:
+            sections.append("• No direct corporate catalysts or filings for held assets in current window.")
+
+        sections.append("\n🌐 [SECTOR & COMPETITIVE DEVELOPMENTS]")
+        if sector_items:
+            for it in sector_items[:8]:
+                sections.append(_format_single_item(it))
+        else:
+            sections.append("• No secondary sector developments.")
+
+        return "\n".join(sections)
 
     def _format_holdings_summary(self, portfolio: Portfolio) -> str:
         if not portfolio or not portfolio.holdings:
@@ -201,7 +373,10 @@ class MarketBriefingAgent(BaseAgent):
         market_overview: Dict[str, Any],
         news_items: List[NewsItem],
         api_key: Optional[str] = None,
-        as_of: Optional[datetime] = None
+        as_of: Optional[datetime] = None,
+        technical_snapshots: Optional[Dict[str, Any]] = None,
+        earnings_calendar: Optional[List[Dict[str, Any]]] = None,
+        prior_briefing_context: Optional[str] = None
     ) -> str:
         """
         6:30 AM PST Pre-Market Intelligence:
@@ -218,7 +393,13 @@ class MarketBriefingAgent(BaseAgent):
 
         movers_context = self._extract_significant_portfolio_movers(portfolio, news_items, threshold_pct=1.5)
         indices_str = self._format_indices_summary(market_overview)
-        news_str = self._format_news_summary(news_items, as_of=as_of_pst)
+        news_str = self._format_news_summary(news_items, as_of=as_of_pst, portfolio=portfolio)
+        tech_str = self._format_technical_snapshots(technical_snapshots)
+        earnings_str = self._format_earnings_calendar(earnings_calendar, title="TODAY'S BEFORE-MARKET-OPEN (BMO) EARNINGS")
+
+        prior_context_block = f"\nPRIOR BRIEFING CONTEXT:\n{prior_briefing_context}\n" if prior_briefing_context else ""
+        tech_block = f"\n{tech_str}\n" if tech_str else ""
+        earnings_block = f"\n{earnings_str}\n" if earnings_str else ""
 
         prompt = f"""
         You are a seasoned Chief Investment Officer delivering the 6:30 AM PST PRE-MARKET BRIEFING.
@@ -228,35 +409,41 @@ class MarketBriefingAgent(BaseAgent):
         • Current Time: {as_of_pst.strftime('%I:%M %p %Z')} / {as_of_et.strftime('%I:%M %p %Z')}
         • Session Phase: Pre-Market Opening (U.S. cash equity markets open at 6:30 AM {as_of_pst.strftime('%Z')} / 9:30 AM {as_of_et.strftime('%Z')})
 
-
+        {prior_context_block}
         {economic_str}
 
         BROAD BENCHMARKS & FUTURES:
         {indices_str}
-
-        OVERNIGHT MACRO & PRE-MARKET HEADLINES:
+        {tech_block}
+        {earnings_block}
+        CATEGORIZED CATALYST DOCKET & HEADLINES:
         {news_str}
 
         INVESTOR'S PORTFOLIO STATUS:
         {movers_context}
 
         TASK:
-        Generate a concise, disciplined pre-market executive brief in clean Telegram HTML format (use <b>, <i>, <code>).
+        Generate a comprehensive, disciplined pre-market executive brief in clean Telegram HTML format (use <b>, <i>, <code>).
+        Target approximately 2,200 to 3,000 characters to deliver deep institutional intelligence without message splitting.
 
         Structure the message with these exact sections:
         🌅 <b>PRE-MARKET INTELLIGENCE & OPENING CATALYSTS (6:30 AM PST)</b>
 
         📊 <b>Macro & Benchmark Tone:</b>
-        - 2-3 bullet points on overnight global markets, futures, yields, and opening sentiment.
+        - 2-3 detailed bullet points on overnight global markets, futures, yields (TLT), the dollar (UUP), and opening sentiment.
+        - Detail specific scheduled macro catalysts today (Fed speakers, Treasury auctions, CPI/PPI) with exact transmission mechanisms to equity markets and rate-sensitive sectors.
 
         💼 <b>Portfolio Standing / Notable Movers:</b>
-        - If specific holdings experienced significant movement (>=1.5%) or direct breaking news, highlight ONLY those tickers and explain their driver. If no holdings had significant moves, simply write a 1-line status confirming calm conditions.
+        - Highlight direct corporate catalysts (product launches, 8-K filings, earnings, executive updates) or notable movers among held assets. Explain the "why" behind any movement or announcement. If core holdings are calm with no breaking news, simply write a 1-line status confirming calm conditions.
+
+        📊 <b>Key Index Technical Pivots (SPY & QQQ):</b>
+        - Concrete technical support/resistance levels, 50-DMA/200-DMA alignment, and ATR expected daily trading bands to monitor into the opening bell.
 
         🔥 <b>Market-Wide Opportunity Catalyst:</b>
-        - Spotlight 1 to 2 high-conviction breakout setups or secular themes in the broader market OUTSIDE the portfolio. Ensure selections have genuine fundamental merit, competitive moats, or recent credible analyst revisions. Do NOT highlight speculative or random tickers.
+        - Spotlight 1 to 2 high-conviction breakout setups or secular themes in the broader market OUTSIDE the portfolio (backed by earnings beat, analyst upgrades, or secular product launches). Ensure selections have genuine fundamental merit, competitive moats, or recent credible analyst revisions. Do NOT highlight speculative or random tickers.
 
         🎯 <b>Opening Gameplan:</b>
-        - 1-2 actionable risk management or watchlist focus points for the opening bell.
+        - 1-2 actionable risk management or watchlist focus points for the opening bell. Preserving tactical discipline, taking profits, or maintaining dry powder is welcome and encouraged when genuinely justified by identified catalysts, technical pivots, or event risk.
 
         Keep the tone institutional, measured, and actionable. Avoid unwarranted puffery or hyperbole. Do not use Markdown backticks.
         """
@@ -283,7 +470,9 @@ class MarketBriefingAgent(BaseAgent):
         market_overview: Dict[str, Any],
         news_items: List[NewsItem],
         api_key: Optional[str] = None,
-        as_of: Optional[datetime] = None
+        as_of: Optional[datetime] = None,
+        technical_snapshots: Optional[Dict[str, Any]] = None,
+        prior_briefing_context: Optional[str] = None
     ) -> str:
         """
         10:00 AM PST Mid-Market Pulse:
@@ -300,7 +489,14 @@ class MarketBriefingAgent(BaseAgent):
 
         movers_context = self._extract_significant_portfolio_movers(portfolio, news_items, threshold_pct=1.5)
         indices_str = self._format_indices_summary(market_overview)
-        news_str = self._format_news_summary(news_items, as_of=as_of_pst)
+        news_str = self._format_news_summary(news_items, as_of=as_of_pst, portfolio=portfolio)
+        tech_str = self._format_technical_snapshots(technical_snapshots)
+
+        prior_context_block = (
+            f"\nCROSS-BRIEFING NARRATIVE CONTINUITY (TODAY'S MORNING BRIEFING):\n{prior_briefing_context}\n"
+            if prior_briefing_context else ""
+        )
+        tech_block = f"\n{tech_str}\n" if tech_str else ""
 
         prompt = f"""
         You are a seasoned Chief Investment Officer delivering the 10:00 AM PST MID-MARKET PULSE.
@@ -311,34 +507,39 @@ class MarketBriefingAgent(BaseAgent):
 
         • Session Phase: Mid-Day Trading (Morning cash session complete; entering midday positioning)
 
+        {prior_context_block}
         {economic_str}
 
         BENCHMARK INDICES & INTRADAY BREADTH:
         {indices_str}
-
-        MID-DAY MACRO & BREAKING NEWS:
+        {tech_block}
+        MID-DAY MACRO & BREAKING CATALYST DOCKET:
         {news_str}
 
         INVESTOR'S PORTFOLIO STATUS:
         {movers_context}
 
         TASK:
-        Generate a concise, disciplined mid-day market update in clean Telegram HTML format (use <b>, <i>, <code>).
+        Generate a comprehensive, disciplined mid-day market intelligence update in clean Telegram HTML format (use <b>, <i>, <code>).
+        Target approximately 2,200 to 3,000 characters. Maintain cross-briefing continuity by auditing the morning plan against real-time developments.
 
         Structure the message with these exact sections:
         ☀️ <b>MID-MARKET PULSE & MOMENTUM (10:00 AM PST)</b>
 
+        🔄 <b>Morning Catalyst Digestion:</b>
+        - Audit how the market digested morning economic prints, Fed communications, and opening catalysts against the morning gameplan. Did morning catalysts resolve bullishly or bearishly? How did volume breadth and sector flows react?
+
         📈 <b>Intraday Market Action:</b>
-        - Broad market direction, leading/lagging sectors, and morning market digestion. (Analyze economic/Fed data only if a release occurred this morning; otherwise, focus on price action and sector flows).
+        - Broad market direction, leading/lagging 11-sector SPDR flows (cyclical vs defensive), institutional volume tone, and morning market digestion. (Analyze economic/Fed data only if a release occurred this morning; otherwise, focus on price action and sector flows).
 
         💼 <b>Portfolio Standing / Notable Movers:</b>
-        - If specific holdings experienced notable intraday moves (>=1.5%) or breaking catalysts, analyze ONLY those tickers. If calm, include a crisp 1-line note.
+        - If specific holdings experienced notable intraday moves or direct breaking catalysts (product launches, corporate announcements, SEC filings), analyze ONLY those tickers and explain their driver. If calm, include a crisp 1-line note confirming calm conditions.
 
         🚀 <b>Active Market Opportunities:</b>
-        - Highlight 1-2 emerging midday setups or secular themes with credible volume or analyst catalysts. Be selective and critical—do not highlight speculative or random tickers without proven fundamental backing.
+        - Highlight 1-2 emerging midday setups or secular themes with credible volume or analyst catalysts outside the portfolio. Be selective and critical—do not highlight speculative or random tickers without proven fundamental backing.
 
         🛡️ <b>Afternoon Posture:</b>
-        - Key levels, sector rotation, and risk posture heading into the closing session. (Only cite Fed or economic events if one is explicitly scheduled for this afternoon).
+        - Afternoon roadmap: key levels, remaining afternoon catalysts (e.g. 1:00 PM ET Treasury auctions, afternoon Fed speeches), closing session levels, and trailing stop/risk posture heading into Power Hour. Preserving tactical discipline, taking profits, or raising cash is welcome and encouraged when justified by catalysts or technical levels.
 
         Keep it balanced, objective, and formatted with clean HTML tags. Avoid unwarranted puffery or hyperbole.
         """
@@ -366,7 +567,10 @@ class MarketBriefingAgent(BaseAgent):
         news_items: List[NewsItem],
         market_movers: Optional[Dict[str, Any]] = None,
         api_key: Optional[str] = None,
-        as_of: Optional[datetime] = None
+        as_of: Optional[datetime] = None,
+        technical_snapshots: Optional[Dict[str, Any]] = None,
+        earnings_calendar: Optional[List[Dict[str, Any]]] = None,
+        prior_briefing_context: Optional[str] = None
     ) -> str:
         """
         3:00 PM PST Post-Market Wrap:
@@ -395,7 +599,16 @@ class MarketBriefingAgent(BaseAgent):
 
         movers_context = self._extract_significant_portfolio_movers(portfolio, news_items, threshold_pct=1.5)
         indices_str = self._format_indices_summary(market_overview)
-        news_str = self._format_news_summary(news_items, as_of=as_of_pst)
+        news_str = self._format_news_summary(news_items, as_of=as_of_pst, portfolio=portfolio)
+        tech_str = self._format_technical_snapshots(technical_snapshots)
+        earnings_str = self._format_earnings_calendar(earnings_calendar, title="TODAY'S AFTER-MARKET-CLOSE (AMC) EARNINGS RELEASES")
+
+        prior_context_block = (
+            f"\nCROSS-BRIEFING NARRATIVE CONTINUITY (TODAY'S PRIOR BRIEFINGS):\n{prior_briefing_context}\n"
+            if prior_briefing_context else ""
+        )
+        tech_block = f"\n{tech_str}\n" if tech_str else ""
+        earnings_block = f"\n{earnings_str}\n" if earnings_str else ""
 
         movers_str = "Top Market Movers:\n"
         if market_movers:
@@ -416,16 +629,16 @@ class MarketBriefingAgent(BaseAgent):
         • Current Time: {as_of_pst.strftime('%I:%M %p %Z')} / {as_of_et.strftime('%I:%M %p %Z')}
         • Session Phase: Post-Market Closing Wrap ({session_close_desc})
 
-
+        {prior_context_block}
         {economic_str}
 
         CLOSING BENCHMARK PERFORMANCE:
         {indices_str}
-
+        {tech_block}
         MARKET MOVERS & EARNINGS RELEASES:
         {movers_str}
-
-        AFTER-HOURS & CLOSING NEWS:
+        {earnings_block}
+        AFTER-HOURS & CLOSING CATALYST DOCKET:
         {news_str}
 
         INVESTOR'S PORTFOLIO STATUS:
@@ -433,18 +646,19 @@ class MarketBriefingAgent(BaseAgent):
 
         TASK:
         Generate a comprehensive, objective post-market briefing in clean Telegram HTML format (use <b>, <i>, <code>).
+        Target approximately 2,200 to 3,000 characters to synthesize full-day catalyst evolution and preview the next session.
 
         Structure the message with these exact sections:
         🌙 <b>POST-MARKET WRAP & DAY-END RECAP (3:00 PM PST)</b>
 
         🏁 <b>Closing Bell Summary:</b>
-        - Daily closing index results and what dictated today's tape (including any macro/central bank catalysts that concluded earlier today).
+        - Daily closing index results and what dictated today's tape (including any macro/central bank catalysts that concluded earlier today). Synthesize how today's catalysts resolved across equities, yields, and commodities.
 
         🏆 <b>Notable Market Movers:</b>
         - Recap the key movers of the day across the market, explaining the drivers behind their moves (earnings beat/miss, forward guidance, analyst revisions, or M&A).
 
         💼 <b>Portfolio Day-End Health:</b>
-        - If specific holdings experienced significant movement (>=1.5%) or earnings releases, detail ONLY those movers. If all holdings were steady, provide a concise 1-line reassurance.
+        - If specific holdings experienced significant movement (>=1.5%) or direct breaking news catalysts (product announcements, SEC filings, earnings), detail ONLY those movers and explain their catalyst drivers. If all holdings were steady, provide a concise 1-line reassurance.
 
         🔮 <b>After-Hours Earnings & Tomorrow's Focus:</b>
         - Key after-hours earnings calls to note and 1 to 2 high-quality opportunity ideas to research for {next_session_phrase}. Exercise critical judgment—focus on companies with proven business moats, secular growth potential, or credible positive analyst revisions.
@@ -490,7 +704,7 @@ class MarketBriefingAgent(BaseAgent):
         economic_str = format_economic_calendar_for_prompt(economic_ctx, include_horizon=True)
 
         movers_context = self._extract_significant_portfolio_movers(portfolio, news_items, threshold_pct=1.5)
-        news_str = self._format_news_summary(news_items, as_of=as_of_pst)
+        news_str = self._format_news_summary(news_items, as_of=as_of_pst, portfolio=portfolio)
 
         today_ref = as_of_pst.date()
         is_holiday = is_market_holiday(today_ref)
@@ -611,7 +825,7 @@ class MarketBriefingAgent(BaseAgent):
 
         verified_schedule_str = "\n\n".join(schedule_text_blocks) if schedule_text_blocks else "No major corporate earnings scheduled this week."
         holdings_str = self._format_holdings_summary(portfolio)
-        news_str = self._format_news_summary(news_items, as_of=now_pst)
+        news_str = self._format_news_summary(news_items, as_of=now_pst, portfolio=portfolio)
 
         prompt = f"""
         You are an elite Wall Street Equity Research Director delivering the UPCOMING 7-DAY CORPORATE EARNINGS CALENDAR & SENTIMENT REPORT.

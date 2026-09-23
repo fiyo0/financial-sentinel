@@ -289,10 +289,13 @@ def test_api_trigger_scan_stream_sse(client, monkeypatch):
     )
 
     def mock_run_monitoring_cycle(**kwargs):
+        import time
         on_progress = kwargs.get("on_progress")
         if on_progress:
             on_progress("market_data", 10, "Fetching quotes...")
+            time.sleep(0.02)
             on_progress("critic_audit", 75, "Critic auditing...")
+            time.sleep(0.02)
         return mock_briefing
 
     monkeypatch.setattr(orchestrator, "run_monitoring_cycle", mock_run_monitoring_cycle)

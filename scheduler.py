@@ -9,7 +9,7 @@ import threading
 import logging
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
-from typing import Optional, Callable, Set
+from typing import Optional, Callable, Set, List, Dict, Any
 
 from orchestrator import FinancialSentinelOrchestrator
 from models import Portfolio, NewsItem
@@ -70,6 +70,113 @@ class DailyMarketScheduler:
         except Exception as e:
             logger.warning("Failed persisting executed schedule slots: %s", e)
 
+    def _prepare_portfolio_news(self, portfolio: Optional[Portfolio], base_news: List[NewsItem]) -> List[NewsItem]:
+        """
+        Retrieves news specifically mentioning or tagged with the portfolio's holdings,
+        and merges it with the base news stream so holding-specific catalysts are prioritized.
+        """
+        if not portfolio or not getattr(portfolio, "holdings", None):
+            return base_news
+
+        try:
+            holding_news = self.orchestrator.state_store.get_recent_news_for_portfolio(portfolio, hours=48, limit=30)
+        except Exception as e:
+            logger.warning("Failed fetching holding-affinity news: %s", e)
+            holding_news = []
+
+        seen_hashes = set()
+        merged = []
+        for n in holding_news:
+            h = getattr(n, "raw_hash", None) or n.id
+            if h not in seen_hashes:
+                seen_hashes.add(h)
+                merged.append(n)
+        for n in base_news:
+            h = getattr(n, "raw_hash", None) or n.id
+            if h not in seen_hashes:
+                seen_hashes.add(h)
+                merged.append(n)
+        return merged
+
+    def _get_prior_briefing_context(
+        self,
+        slot: str,
+        user_id: Optional[str] = None,
+        as_of: Optional[datetime] = None
+    ) -> Optional[str]:
+        """
+        Retrieves executive summaries from today's earlier briefings to maintain cross-briefing narrative continuity.
+        For midmarket: retrieves today's premarket briefing.
+        For postmarket: retrieves today's premarket and midmarket briefings.
+        """
+        if slot not in ("midmarket", "postmarket"):
+            return None
+
+        ref_dt = as_of or datetime.now(self.tz)
+        today_prefix = ref_dt.strftime("%Y-%m-%d")
+
+        briefings = []
+        try:
+            if user_id:
+                briefings = self.orchestrator.state_store.get_market_briefings(user_id=user_id, limit=20)
+            if not briefings:
+                briefings = self.orchestrator.state_store.get_market_briefings(user_id=None, limit=20)
+        except Exception as e:
+            logger.warning("Failed retrieving market briefings for prior context: %s", e)
+            return None
+
+        if not briefings:
+            return None
+
+        today_briefings = []
+        for b in briefings:
+            gen_str = b.get("generated_at") or ""
+            if gen_str.startswith(today_prefix):
+                today_briefings.append(b)
+                continue
+            try:
+                raw_val = gen_str.strip()
+                if raw_val.endswith("Z"):
+                    raw_val = raw_val[:-1] + "+00:00"
+                dt = datetime.fromisoformat(raw_val)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                age_h = (datetime.now(timezone.utc) - dt).total_seconds() / 3600.0
+                if 0 <= age_h <= 18:
+                    today_briefings.append(b)
+            except Exception:
+                pass
+
+        if not today_briefings:
+            return None
+
+        premarket_b = next((b for b in today_briefings if b.get("slot") == "premarket"), None)
+        midmarket_b = next((b for b in today_briefings if b.get("slot") == "midmarket"), None)
+
+        def _clean_summary(b: Dict[str, Any]) -> str:
+            msg = b.get("executive_summary") or b.get("message_html") or ""
+            return msg.strip()[:400]
+
+        if slot == "midmarket" and premarket_b:
+            summary = _clean_summary(premarket_b)
+            if summary:
+                return f"TODAY'S PRE-MARKET GAMEPLAN & CATALYST OUTLOOK:\n{summary}"
+
+        if slot == "postmarket":
+            parts = []
+            if premarket_b:
+                pm_sum = _clean_summary(premarket_b)
+                if pm_sum:
+                    parts.append(f"• Pre-Market Gameplan: {pm_sum}")
+            if midmarket_b:
+                mm_sum = _clean_summary(midmarket_b)
+                if mm_sum:
+                    parts.append(f"• Mid-Market Momentum & Catalyst Digestion: {mm_sum}")
+            if parts:
+                return "\n".join(parts)
+
+        return None
+
     def execute_briefing(
         self,
         slot: str,
@@ -101,6 +208,50 @@ class DailyMarketScheduler:
             self._mark_slot_executed(slot_key)
 
         market_overview = fetch_market_overview()
+        try:
+            from analytics.market_data import fetch_live_quote
+            cross_assets = {}
+            for sym in ("TLT", "UUP", "GLD", "USO"):
+                q = fetch_live_quote(sym)
+                if q and q.get("current_price") is not None:
+                    cross_assets[sym] = q
+            market_overview["cross_assets"] = cross_assets
+
+            sector_spdrs = {}
+            for sym in ("XLK", "XLF", "XLE", "XLV", "XLI", "XLY", "XLP", "XLU", "XLRE", "XLC", "XLB"):
+                q = fetch_live_quote(sym)
+                if q and q.get("change_pct") is not None:
+                    sector_spdrs[sym] = q
+            market_overview["sector_spdrs"] = sector_spdrs
+        except Exception as e:
+            logger.debug("Failed enriching market overview: %s", e)
+
+        # Compute deterministic technical snapshots for SPY and QQQ
+        technical_snapshots = {}
+        try:
+            from analytics.technical_indicators import compute_technical_snapshot
+            for sym in ("SPY", "QQQ"):
+                snap = compute_technical_snapshot(sym)
+                if snap:
+                    technical_snapshots[sym] = snap
+        except Exception as e:
+            logger.debug("Failed computing technical snapshot: %s", e)
+
+        # Fetch today's earnings schedule for premarket (BMO) and postmarket (AMC)
+        earnings_calendar = []
+        try:
+            from analytics.earnings_calendar import fetch_earnings_for_date
+            all_today_earnings = fetch_earnings_for_date(date_str)
+            if slot == "premarket":
+                earnings_calendar = [e for e in all_today_earnings if "BMO" in e.get("timing", "")]
+            elif slot == "postmarket":
+                earnings_calendar = [e for e in all_today_earnings if "AMC" in e.get("timing", "")]
+            else:
+                earnings_calendar = all_today_earnings
+        except Exception as e:
+            logger.warning("Failed fetching earnings for date %s: %s", date_str, e)
+            earnings_calendar = []
+
         fresh_news = self.orchestrator.news_agent.ingest_all_feeds(force_fresh=True)
         stored_news = self.orchestrator.state_store.get_recent_news(hours=24)
         seen_hashes = set()
@@ -125,22 +276,39 @@ class DailyMarketScheduler:
 
         # Single user on-demand generation
         if user_id:
-            portfolio = self.orchestrator.get_active_portfolio(user_id=user_id)
+            portfolio = self.portfolio_loader() if self.portfolio_loader else self.orchestrator.get_active_portfolio(user_id=user_id)
             portfolio, _ = update_portfolio_live_prices(portfolio)
             api_key = self.orchestrator.resolve_user_api_key(user_id)
+            user_news = self._prepare_portfolio_news(portfolio, news_items)
+            prior_context = self._get_prior_briefing_context(slot, user_id=user_id, as_of=now_pst)
 
             if slot == "premarket":
-                message = self.briefing_agent.generate_premarket_briefing(portfolio, market_overview, news_items, api_key=api_key, as_of=now_pst)
+                message = self.briefing_agent.generate_premarket_briefing(
+                    portfolio, market_overview, user_news, api_key=api_key, as_of=now_pst,
+                    technical_snapshots=technical_snapshots, earnings_calendar=earnings_calendar,
+                    prior_briefing_context=prior_context
+                )
             elif slot == "midmarket":
-                message = self.briefing_agent.generate_midmarket_briefing(portfolio, market_overview, news_items, api_key=api_key, as_of=now_pst)
+                message = self.briefing_agent.generate_midmarket_briefing(
+                    portfolio, market_overview, user_news, api_key=api_key, as_of=now_pst,
+                    technical_snapshots=technical_snapshots, prior_briefing_context=prior_context
+                )
             elif slot == "postmarket":
-                message = self.briefing_agent.generate_postmarket_briefing(portfolio, market_overview, news_items, movers, api_key=api_key, as_of=now_pst)
+                message = self.briefing_agent.generate_postmarket_briefing(
+                    portfolio, market_overview, user_news, movers, api_key=api_key, as_of=now_pst,
+                    technical_snapshots=technical_snapshots, earnings_calendar=earnings_calendar,
+                    prior_briefing_context=prior_context
+                )
             elif slot == "weekend":
-                message = self.briefing_agent.generate_weekend_eod_briefing(portfolio, market_overview, news_items, api_key=api_key, as_of=now_pst)
+                message = self.briefing_agent.generate_weekend_eod_briefing(portfolio, market_overview, user_news, api_key=api_key, as_of=now_pst)
             elif slot == "earnings":
-                message = self.briefing_agent.generate_weekly_earnings_briefing(portfolio, news_items, api_key=api_key, as_of=now_pst)
+                message = self.briefing_agent.generate_weekly_earnings_briefing(portfolio, user_news, api_key=api_key, as_of=now_pst)
             else:
-                message = self.briefing_agent.generate_premarket_briefing(portfolio, market_overview, news_items, api_key=api_key, as_of=now_pst)
+                message = self.briefing_agent.generate_premarket_briefing(
+                    portfolio, market_overview, user_news, api_key=api_key, as_of=now_pst,
+                    technical_snapshots=technical_snapshots, earnings_calendar=earnings_calendar,
+                    prior_briefing_context=prior_context
+                )
 
             briefing_id = f"briefing_{slot}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
             dispatched = []
@@ -190,21 +358,38 @@ class DailyMarketScheduler:
                 continue
 
             try:
-                u_portfolio = self.orchestrator.get_active_portfolio(user_id=u_id)
+                u_portfolio = self.portfolio_loader() if self.portfolio_loader else self.orchestrator.get_active_portfolio(user_id=u_id)
                 u_portfolio, _ = update_portfolio_live_prices(u_portfolio)
+                u_news = self._prepare_portfolio_news(u_portfolio, news_items)
+                u_prior_context = self._get_prior_briefing_context(slot, user_id=u_id, as_of=now_pst)
 
                 if slot == "premarket":
-                    u_msg = self.briefing_agent.generate_premarket_briefing(u_portfolio, market_overview, news_items, api_key=u_key, as_of=now_pst)
+                    u_msg = self.briefing_agent.generate_premarket_briefing(
+                        u_portfolio, market_overview, u_news, api_key=u_key, as_of=now_pst,
+                        technical_snapshots=technical_snapshots, earnings_calendar=earnings_calendar,
+                        prior_briefing_context=u_prior_context
+                    )
                 elif slot == "midmarket":
-                    u_msg = self.briefing_agent.generate_midmarket_briefing(u_portfolio, market_overview, news_items, api_key=u_key, as_of=now_pst)
+                    u_msg = self.briefing_agent.generate_midmarket_briefing(
+                        u_portfolio, market_overview, u_news, api_key=u_key, as_of=now_pst,
+                        technical_snapshots=technical_snapshots, prior_briefing_context=u_prior_context
+                    )
                 elif slot == "postmarket":
-                    u_msg = self.briefing_agent.generate_postmarket_briefing(u_portfolio, market_overview, news_items, movers, api_key=u_key, as_of=now_pst)
+                    u_msg = self.briefing_agent.generate_postmarket_briefing(
+                        u_portfolio, market_overview, u_news, movers, api_key=u_key, as_of=now_pst,
+                        technical_snapshots=technical_snapshots, earnings_calendar=earnings_calendar,
+                        prior_briefing_context=u_prior_context
+                    )
                 elif slot == "weekend":
-                    u_msg = self.briefing_agent.generate_weekend_eod_briefing(u_portfolio, market_overview, news_items, api_key=u_key, as_of=now_pst)
+                    u_msg = self.briefing_agent.generate_weekend_eod_briefing(u_portfolio, market_overview, u_news, api_key=u_key, as_of=now_pst)
                 elif slot == "earnings":
-                    u_msg = self.briefing_agent.generate_weekly_earnings_briefing(u_portfolio, news_items, api_key=u_key, as_of=now_pst)
+                    u_msg = self.briefing_agent.generate_weekly_earnings_briefing(u_portfolio, u_news, api_key=u_key, as_of=now_pst)
                 else:
-                    u_msg = self.briefing_agent.generate_premarket_briefing(u_portfolio, market_overview, news_items, api_key=u_key, as_of=now_pst)
+                    u_msg = self.briefing_agent.generate_premarket_briefing(
+                        u_portfolio, market_overview, u_news, api_key=u_key, as_of=now_pst,
+                        technical_snapshots=technical_snapshots, earnings_calendar=earnings_calendar,
+                        prior_briefing_context=u_prior_context
+                    )
 
 
                 last_generated_msg = u_msg

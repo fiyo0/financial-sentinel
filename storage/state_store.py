@@ -9,7 +9,7 @@ import logging
 import contextlib
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any
-from models import NewsItem, BriefingReport, NewsCategory
+from models import NewsItem, BriefingReport, NewsCategory, Portfolio
 
 import threading
 
@@ -743,6 +743,74 @@ class StateStore:
             title_lower = (item.title or "").lower()
             if any(re.search(r'\b' + re.escape(tok) + r'\b', title_lower) for tok in alias_tokens):
                 matched.append(item)
+        return matched[:limit]
+
+    def get_recent_news_for_portfolio(self, portfolio: Portfolio, hours: int = 48, limit: int = 30) -> List[NewsItem]:
+        """
+        Retrieves stored news items specifically matching portfolio holdings (tickers and brand/company aliases)
+        from SQLite within the specified lookback window.
+        Guarantees holding-specific product announcements, earnings, and SEC filings are prioritized.
+        """
+        import re
+        if not portfolio or not getattr(portfolio, "holdings", None):
+            return []
+
+        ref_equities = get_reference_equities()
+        tickers_set = set()
+        alias_tokens = set()
+
+        for h in portfolio.holdings:
+            clean_ticker = (h.ticker or "").strip().upper()
+            if not clean_ticker:
+                continue
+            tickers_set.add(clean_ticker)
+            if len(clean_ticker) >= 3:
+                alias_tokens.add(clean_ticker.lower())
+
+            ref = ref_equities.get(clean_ticker, {})
+            for a in ref.get("aliases", []):
+                clean_a = a.strip().lower()
+                if len(clean_a) >= 3:
+                    alias_tokens.add(clean_a)
+            ref_name = ref.get("name", "")
+            if ref_name:
+                clean_ref_name = ref_name.strip().lower()
+                if len(clean_ref_name) >= 3:
+                    alias_tokens.add(clean_ref_name)
+                    stripped = re.sub(r'[\s,]+(inc\.?|corp\.?|corporation|llc|ltd\.?|co\.?)$', '', clean_ref_name).strip()
+                    if len(stripped) >= 3:
+                        alias_tokens.add(stripped)
+
+            h_name = (h.name or "").strip().lower()
+            if h_name and len(h_name) >= 3:
+                alias_tokens.add(h_name)
+                stripped_h = re.sub(r'[\s,]+(inc\.?|corp\.?|corporation|llc|ltd\.?|co\.?)$', '', h_name).strip()
+                if len(stripped_h) >= 3:
+                    alias_tokens.add(stripped_h)
+
+        if not tickers_set:
+            return []
+
+        all_recent = self.get_recent_news(hours=hours, limit=max(limit * 10, 250))
+        matched: List[NewsItem] = []
+        seen_ids = set()
+
+        for item in all_recent:
+            item_key = item.id or getattr(item, "raw_hash", None)
+            if item_key in seen_ids:
+                continue
+
+            item_tickers = [t.strip().upper() for t in (item.related_tickers or [])]
+            if any(t in tickers_set for t in item_tickers):
+                seen_ids.add(item_key)
+                matched.append(item)
+                continue
+
+            text = f"{item.title or ''} {item.summary or ''}".lower()
+            if any(re.search(r'\b' + re.escape(tok) + r'\b', text) for tok in alias_tokens):
+                seen_ids.add(item_key)
+                matched.append(item)
+
         return matched[:limit]
 
     def get_recent_regulatory_news(self, hours: int = 72, limit: int = 25) -> List[NewsItem]:

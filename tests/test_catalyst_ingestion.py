@@ -471,7 +471,7 @@ def test_state_store_datetime_awareness_and_iso_normalization(tmp_path):
     and offset-aware strings as timezone-aware UTC datetime objects.
     """
     import sqlite3
-    from datetime import datetime, timezone
+    from datetime import datetime, timezone, timedelta
     from storage.state_store import StateStore
     from models import NewsCategory
 
@@ -481,13 +481,17 @@ def test_state_store_datetime_awareness_and_iso_normalization(tmp_path):
     # Directly insert raw rows with different ISO datetime shapes into SQLite
     with sqlite3.connect(db_file) as conn:
         cursor = conn.cursor()
-        now_str = datetime.now(timezone.utc).isoformat()
+        now_utc = datetime.now(timezone.utc)
+        now_str = now_utc.isoformat()
+        z_str = (now_utc - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        naive_str = (now_utc - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
+        aware_str = (now_utc - timedelta(hours=3)).isoformat()
         cursor.execute("""
             INSERT INTO ingested_news (id, raw_hash, title, source, url, published_at, category, reliability_score, related_tickers, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             "iso_z", "hash_z", "SEC Orders Action On Exchange Platform Z",
-            "SEC Press Releases", "https://sec.gov/z", "2026-09-20T10:00:00Z",
+            "SEC Press Releases", "https://sec.gov/z", z_str,
             NewsCategory.SEC_FILING.value, 0.95, '["SRRK"]', now_str
         ))
         cursor.execute("""
@@ -495,7 +499,7 @@ def test_state_store_datetime_awareness_and_iso_normalization(tmp_path):
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             "iso_naive", "hash_naive", "SEC Issues Exemptive Order For Biotech Issuer",
-            "SEC Press Releases", "https://sec.gov/naive", "2026-09-20 09:30:00",
+            "SEC Press Releases", "https://sec.gov/naive", naive_str,
             NewsCategory.SEC_FILING.value, 0.95, '["SRRK"]', now_str
         ))
         cursor.execute("""
@@ -503,7 +507,7 @@ def test_state_store_datetime_awareness_and_iso_normalization(tmp_path):
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             "iso_aware", "hash_aware", "SRRK Announces Positive Phase 3 Clinical Moat",
-            "BusinessWire", "https://bw.com/srrk", "2026-09-20T11:00:00+00:00",
+            "BusinessWire", "https://bw.com/srrk", aware_str,
             NewsCategory.BREAKING.value, 0.90, '["SRRK"]', now_str
         ))
         conn.commit()
