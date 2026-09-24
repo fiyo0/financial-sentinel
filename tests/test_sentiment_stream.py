@@ -2,6 +2,7 @@
 Unit tests for analytics/sentiment_stream.py.
 Verifies StockTwits ingestion, Reddit RSS search parsing, RVOL calculations, and sentiment scoring.
 """
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, MagicMock
 from analytics.sentiment_stream import (
     fetch_social_sentiment_snapshot,
@@ -255,18 +256,29 @@ def test_stocktwits_high_velocity_cursor_pagination(mock_client_fn):
     mock_client = MagicMock()
     mock_client_fn.return_value = mock_client
 
+    now = datetime.now(timezone.utc)
     # Page 1: 30 messages over 30 minutes
     p1_msgs = [
-        {"id": 100 + i, "created_at": f"2026-09-21T18:{30 - (i % 30):02d}:00Z", "body": "P1 post", "entities": {"sentiment": {"basic": "Bullish"}}}
+        {
+            "id": 100 + i,
+            "created_at": (now - timedelta(minutes=i)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "body": "P1 post",
+            "entities": {"sentiment": {"basic": "Bullish"}}
+        }
         for i in range(30)
     ]
     resp1 = MagicMock()
     resp1.status_code = 200
     resp1.json.return_value = {"messages": p1_msgs, "cursor": {"max": 9999}}
 
-    # Page 2: 10 messages from earlier
+    # Page 2: 10 messages from earlier (40-50 min ago)
     p2_msgs = [
-        {"id": 200 + i, "created_at": f"2026-09-21T17:{50 - (i % 50):02d}:00Z", "body": "P2 post", "entities": {"sentiment": {"basic": "Bullish"}}}
+        {
+            "id": 200 + i,
+            "created_at": (now - timedelta(minutes=40 + i)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "body": "P2 post",
+            "entities": {"sentiment": {"basic": "Bullish"}}
+        }
         for i in range(10)
     ]
     resp2 = MagicMock()

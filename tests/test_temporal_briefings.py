@@ -465,3 +465,33 @@ def test_state_store_get_recent_news_for_portfolio(tmp_path):
     assert "item_nvda" in found_ids
     assert "item_apple" in found_ids
     assert "item_other" not in found_ids
+
+
+def test_briefing_prompts_do_not_contain_tactical_discipline_boilerplate(sample_portfolio):
+    """Verify that briefing prompts and communication rules do NOT prime or prescribe 'tactical discipline' as boilerplate."""
+    agent = MarketBriefingAgent()
+    as_of_pst = datetime(2026, 9, 23, 10, 0, tzinfo=PST)
+
+    captured = []
+    agent.query_llm_text = lambda prompt, **kwargs: (captured.append((prompt, kwargs.get("system_instruction") or "")), "☀️ Briefing")[1]
+
+    overview = {"indices": {"SPY": {"current_price": 550.0, "change_pct": 0.3}}}
+
+    # 1. Premarket
+    agent.generate_premarket_briefing(sample_portfolio, overview, [], api_key="key", as_of=as_of_pst)
+    pre_prompt, pre_sys = captured[-1]
+    assert "tactical discipline" not in pre_prompt.lower()
+    assert "tactical discipline" not in pre_sys.lower()
+
+    # 2. Midmarket
+    agent.generate_midmarket_briefing(sample_portfolio, overview, [], api_key="key", as_of=as_of_pst)
+    mid_prompt, mid_sys = captured[-1]
+    assert "tactical discipline" not in mid_prompt.lower()
+    assert "tactical discipline" not in mid_sys.lower()
+
+    # 3. Postmarket
+    agent.generate_postmarket_briefing(sample_portfolio, overview, [], api_key="key", as_of=as_of_pst)
+    post_prompt, post_sys = captured[-1]
+    assert "tactical discipline" not in post_prompt.lower()
+    assert "tactical discipline" not in post_sys.lower()
+

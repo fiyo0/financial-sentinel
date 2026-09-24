@@ -25,7 +25,7 @@ COMMUNICATION & RECOMMENDATION DISCIPLINE:
    - Do not recommend random or speculative tickers.
    - Any highlighted opportunity must possess genuine fundamental merit: a clear competitive moat, high forward growth potential, or recent credible positive changes in institutional analyst ratings.
    - If market conditions are overextended or lack high-conviction risk/reward setups, advise patience or preserving dry powder rather than forcing low-quality picks.
-   - Preserving tactical discipline, taking profits, raising cash, or hedging is welcome and encouraged whenever genuinely justified by market catalysts (e.g. impending FOMC rate decisions, broken technical support, elevated event risk, binary earnings). Avoid generic rote platitudes unless grounded in concrete catalyst or price level data.
+   - Dynamic Risk & Action Guidance: Do NOT repeat catchphrases or generic risk boilerplate across every briefing. Only recommend defensive postures (such as taking profits, raising cash, or tightening stops) when genuinely justified by specific event risk (e.g. impending binary FOMC decisions, major earnings) or technical breakdowns. In ordinary, constructive, or trending sessions, focus on execution levels, watchlists, and upside catalyst triggers rather than inserting defensive platitudes.
 3. Strict Temporal Accuracy & Catalyst Timing:
    - Ground all commentary strictly in TODAY'S calendar date and the exact current session time.
    - Check the MACROECONOMIC & CENTRAL BANK CALENDAR GROUND TRUTH in the prompt.
@@ -423,7 +423,7 @@ class MarketBriefingAgent(BaseAgent):
         {movers_context}
 
         TASK:
-        Generate a comprehensive, disciplined pre-market executive brief in clean Telegram HTML format (use <b>, <i>, <code>).
+        Generate a comprehensive, institutional pre-market executive brief in clean Telegram HTML format (use <b>, <i>, <code>).
         Target approximately 2,200 to 3,000 characters to deliver deep institutional intelligence without message splitting.
 
         Structure the message with these exact sections:
@@ -443,7 +443,8 @@ class MarketBriefingAgent(BaseAgent):
         - Spotlight 1 to 2 high-conviction breakout setups or secular themes in the broader market OUTSIDE the portfolio (backed by earnings beat, analyst upgrades, or secular product launches). Ensure selections have genuine fundamental merit, competitive moats, or recent credible analyst revisions. Do NOT highlight speculative or random tickers.
 
         🎯 <b>Opening Gameplan:</b>
-        - 1-2 actionable risk management or watchlist focus points for the opening bell. Preserving tactical discipline, taking profits, or maintaining dry powder is welcome and encouraged when genuinely justified by identified catalysts, technical pivots, or event risk.
+        - 1-2 actionable, session-specific execution focus points for the opening bell (e.g., key price triggers to watch, breakout levels on watchlisted tickers, or specific reaction to morning macro prints).
+        - Recommend defensive measures (such as taking profits, raising cash, or tightening stops) ONLY if concrete elevated event risk or technical breakdowns justify it. Otherwise, focus on watchlist execution and catalyst follow-through. Never default to canned mottos, repetitive risk slogans, or rote filler phrases.
 
         Keep the tone institutional, measured, and actionable. Avoid unwarranted puffery or hyperbole. Do not use Markdown backticks.
         """
@@ -520,7 +521,7 @@ class MarketBriefingAgent(BaseAgent):
         {movers_context}
 
         TASK:
-        Generate a comprehensive, disciplined mid-day market intelligence update in clean Telegram HTML format (use <b>, <i>, <code>).
+        Generate a comprehensive, institutional mid-day market intelligence update in clean Telegram HTML format (use <b>, <i>, <code>).
         Target approximately 2,200 to 3,000 characters. Maintain cross-briefing continuity by auditing the morning plan against real-time developments.
 
         Structure the message with these exact sections:
@@ -539,7 +540,8 @@ class MarketBriefingAgent(BaseAgent):
         - Highlight 1-2 emerging midday setups or secular themes with credible volume or analyst catalysts outside the portfolio. Be selective and critical—do not highlight speculative or random tickers without proven fundamental backing.
 
         🛡️ <b>Afternoon Posture:</b>
-        - Afternoon roadmap: key levels, remaining afternoon catalysts (e.g. 1:00 PM ET Treasury auctions, afternoon Fed speeches), closing session levels, and trailing stop/risk posture heading into Power Hour. Preserving tactical discipline, taking profits, or raising cash is welcome and encouraged when justified by catalysts or technical levels.
+        - Afternoon roadmap: key levels, remaining afternoon catalysts (e.g. 1:00 PM ET Treasury auctions, afternoon Fed speeches), closing session levels, and execution posture heading into Power Hour.
+        - Tailor the posture to intraday tape conditions (e.g., trend continuation, rotation, or mean reversion). Only recommend defensive risk measures if afternoon event risk or price rejection warrants it; avoid defaulting to canned risk slogans or rote filler phrases.
 
         Keep it balanced, objective, and formatted with clean HTML tags. Avoid unwarranted puffery or hyperbole.
         """
